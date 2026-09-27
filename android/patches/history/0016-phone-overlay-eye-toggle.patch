@@ -1,0 +1,72 @@
+diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
+index 76b2e1ed..d2954d94 100644
+--- a/frontend/src/components/layout/PianoRollPanel.tsx
++++ b/frontend/src/components/layout/PianoRollPanel.tsx
+@@ -1634,6 +1634,28 @@ export const PianoRollPanel: React.FC = () => {
+         Partial<Record<ParamName, boolean>>
+     >({});
+ 
++    // 👁 总开关（手机底栏「所有隐藏/显示」，ps1.png）：MobileBottomBar 派发
++    // 自定义事件切换**全部**参考覆盖层。覆盖层可见性目前是本组件 state（尚未
++    // 提升 redux），先以事件桥接（ADR-005：不重构上游组件的最小侵入方式），
++    // 长期应随该 state 一起提升。__hsOverlaysVisible 供 CDP 验收读取。
++    useEffect(() => {
++        const onToggle = (e: Event) => {
++            const show = (e as CustomEvent<boolean>).detail;
++            if (show) {
++                const next: Partial<Record<ParamName, boolean>> = { pitch: true };
++                for (const d of processorParamsRef.current) {
++                    (next as Record<string, boolean>)[d.id] = true;
++                }
++                setSecondaryParamVisible(next);
++            } else {
++                setSecondaryParamVisible({});
++            }
++            (window as unknown as { __hsOverlaysVisible?: boolean }).__hsOverlaysVisible = show;
++        };
++        window.addEventListener("hs-toggle-secondary-overlays", onToggle);
++        return () => window.removeEventListener("hs-toggle-secondary-overlays", onToggle);
++    }, []);
++
+     const toggleSecondaryParam = useCallback((param: ParamName) => {
+         setSecondaryParamVisible((prev) => toggleSecondaryParamVisibility(prev, param));
+     }, []);
+diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
+index a6ae16ec..9d4e9331 100644
+--- a/frontend/src/components/mobile/MobileBottomBar.tsx
++++ b/frontend/src/components/mobile/MobileBottomBar.tsx
+@@ -143,6 +143,9 @@ interface FoldItem {
+ export function MobileBottomBar({ tab }: { tab: string }) {
+     const dispatch = useAppDispatch();
+     const [foldOpen, setFoldOpen] = React.useState(false);
++    // 参考覆盖层总开关（👁）：只在本组件记 UI 态，实际可见性由 PianoRollPanel
++    // 监听 hs-toggle-secondary-overlays 事件后改变。
++    const [overlaysVisible, setOverlaysVisible] = React.useState(true);
+     const isParams = tab === "params";
+ 
+     const isPlaying = useAppSelector((s) => s.session.runtime.isPlaying);
+@@ -291,11 +294,20 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+             {isParams ? (
+                 <IconButton
+                     size="3"
+-                    variant="ghost"
+-                    aria-label="显示/隐藏（待接参数覆盖层）"
+-                    disabled
++                    variant={overlaysVisible ? "ghost" : "solid"}
++                    aria-label={overlaysVisible ? "隐藏所有覆盖层" : "显示所有覆盖层"}
++                    aria-pressed={!overlaysVisible}
++                    onClick={() => {
++                        const next = !overlaysVisible;
++                        setOverlaysVisible(next);
++                        // 事件桥到 PianoRollPanel（覆盖层可见性是面板组件内 state，
++                        // 见其「👁 总开关」注释；长期应提升 redux）。
++                        window.dispatchEvent(
++                            new CustomEvent("hs-toggle-secondary-overlays", { detail: next }),
++                        );
++                    }}
+                     className="hs-icon-btn"
+-                    style={{ minWidth: 44, minHeight: 44, opacity: 0.35 }}
++                    style={{ minWidth: 44, minHeight: 44 }}
+                 >
+                     <SvgWrap>
+                         <path d="M1.5 8 C3.5 4.8, 6 3.2, 8 3.2 C10 3.2, 12.5 4.8, 14.5 8 C12.5 11.2, 10 12.8, 8 12.8 C6 12.8, 3.5 11.2, 1.5 8 Z" fill="none" stroke="currentColor" strokeWidth="1.4" />

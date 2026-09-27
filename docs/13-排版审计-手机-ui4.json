@@ -1,0 +1,353 @@
+{
+  "viewport": {
+    "w": 360,
+    "h": 731,
+    "dpr": 3
+  },
+  "url": "http://tauri.localhost/",
+  "total": 22,
+  "items": [
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "选择",
+      "rect": {
+        "x": 2,
+        "y": 45,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "绘制",
+      "rect": {
+        "x": 44,
+        "y": 45,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "参数与覆盖层",
+      "rect": {
+        "x": 86,
+        "y": 45,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "参数菜单",
+      "rect": {
+        "x": 128,
+        "y": 45,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.absolute.rounded-[3px]",
+      "label": "显示速度映射",
+      "rect": {
+        "x": 37,
+        "y": 147,
+        "w": 16,
+        "h": 16
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 16,
+          "h": 16,
+          "hit": {
+            "w": 17,
+            "h": 17
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "更多开关",
+      "rect": {
+        "x": 2,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "撤销",
+      "rect": {
+        "x": 150,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "重做",
+      "rect": {
+        "x": 192,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "停止",
+      "rect": {
+        "x": 234,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "播放",
+      "rect": {
+        "x": 276,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "录制",
+      "rect": {
+        "x": 318,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "文件",
+      "rect": {
+        "x": 4,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "编辑",
+      "rect": {
+        "x": 50,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "轨道",
+      "rect": {
+        "x": 96,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "视图",
+      "rect": {
+        "x": 142,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "选项",
+      "rect": {
+        "x": 188,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "帮助",
+      "rect": {
+        "x": 234,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "div.absolute.inset-0",
+      "label": "div.absolute.inset-0",
+      "rect": {
+        "x": 56,
+        "y": 167,
+        "w": 304,
+        "h": 442
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "轨道",
+      "rect": {
+        "x": 0,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "参数",
+      "rect": {
+        "x": 90,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "文件",
+      "rect": {
+        "x": 180,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "笔记",
+      "rect": {
+        "x": 270,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    }
+  ],
+  "truncated": 0
+}

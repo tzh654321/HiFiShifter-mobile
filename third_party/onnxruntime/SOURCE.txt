@@ -1,0 +1,9 @@
+libonnxruntime.so 来源
+=====================
+坐标   : com.microsoft.onnxruntime:onnxruntime-android:1.28.0
+镜像   : https://mirrors.cloud.tencent.com/nexus/repository/maven-public/
+        com/microsoft/onnxruntime/onnxruntime-android/1.28.0/onnxruntime-android-1.28.0.aar
+大小   : 45634470 字节
+为什么是 1.28 : ort-sys 2.0.0-rc.13 的 crate description 写明
+        "Unsafe Rust bindings for ONNX Runtime 1.28"，版本要对齐。
+只取 arm64-v8a 与 x86_64 两个 ABI（armeabi-v7a/x86 不发布，见 ADR-009）。

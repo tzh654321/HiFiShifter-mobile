@@ -1,0 +1,29 @@
+# HiFiShifter 在 Android 上的运行时日志
+# 环境：模拟器 x86_64 / hs-phone-tall（360×800 CSS）/ 2026-09-18
+# 采集：清空日志文件 → 重启应用 → 30 秒窗口 →
+#       adb exec-out run-as <pkg> cat logs/android.log
+# 原始 857 行；重复行已折叠并标注出现次数。
+
+[INFO] backend_lib::platform::logging: [platform::logging] Android 日志后端就绪，落盘于 /data/user/0/com.arounder.hifishifter/logs/android.log
+[INFO] backend_lib: [setup] 日志文件：/data/user/0/com.arounder.hifishifter/logs/android.log（adb exec-out run-as … cat 可读）
+[INFO] backend_lib: [setup] ndk_context 已就绪（cpal/Oboe 可用）
+[INFO] backend_lib::platform::resources: [resources] 模型就绪：拷贝 0 / 跳过 5 / 缺失 0，耗时 14 ms
+[×2] [WARN] backend_lib::vocoder_ort_session: ort_session[PitchDetector]: model=fcpe.onnx ep=cpu (choice=auto, global_env=auto)
+[WARN] backend_lib::vocoder_ort_session: ort_session[PitchDetector]: created session ep=cpu intra_threads=2 commit_ms=550
+[WARN] backend_lib::vocoder_ort_session: ort_session: acquired the global session build lock after 1.017935964s (a build was in progress)
+[WARN] backend_lib::nsf_hifigan_onnx: [ort] initialized: ORT Build Info: git-branch=HEAD, git-commit-id=da9b5e364c, fp8-kv-cache=1, build type=Release
+[WARN] backend_lib::nsf_hifigan_onnx: [ort] available providers: ["CPUExecutionProvider"]
+[×2] [WARN] backend_lib::vocoder_ort_session: ort_session[Vocoder]: model=pc_nsf_hifigan.onnx ep=cpu (choice=auto, global_env=auto)
+[WARN] backend_lib::vocoder_ort_session: ort_session[Vocoder]: created session ep=cpu intra_threads=2 commit_ms=946
+[WARN] backend_lib::vocoder_ort_session: ort_session: acquired the global session build lock after 1.963803364s (a build was in progress)
+[×2] [WARN] backend_lib::vocoder_ort_session: ort_session[Separator]: model=hnsep.onnx ep=cpu (choice=cpu, global_env=auto)
+[WARN] backend_lib::vocoder_ort_session: ort_session[Separator]: created session ep=cpu intra_threads=4 commit_ms=2137
+[WARN] backend_lib::hnsep_onnx: [hnsep] inference device changed during session build — rebuilding with the new EP
+[×832] [ERROR] backend_lib::commands::diagnostics: [frontend] Uncaught error: ResizeObserver loop completed with undelivered notifications. | detail: http://tauri.localhost/:0:0
+[WARN] backend_lib::vocoder_ort_session: ort_session[Separator]: created session ep=cpu intra_threads=4 commit_ms=1122
+[WARN] backend_lib::vocoder_ort_session: ort_session: acquired the global session build lock after 2.086389795s (a build was in progress)
+[WARN] backend_lib::vocoder_ort_session: ort_session: acquired the global session build lock after 2.087728707s (a build was in progress)
+[WARN] backend_lib::vocoder_ort_session: ort_session[Vocoder]: created session ep=cpu intra_threads=2 commit_ms=456
+[WARN] backend_lib::vocoder_ort_session: ort_session: acquired the global session build lock after 2.526450536s (a build was in progress)
+[WARN] backend_lib::vocoder_ort_session: ort_session[PitchDetector]: created session ep=cpu intra_threads=2 commit_ms=706
+[WARN] backend_lib::commands::playback: [bg_render] no clips need rendering (ready=0 skipped_not_ready=0)

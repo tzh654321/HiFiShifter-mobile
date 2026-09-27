@@ -1,0 +1,89 @@
+diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
+index 962de818..76b2e1ed 100644
+--- a/frontend/src/components/layout/PianoRollPanel.tsx
++++ b/frontend/src/components/layout/PianoRollPanel.tsx
+@@ -2122,10 +2122,13 @@ export const PianoRollPanel: React.FC = () => {
+     // 画笔模式：单指 = 绘制（面板既有 pointer 路径，手势层不拦截单指），
+     // 双指 = 视口缩放/平移；第二指落下时手势层会 pointercancel 正在进行的单指绘制。
+     // 水平写入复用 handleHorizontalZoom（内含 paramEditorSyncTimeline 的共享/自持
+-    // 换算与公共范围钳制，q1）；纵向缩放入口（valueDomain.span）尚未落地（q2），
+-    // 传 verticalZoom:false —— 双指纵向退化为纯平移。
+-    // handleHorizontalZoom 依赖随设置/视口尺寸变化，用渲染期 ref 镜像避免重建
+-    // controller（同容器重复 attach 会双重监听）。
++    // 换算与公共范围钳制，q1）。
++    // 纵向：参数轴是 {center, span} 值域模型，与手势层的 {scrollTop, rowHeight}
++    // 行锚定模型按 pxPerUnit = h/span 互换（center 恒对应屏幕中点）；提交走
++    // syncVerticalScrollbarForViewport（钳制 + 就地刷新内核 valueDomain 镜像 +
++    // setValueCenter，见其「特殊说明 2」）——q2 的纵向捏合由此闭环。
++    // handleHorizontalZoom / sync… 依赖随设置变化，用渲染期 ref 镜像避免重建
++    // controller（同容器重复 attach 会双重监听）。editParamRef 提供当前参数。
+     const horizontalZoomRef = useRef(handleHorizontalZoom);
+     horizontalZoomRef.current = handleHorizontalZoom;
+     const paramGestureRef = useRef<TwoFingerGestureController | null>(null);
+@@ -2141,14 +2144,22 @@ export const PianoRollPanel: React.FC = () => {
+                 raf = requestAnimationFrame(tryAttach);
+                 return;
+             }
++            // 手势层行锚定模型 ↔ 参数轴值域模型（pxPerUnit = h/span，center 在中点）。
++            const vh = () => Math.max(1, scroller.clientHeight);
++            const valueToRow = () => {
++                const h = vh();
++                const view = getCurrentViewportForScrollbar(editParamRef.current);
++                const rowHeight = h / Math.max(1e-6, view.span);
++                return { rowHeight, scrollTop: view.center * rowHeight - h / 2 };
++            };
+             const viewport: GestureViewport = {
+                 get() {
++                    const row = valueToRow();
+                     return {
+                         scrollLeft: scrollLeftRef.current,
+-                        scrollTop: scroller.scrollTop,
++                        scrollTop: row.scrollTop,
+                         pxPerSec: pxPerSecRef.current,
+-                        // 参数面板没有行高概念；verticalZoom=false 时手势层不用它。
+-                        rowHeight: 1,
++                        rowHeight: row.rowHeight,
+                     };
+                 },
+                 getPxPerSecBounds() {
+@@ -2156,23 +2167,26 @@ export const PianoRollPanel: React.FC = () => {
+                     return { min: 10, max: 8000 };
+                 },
+                 getRowHeightBounds() {
+-                    return { min: 1, max: 1 };
++                    // 宽域即可：span 的最终钳制在 clampViewport 内按参数类型完成。
++                    return { min: 0.2, max: 1e6 };
+                 },
+                 setHorizontal(pxPerSec, scrollLeft) {
+                     horizontalZoomRef.current(pxPerSec, scrollLeft);
+                 },
+-                setVertical(_rowHeight, scrollTop) {
+-                    scroller.scrollTop = scrollTop;
++                setVertical(rowHeight, scrollTop) {
++                    const h = vh();
++                    const span = h / Math.max(1e-6, rowHeight);
++                    const center = (scrollTop + h / 2) / rowHeight;
++                    syncVerticalScrollbarForViewport(editParamRef.current, { center, span });
+                 },
+                 reclamp() {
+-                    /* 参数面板无行高重钳需求 */
++                    // 值域视口无行高重钳需求（clampViewport 在提交路径上）。
+                 },
+             };
+             const controller = new TwoFingerGestureController(scroller, viewport, {
+                 deadZonePx: 16,
+                 axisLockPx: 24,
+                 cooldownMs: 150,
+-                verticalZoom: false,
+             });
+             controller.attach();
+             paramGestureRef.current = controller;
+@@ -2188,7 +2202,7 @@ export const PianoRollPanel: React.FC = () => {
+             delete (window as unknown as { __hsParamGestureAttached?: boolean })
+                 .__hsParamGestureAttached;
+         };
+-        // 仅挂载一次；handleHorizontalZoom 走渲染期 ref 镜像。
++        // 仅挂载一次；handleHorizontalZoom / sync… 是 function 声明（提升）且只读 ref。
+         // eslint-disable-next-line react-hooks/exhaustive-deps
+     }, []);
+ 

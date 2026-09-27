@@ -1,0 +1,27 @@
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index d42792c8..3c6faa33 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -128,6 +128,22 @@ body,
+     width: 100%;
+     height: 100%;
+     overflow: hidden; /* Prevent scrolling on body */
++    /*
++     * Android WebView：必须禁掉**浏览器自己的**双指缩放。
++     *
++     * WebView 默认允许 pinch-zoom，于是双指捏合会被浏览器吃掉、把整个页面放大
++     * （实测 `visualViewport.scale` 由 1 变 5），应用一个 touch 事件都收不到。
++     * 而 HiFiShifter 的双指缩放/平移是**应用自己**在 `scrollKernel` 上实现的
++     * （见 docs/08），前提是这两个手指必须落到页面里。
++     *
++     * 为什么是 `pan-x pan-y`：
++     *   · 不用 `user-scalable=no` —— Chrome/Blink 在 Android 上出于可访问性会
++     *     **忽略**它；实测改 viewport meta 后重载一次，捏合照样放大到 5 倍。
++     *   · 不用 `none` —— `pan-x pan-y` 只砍缩放，保留内层 `overflow: auto`
++     *     面板的原生滚动。
++     * 桌面端无副作用：那里不存在 pinch-zoom，触屏笔记本仍可正常拖动。
++     */
++    touch-action: pan-x pan-y;
+ }
+ 
+ /*

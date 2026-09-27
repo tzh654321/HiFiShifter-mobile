@@ -1,0 +1,512 @@
+diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
+index a88228c3..8ae4fa6f 100644
+--- a/frontend/src/components/layout/TimelinePanel.tsx
++++ b/frontend/src/components/layout/TimelinePanel.tsx
+@@ -220,6 +220,8 @@ import {
+     type StretchRangeMapping,
+ } from "./timeline/hooks/stretchParams";
+ import { computeSlipWindow, readSlipClip, toBoundarySnapClip } from "./timeline/hooks/slipWindow";
++import { IS_ANDROID } from "../../utils/platform";
++import { TwoFingerGestureController, type GestureViewport } from "./touchGesture";
+ import {
+     computeCrossfadeGrip,
+     type CrossfadeGripClipBase,
+@@ -583,6 +585,71 @@ export const TimelinePanel: React.FC<TimelinePanelProps> = ({
+         };
+     }, []);
+ 
++    // 安卓触控手势层：双指缩放/平移 → 内核视口（仅 Android；桌面零改动，ADR-005 / docs/08）。
++    // 宿主子组件（TimelineKernelView）的 effect 先于本面板 effect 运行，故此处 kernelHostRef
++    // 已就绪；为稳妥仍做一次 rAF 重试兜底。
++    React.useEffect(() => {
++        if (!IS_ANDROID) return;
++        const dbg = window as unknown as { __hsViewport?: () => unknown };
++        let raf = 0;
++        const tryAttach = () => {
++            const host = kernelHostRef.current;
++            if (host === null) {
++                raf = requestAnimationFrame(tryAttach);
++                return;
++            }
++            const container = host.getContainer();
++            const viewport: GestureViewport = {
++                get() {
++                    const v = host.getViewport();
++                    return {
++                        scrollLeft: v.scrollLeft,
++                        scrollTop: v.scrollTop,
++                        pxPerSec: v.pxPerSec,
++                        rowHeight: host.getRowHeight(),
++                    };
++                },
++                getPxPerSecBounds() {
++                    return host.getPxPerSecBounds();
++                },
++                getRowHeightBounds() {
++                    return host.getRowHeightBounds();
++                },
++                setHorizontal(pxPerSec, scrollLeft) {
++                    host.setViewport({ pxPerSec, scrollLeft });
++                },
++                setVertical(rowHeight, scrollTop) {
++                    host.setRowHeightAndScrollTop(rowHeight, scrollTop);
++                },
++                reclamp() {
++                    host.reclamp();
++                },
++            };
++            const controller = new TwoFingerGestureController(container, viewport, {
++                deadZonePx: 16,
++                axisLockPx: 24,
++                cooldownMs: 150,
++            });
++            controller.attach();
++            // 调试钩子：CDP / 真机验收时读取内核视口真值，验证 docs/08 §8.1 不变量。
++            dbg.__hsViewport = () => {
++                const v = host.getViewport();
++                const r = container.getBoundingClientRect();
++                return {
++                    ...v,
++                    rowHeight: host.getRowHeight(),
++                    // 容器偏移：验收脚本要把锚点换算到容器坐标系（与 scrollLeft/scrollTop 同域）。
++                    containerRect: { left: r.left, top: r.top, width: r.width, height: r.height },
++                };
++            };
++        };
++        tryAttach();
++        return () => {
++            if (raf !== 0) cancelAnimationFrame(raf);
++            delete dbg.__hsViewport;
++        };
++    }, []);
++
+     // 播放开始（键盘快捷键 / 播放按钮 / 远端传输皆可触发）＝拖拽视觉语境终止：
+     // 按住鼠标拖拽期间开始播放时，吸附竖线高亮必须立即消失，而不是冻结在原地
+     // 直到松手才被手势结束逻辑清理。
+diff --git a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
+index 0099a366..5350e5f9 100644
+--- a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
++++ b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
+@@ -1020,6 +1020,27 @@ export interface TimelineKernelHost {
+         scrollLeft: number;
+         pxPerSec: number;
+     };
++    /**
++     * 读取宿主容器元素（触控手势层挂载点，docs/08）。
++     */
++    getContainer(): HTMLElement;
++    /**
++     * 读取当前行高（CSS px），供触控手势层做竖直锚点缩放。
++     */
++    getRowHeight(): number;
++    /**
++     * 水平缩放（pxPerSec）的动态上下限，供触控手势层 clamp（避免锚点漂移，docs/08 §2.2）。
++     */
++    getPxPerSecBounds(): { min: number; max: number };
++    /**
++     * 行高动态上下限（与既有竖向缩放同一组常量，docs/08 §7），供触控手势层 clamp。
++     */
++    getRowHeightBounds(): { min: number; max: number };
++    /**
++     * 原子提交「行高 + 竖直滚动位置」（竖直缩放），供触控手势层调用。
++     * 与内核内部竖直缩放入口同语义：一次 commit，并仅在行高真正变化时同步 React 侧轨道头行高。
++     */
++    setRowHeightAndScrollTop(px: number, scrollTop: number): void;
+     /**
+      * 读取宿主容器的视口矩形（client 坐标）。
+      *
+@@ -5322,6 +5343,36 @@ export function createTimelineKernelHost(args: TimelineKernelHostArgs): Timeline
+             return { scrollLeft: applied.scrollLeft, pxPerSec: applied.pxPerSec };
+         },
+ 
++        getContainer() {
++            return container;
++        },
++
++        getRowHeight() {
++            return scroll.get().rowHeight;
++        },
++
++        getPxPerSecBounds() {
++            const min = resolveTimelineMinPxPerSec({
++                baseMinPxPerSec: MIN_PX_PER_SEC,
++                projectSec: Math.max(0, data().projectSec),
++                viewportWidthPx,
++            });
++            return { min, max: MAX_PX_PER_SEC };
++        },
++
++        getRowHeightBounds() {
++            return { min: MIN_ROW_HEIGHT, max: MAX_ROW_HEIGHT };
++        },
++
++        setRowHeightAndScrollTop(px: number, scrollTop: number) {
++            // 与内核内部竖直缩放入口同语义；仅在行高真正变化时通知 React（避免竖直平移时
++            // 每帧重渲染轨道头），行高变化内核内部已钳制到 [1, ∞) 并按新行高钳制 scrollTop。
++            const before = scroll.get().rowHeight;
++            scroll.setRowHeightAndScrollTop(px, scrollTop);
++            const after = scroll.get().rowHeight;
++            if (before !== after) onRowHeightChange?.(after);
++        },
++
+         getContainerRect() {
+             return container.getBoundingClientRect();
+         },
+diff --git a/frontend/src/components/layout/touchGesture.ts b/frontend/src/components/layout/touchGesture.ts
+new file mode 100644
+index 00000000..553f4840
+--- /dev/null
++++ b/frontend/src/components/layout/touchGesture.ts
+@@ -0,0 +1,331 @@
++/**
++ * touchGesture.ts — 双指触控手势层（Android）。
++ *
++ * 把双指手势（横向/纵向缩放 + 平移，缩放中心为两指中点）接到 ScrollKernel 的原子入口
++ * （setViewport / setRowHeightAndScrollTop），不另建视口模型（见 docs/08）。
++ *
++ * 设计约束（docs/08 §2–§6）：
++ * - 统一的「中点锚定」公式，平移从缩放公式自动退化而出（§2）。
++ * - 缩放死区 16px 先平移后缩放；单轴锁定 <24px；三指纯平移（§3）。
++ * - 水平走 setViewport 原子入口（scrollLeft 与 pxPerSec 同帧送达）；
++ *   竖直走 setRowHeightAndScrollTop 原子入口（§2.2/§2.3、§5）。
++ * - 1→2 指中止正在进行的单指拖拽（派发 pointercancel，复用既有 blur 收尾路径，§4.1）；
++ *   2→1 指留 150ms 冷却期，避免抬手残留误触（§4.2）。
++ * - 手势进行中屏蔽合成 wheel，避免与 WebView 的 pinch-zoom 合成路径双触发（§6）。
++ *
++ * 桌面端不接入（ADR-005）：调用方仅在 IS_ANDROID 时构造本控制器。
++ */
++
++/** 视口真值快照（手势层读/写用）。 */
++export interface GestureViewportState {
++    scrollLeft: number;
++    scrollTop: number;
++    pxPerSec: number;
++    rowHeight: number;
++}
++
++/** 视口上下限（动态，随时间轴内容/视口尺寸变化）。 */
++export interface ViewportBounds {
++    min: number;
++    max: number;
++}
++
++/**
++ * 手势层与具体内核之间的适配接口。
++ *
++ * 调用方（TimelinePanel）把 kernelHost 包成这个接口；手势层只依赖它，不直接碰内核，
++ * 便于单元测试时注入假实现。
++ */
++export interface GestureViewport {
++    /** 读取当前视口真值。 */
++    get(): GestureViewportState;
++    /** 水平缩放（pxPerSec）的动态上下限。 */
++    getPxPerSecBounds(): ViewportBounds;
++    /** 行高的动态上下限（须与既有竖向缩放同一组常量，见 docs/08 §7）。 */
++    getRowHeightBounds(): ViewportBounds;
++    /** 原子提交水平缩放 + 横向滚动（setViewport）。 */
++    setHorizontal(pxPerSec: number, scrollLeft: number): void;
++    /** 原子提交行高 + 竖直滚动（setRowHeightAndScrollTop）。 */
++    setVertical(rowHeight: number, scrollTop: number): void;
++    /** 内容域/尺寸变化后重新钳制（手势结束时调用）。 */
++    reclamp(): void;
++}
++
++export interface TwoFingerGestureOptions {
++    /** 缩放死区（CSS px）：分离度累计变化小于此值期间只平移（§3.1）。缺省 16。 */
++    deadZonePx?: number;
++    /** 单轴锁定阈值（CSS px）：起始分离度小于此值的轴永不缩放（§3.2）。缺省 24。 */
++    axisLockPx?: number;
++    /** 2→1 指冷却期（ms）：期间忽略单指事件（§4.2）。缺省 150。 */
++    cooldownMs?: number;
++}
++
++interface ActivePointer {
++    x: number;
++    y: number;
++}
++
++interface Session {
++    mid0: { x: number; y: number };
++    span0: { x: number; y: number };
++    scrollLeft0: number;
++    scrollTop0: number;
++    pxPerSec0: number;
++    rowHeight0: number;
++    axisLockX: boolean;
++    axisLockY: boolean;
++    zoomArmed: boolean;
++}
++
++function clamp(v: number, lo: number, hi: number): number {
++    return Math.min(hi, Math.max(lo, v));
++}
++
++function midpoint(a: ActivePointer, b: ActivePointer): { x: number; y: number } {
++    return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
++}
++
++function spanOf(a: ActivePointer, b: ActivePointer): { x: number; y: number } {
++    return { x: Math.abs(a.x - b.x), y: Math.abs(a.y - b.y) };
++}
++
++/**
++ * 双指手势控制器。
++ *
++ * 在 `target` 容器上接管 touch 指针事件，按 docs/08 的统一公式把双指手势映射到内核视口。
++ * 只处理 2+ 指；单指事件原样放行给既有单指交互（点选/拖动/绘制）。
++ */
++export class TwoFingerGestureController {
++    private readonly target: HTMLElement;
++    private readonly viewport: GestureViewport;
++    private readonly deadZonePx: number;
++    private readonly axisLockPx: number;
++    private readonly cooldownMs: number;
++
++    private readonly pointers = new Map<number, ActivePointer>();
++    private session: Session | null = null;
++    private cooldownUntil = 0;
++    private attached = false;
++    /**
++     * 容器在视口中的偏移（CSS px）。
++     *
++     * scrollLeft / scrollTop 是**容器相对**的，而 PointerEvent 的 clientX/clientY 是
++     * **视口相对**的。锚点公式 `(scrollLeft + mid)/pxPerSec` 要求 mid 与 scrollLeft 同域，
++     * 否则缩放中心会整体偏移容器左上角那么多像素：内容在手指下的漂移量为
++     * `L·(1/pxPerSec₀ − 1/P)`，恰好在真正发生缩放时非零（见 docs/08 §8.1）。
++     * 因此中点必须减去容器偏移后再代入。
++     */
++    private rectLeft = 0;
++    private rectTop = 0;
++
++    constructor(target: HTMLElement, viewport: GestureViewport, options: TwoFingerGestureOptions = {}) {
++        this.target = target;
++        this.viewport = viewport;
++        this.deadZonePx = options.deadZonePx ?? 16;
++        this.axisLockPx = options.axisLockPx ?? 24;
++        this.cooldownMs = options.cooldownMs ?? 150;
++    }
++
++    attach(): void {
++        if (this.attached) return;
++        this.attached = true;
++        // 接管双指手势：浏览器不得自行平移/缩放本容器（覆盖 body 的 pan-x pan-y）。
++        this.target.style.touchAction = "none";
++        this.target.addEventListener("pointerdown", this.onPointerDown, { passive: false });
++        this.target.addEventListener("pointermove", this.onPointerMove, { passive: false });
++        this.target.addEventListener("pointerup", this.onPointerUp);
++        this.target.addEventListener("pointercancel", this.onPointerCancel);
++        // 手势进行中屏蔽合成 wheel（双指捏合 → Ctrl+wheel），避免双重缩放（§6）。
++        window.addEventListener("wheel", this.onWheel, { passive: false, capture: true });
++    }
++
++    detach(): void {
++        if (!this.attached) return;
++        this.attached = false;
++        this.target.style.touchAction = "";
++        this.target.removeEventListener("pointerdown", this.onPointerDown);
++        this.target.removeEventListener("pointermove", this.onPointerMove);
++        this.target.removeEventListener("pointerup", this.onPointerUp);
++        this.target.removeEventListener("pointercancel", this.onPointerCancel);
++        window.removeEventListener("wheel", this.onWheel, { capture: true } as EventListenerOptions);
++        this.pointers.clear();
++        this.session = null;
++        this.setActiveFlag(false);
++    }
++
++    private readonly onWheel = (e: WheelEvent): void => {
++        if (this.session !== null || this.pointers.size >= 2) {
++            e.preventDefault();
++            e.stopPropagation();
++        }
++    };
++
++    private readonly onPointerDown = (e: PointerEvent): void => {
++        if (e.pointerType === "mouse") return; // 鼠标走既有滚轮/拖拽，不接管
++        // 1→2 过渡：先存在的单指拖拽必须干净中止（docs/08 §4.1）。
++        if (this.pointers.size === 1) {
++            for (const id of this.pointers.keys()) this.abortPointer(id);
++        }
++        try {
++            this.target.setPointerCapture(e.pointerId);
++        } catch {
++            /* 某些环境下 capture 可能失败，忽略即可 */
++        }
++        this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
++        if (this.pointers.size === 2) {
++            // 第二指落下：拦截其 pointerdown，避免既有单指拖拽起步（宿主在容器 bubble 阶段）。
++            e.preventDefault();
++            e.stopPropagation();
++            this.beginSession();
++            this.setActiveFlag(true);
++        }
++    };
++
++    private readonly onPointerMove = (e: PointerEvent): void => {
++        if (e.pointerType === "mouse") return;
++        const p = this.pointers.get(e.pointerId);
++        if (p === undefined) return; // 冷却期/非手势指针：忽略
++        p.x = e.clientX;
++        p.y = e.clientY;
++        if (this.pointers.size < 2) return; // 仍在冷却的单指：忽略
++        e.preventDefault();
++        if (this.now() < this.cooldownUntil) return; // 2→1 冷却期
++        this.update();
++    };
++
++    private readonly onPointerUp = (e: PointerEvent): void => {
++        this.endPointer(e.pointerId);
++    };
++
++    private readonly onPointerCancel = (e: PointerEvent): void => {
++        this.endPointer(e.pointerId);
++    };
++
++    private endPointer(id: number): void {
++        if (!this.pointers.has(id)) return;
++        this.pointers.delete(id);
++        try {
++            this.target.releasePointerCapture(id);
++        } catch {
++            /* ignore */
++        }
++        if (this.pointers.size < 2) {
++            // 2→1：进入冷却期（docs/08 §4.2），期间忽略单指事件。
++            if (this.session !== null) {
++                this.cooldownUntil = this.now() + this.cooldownMs;
++                this.session = null;
++                this.setActiveFlag(false);
++            }
++            if (this.pointers.size === 0) {
++                this.cooldownUntil = 0;
++                this.viewport.reclamp();
++            }
++        }
++    }
++
++    /**
++     * 中止一个既有单指拖拽：复用既有收尾路径——单指拖拽的 finish 挂在 window 的
++     * pointercancel / pointerup 上（见 gestureFocusGuard），派发这两个事件即触发收尾。
++     *
++     * 注意：只 abort「既有的、非本手势追踪的」指针；本手势正在追踪的指针绝不能 cancel，
++     * 否则浏览器会停止向它们派发后续 move 事件。
++     */
++    private abortPointer(id: number): void {
++        for (const type of ["pointercancel", "pointerup"] as const) {
++            const ev = new PointerEvent(type, {
++                pointerId: id,
++                bubbles: true,
++                cancelable: true,
++                pointerType: "touch",
++            });
++            window.dispatchEvent(ev);
++        }
++    }
++
++    /** 刷新容器在视口中的偏移（手势开始时、以及解除死区时各取一次）。 */
++    private refreshRect(): void {
++        const r = this.target.getBoundingClientRect();
++        this.rectLeft = r.left;
++        this.rectTop = r.top;
++    }
++
++    /** 两指中点，换算到**容器坐标系**（与 scrollLeft / scrollTop 同域）。 */
++    private midInContainer(a: ActivePointer, b: ActivePointer): { x: number; y: number } {
++        const m = midpoint(a, b);
++        return { x: m.x - this.rectLeft, y: m.y - this.rectTop };
++    }
++
++    private beginSession(): void {
++        const pts = [...this.pointers.values()];
++        const a = pts[0];
++        const b = pts[1];
++        this.refreshRect();
++        const mid = this.midInContainer(a, b);
++        const span = spanOf(a, b);
++        const v = this.viewport.get();
++        this.session = {
++            mid0: mid,
++            span0: span,
++            scrollLeft0: v.scrollLeft,
++            scrollTop0: v.scrollTop,
++            pxPerSec0: v.pxPerSec,
++            rowHeight0: v.rowHeight,
++            axisLockX: span.x < this.axisLockPx,
++            axisLockY: span.y < this.axisLockPx,
++            zoomArmed: false,
++        };
++    }
++
++    private update(): void {
++        const s = this.session;
++        if (s === null) return;
++        const pts = [...this.pointers.values()];
++        const a = pts[0];
++        const b = pts[1];
++        const mid = this.midInContainer(a, b);
++        const span = spanOf(a, b);
++
++        // 超过死区才允许缩放，并把基准重置到当前，避免跳变（docs/08 §3.1）。
++        if (!s.zoomArmed) {
++            const ddx = span.x - s.span0.x;
++            const ddy = span.y - s.span0.y;
++            if (Math.hypot(ddx, ddy) >= this.deadZonePx) {
++                s.zoomArmed = true;
++                s.mid0 = mid;
++                s.span0 = span;
++                const v = this.viewport.get();
++                s.scrollLeft0 = v.scrollLeft;
++                s.scrollTop0 = v.scrollTop;
++                s.pxPerSec0 = v.pxPerSec;
++                s.rowHeight0 = v.rowHeight;
++            }
++        }
++
++        const multiFinger = this.pointers.size >= 3;
++        const kx = s.zoomArmed && !s.axisLockX && !multiFinger ? span.x / s.span0.x : 1;
++        const ky = s.zoomArmed && !s.axisLockY && !multiFinger ? span.y / s.span0.y : 1;
++
++        // 水平：秒锚定（docs/08 §2.2）。先 clamp 再代入，避免锚点漂移。
++        const pxBounds = this.viewport.getPxPerSecBounds();
++        const secAtMid0 = (s.scrollLeft0 + s.mid0.x) / s.pxPerSec0;
++        const targetPxPerSec = clamp(s.pxPerSec0 * kx, pxBounds.min, pxBounds.max);
++        const newScrollLeft = secAtMid0 * targetPxPerSec - mid.x;
++        this.viewport.setHorizontal(targetPxPerSec, newScrollLeft);
++
++        // 竖直：行锚定（docs/08 §2.3）。
++        const rhBounds = this.viewport.getRowHeightBounds();
++        const rowAtMid0 = (s.scrollTop0 + s.mid0.y) / s.rowHeight0;
++        const targetRowH = clamp(s.rowHeight0 * ky, rhBounds.min, rhBounds.max);
++        const newScrollTop = rowAtMid0 * targetRowH - mid.y;
++        this.viewport.setVertical(targetRowH, newScrollTop);
++    }
++
++    private setActiveFlag(on: boolean): void {
++        const w = window as unknown as { __hsGestureActive?: boolean };
++        w.__hsGestureActive = on;
++    }
++
++    private now(): number {
++        return typeof performance !== "undefined" ? performance.now() : Date.now();
++    }
++}
+diff --git a/frontend/src/utils/platform.ts b/frontend/src/utils/platform.ts
+index 90012222..800b049e 100644
+--- a/frontend/src/utils/platform.ts
++++ b/frontend/src/utils/platform.ts
+@@ -13,6 +13,16 @@ export const IS_MAC =
+ export const IS_LINUX =
+     typeof navigator !== "undefined" && /Linux/i.test(navigator.platform || navigator.userAgent);
+ 
++/**
++ * 是否运行在 Android（Tauri 移动端）。
++ *
++ * Tauri Android 用系统 WebView 承载前端，其 `navigator.userAgent` 含 "Android"，
++ * 在真机与模拟器上均稳定。触控手势层（docs/08）据此判定是否接管双指手势，
++ * 桌面端（Mac/Win/Linux）一律不接入（ADR-005）。
++ */
++export const IS_ANDROID =
++    typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent || "");
++
+ export type ModifierEventLike = {
+     ctrlKey: boolean;
+     metaKey?: boolean;

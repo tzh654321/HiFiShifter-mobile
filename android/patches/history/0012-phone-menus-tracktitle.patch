@@ -1,0 +1,77 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index b3101838..3524d9b0 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -3841,7 +3841,12 @@ function AppInner() {
+             />
+ 
+             {isPhone ? (
+-                <MobileTopBar onNewProject={handleNewProject} onOpenProject={handleOpenProject} />
++                <MobileTopBar
++                    onNewProject={handleNewProject}
++                    onOpenProject={handleOpenProject}
++                    onUndo={() => dispatch(undoRemote())}
++                    onRedo={() => dispatch(redoRemote())}
++                />
+             ) : (
+                 <MenuBar
+                     onNewProject={handleNewProject}
+diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
+index fad8adeb..41cb7a6d 100644
+--- a/frontend/src/components/layout/timeline/TrackList.tsx
++++ b/frontend/src/components/layout/timeline/TrackList.tsx
+@@ -1350,7 +1350,7 @@ const TrackListInner: React.FC<TrackListProps> = ({
+                 className="border-b border-qt-border px-2 flex items-center justify-between gap-2 bg-qt-window shadow-sm z-10 relative"
+                 style={{ height: headerHeight }}
+             >
+-                <Text size="2" weight="bold" color="gray" className="shrink-0">
++                <Text size="2" weight="bold" color="gray" className="shrink-0 hs-tracklist-title">
+                     {t("tracks")}
+                 </Text>
+                 <TrackHeaderPlayheadTime />
+diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
+index 1344fa34..fea35ffa 100644
+--- a/frontend/src/components/mobile/MobileTopBar.tsx
++++ b/frontend/src/components/mobile/MobileTopBar.tsx
+@@ -11,13 +11,15 @@ import React from "react";
+ interface MobileTopBarProps {
+     onNewProject?: () => void;
+     onOpenProject?: () => void;
++    onUndo?: () => void;
++    onRedo?: () => void;
+ }
+ 
+ export const MOBILE_TOP_BAR_HEIGHT = 40;
+ 
+ const MENUS = ["文件", "编辑", "轨道", "视图", "选项", "帮助"] as const;
+ 
+-export function MobileTopBar({ onNewProject, onOpenProject }: MobileTopBarProps) {
++export function MobileTopBar({ onNewProject, onOpenProject, onUndo, onRedo }: MobileTopBarProps) {
+     const [openMenu, setOpenMenu] = React.useState<string | null>(null);
+ 
+     const close = () => setOpenMenu(null);
+@@ -27,6 +29,10 @@ export function MobileTopBar({ onNewProject, onOpenProject }: MobileTopBarProps)
+             { label: "新建工程", action: onNewProject },
+             { label: "打开工程", action: onOpenProject },
+         ],
++        编辑: [
++            { label: "撤销", action: onUndo },
++            { label: "重做", action: onRedo },
++        ],
+     };
+ 
+     const items = openMenu != null ? (menus[openMenu] ?? []) : [];
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 4a5f3852..be7c1dfb 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -521,4 +521,9 @@ textarea {
+     .hs-param-head button {
+         white-space: nowrap;
+     }
++    /* 轨道头标题「轨道」是纯装饰：132px 头部里它与拍数/秒数位置显示重叠
++       （真机截图多版本遗留），手机上隐藏，让位置显示独占该行。 */
++    .hs-tracklist-title {
++        display: none;
++    }
+ }

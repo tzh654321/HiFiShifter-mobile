@@ -1,0 +1,344 @@
+{
+  "viewport": {
+    "w": 360,
+    "h": 708,
+    "dpr": 3
+  },
+  "url": "http://tauri.localhost/",
+  "total": 22,
+  "items": [
+    {
+      "sel": "button.absolute.rounded-[3px]",
+      "label": "显示速度映射",
+      "rect": {
+        "x": 112,
+        "y": 73,
+        "w": 16,
+        "h": 16
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 16,
+          "h": 16,
+          "hit": {
+            "w": 17,
+            "h": 17
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.w-3.5.h-3.5",
+      "label": "button.w-3.5.h-3.5",
+      "rect": {
+        "x": 8,
+        "y": 101.6,
+        "w": 14,
+        "h": 14
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 14,
+          "h": 14,
+          "hit": {
+            "w": 15,
+            "h": 15
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.relative.w-8",
+      "label": "增益：0 dB",
+      "rect": {
+        "x": 8,
+        "y": 134.5,
+        "w": 32,
+        "h": 32
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 32,
+          "h": 32,
+          "hit": {
+            "w": 42,
+            "h": 42
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "C",
+      "rect": {
+        "x": 82,
+        "y": 98.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20,
+          "hit": {
+            "w": 32,
+            "h": 26
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "M",
+      "rect": {
+        "x": 82,
+        "y": 122.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20,
+          "hit": {
+            "w": 27,
+            "h": 33
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "S",
+      "rect": {
+        "x": 82,
+        "y": 146.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20,
+          "hit": {
+            "w": 27,
+            "h": 38
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "更多开关",
+      "rect": {
+        "x": 2,
+        "y": 587,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "停止",
+      "rect": {
+        "x": 234,
+        "y": 587,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "播放",
+      "rect": {
+        "x": 276,
+        "y": 587,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "录制",
+      "rect": {
+        "x": 318,
+        "y": 587,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "文件",
+      "rect": {
+        "x": 4,
+        "y": 0,
+        "w": 45.8,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "编辑",
+      "rect": {
+        "x": 49.8,
+        "y": 0,
+        "w": 45.8,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "轨道",
+      "rect": {
+        "x": 95.7,
+        "y": 0,
+        "w": 45.8,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "视图",
+      "rect": {
+        "x": 141.5,
+        "y": 0,
+        "w": 45.8,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "选项",
+      "rect": {
+        "x": 187.3,
+        "y": 0,
+        "w": 45.8,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "帮助",
+      "rect": {
+        "x": 233.2,
+        "y": 0,
+        "w": 45.8,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex.items-center",
+      "label": "语言",
+      "rect": {
+        "x": 307.3,
+        "y": 0,
+        "w": 48.7,
+        "h": 44
+      },
+      "flags": {}
+    },
+    {
+      "sel": "div.relative.flex-1",
+      "label": "div.relative.flex-1",
+      "rect": {
+        "x": 132,
+        "y": 93,
+        "w": 228,
+        "h": 493
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "轨道",
+      "rect": {
+        "x": 0,
+        "y": 628,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "参数",
+      "rect": {
+        "x": 90,
+        "y": 628,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "文件",
+      "rect": {
+        "x": 180,
+        "y": 628,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "笔记",
+      "rect": {
+        "x": 270,
+        "y": 628,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    }
+  ],
+  "truncated": 0
+}

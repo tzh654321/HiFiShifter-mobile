@@ -1,0 +1,83 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index f9848411..0d69658e 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -3907,7 +3907,9 @@ function AppInner() {
+             </Flex>
+             )}
+ 
+-            {isPhone ? <MobileToolbar /> : null}
++            {/* 开关条（节拍器/网格/…）只属于轨道页签：参数页签的第一档外显
++                （同步轨道/选择·绘制/参数选择框）面板内自带，重复显示只会挤占高度。 */}
++            {isPhone && mobileTab === "timeline" ? <MobileToolbar /> : null}
+             {isPhone ? <PlaybackBar /> : null}
+             {isPhone ? <BottomTabs active={mobileTab} onChange={setMobileTab} /> : null}
+ 
+diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
+index 64d6da06..e3102f86 100644
+--- a/frontend/src/components/layout/PianoRollPanel.tsx
++++ b/frontend/src/components/layout/PianoRollPanel.tsx
+@@ -5842,7 +5842,7 @@ export const PianoRollPanel: React.FC = () => {
+                 justify="between"
+                 className="h-8 bg-qt-base border-b border-qt-border px-2 shrink-0"
+             >
+-                <Flex align="center" gap="2" style={{ flex: "1 1 auto", minWidth: 0 }}>
++                <Flex align="center" gap="2" className="hs-param-head" style={{ flex: "1 1 auto", minWidth: 0 }}>
+                     <IconButton
+                         size="1"
+                         variant={s.paramEditorSyncTimeline ? "solid" : "ghost"}
+@@ -5856,7 +5856,7 @@ export const PianoRollPanel: React.FC = () => {
+                     >
+                         {s.paramEditorSyncTimeline ? <Link2Icon /> : <LinkBreak2Icon />}
+                     </IconButton>
+-                    <Text size="1" weight="bold" color="gray">
++                    <Text size="1" weight="bold" color="gray" className="hs-param-title">
+                         {tAny("param_editor_short")}
+                     </Text>
+                     {/* 音高吸附按钮，紧邻 param_editor 右侧，留 8px 空白 */}
+@@ -6367,7 +6367,7 @@ export const PianoRollPanel: React.FC = () => {
+                     onOpenChange={setTimeDisplaySettingsOpen}
+                 />
+ 
+-                <Flex gap="2" align="center">
++                <Flex gap="2" align="center" className="hs-param-toolbar">
+                     <Flex gap="1" align="center">
+                         {/* 参考轨道组 / 导入 MIDI：仅当切换到“音高”参数时显示（位置固定在“音高”左侧）。
+                             按钮样式与其他工具按钮一致（Radix soft），简写 + ToolTip 保留全称。 */}
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 29f737e2..4a5f3852 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -493,4 +493,32 @@ textarea {
+     .hs-tracklist-head {
+         width: 132px;
+     }
++    /* 参数编辑器标题是纯装饰，360px 下被挤成 12px 宽的竖排字（w=12,h=80），
++       且会骑到手机顶栏上 —— 直接隐藏（真机实测 2026-09-19）。 */
++    .hs-param-title {
++        display: none;
++    }
++    /* 参数工具行（参考轨道组/导入 MIDI/参数 pills）横向滚动：内容宽 > 360，
++       不处理会与相邻元素重叠。 */
++    .hs-param-toolbar {
++        overflow-x: auto;
++        flex-wrap: nowrap;
++        max-width: 100%;
++    }
++    /* 子项禁止被 flex 压缩换行（"平滑度"曾压成两行、"导入 MIDI"截断） */
++    .hs-param-toolbar button,
++    .hs-param-toolbar .param-pill {
++        white-space: nowrap;
++        flex-shrink: 0;
++    }
++    /* 头部条左侧块（同步轨道/选择·绘制/静态参数标签）是另一条会溢出的行：
++       "平滑度:" 在 360px 下压成两行且与右侧 hs-param-toolbar 交叠（真机实测）。 */
++    .hs-param-head {
++        overflow-x: auto;
++        overflow-y: hidden;
++    }
++    .hs-param-head span,
++    .hs-param-head button {
++        white-space: nowrap;
++    }
+ }

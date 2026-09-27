@@ -1,0 +1,321 @@
+diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
+index d2954d94..96f92b7f 100644
+--- a/frontend/src/components/layout/PianoRollPanel.tsx
++++ b/frontend/src/components/layout/PianoRollPanel.tsx
+@@ -2228,6 +2228,149 @@ export const PianoRollPanel: React.FC = () => {
+         // eslint-disable-next-line react-hooks/exhaustive-deps
+     }, []);
+ 
++    // ── 琴键轴 / 拍数栏手势（用户要求）：单指=平移，双指=该轴缩放 ─────────────
++    // 琴键轴（axisWrap，纵向）：单指拖 → center 平移；双指捏合 → span 缩放（中点锚定）。
++    // 拍数栏（rulerContent，横向）：单指拖 → scrollLeft 平移；双指捏合 → pxPerSec。
++    // 横向都走 handleHorizontalZoom（含同步/钳制），纵向走 syncVerticalScrollbarForViewport。
++    // 这两块区域无子交互（点击跳播放头 = tap 无位移，不受拖动影响），可整体
++    // touch-action:none。
++    const axisGesturesRef = useRef<Array<() => void>>([]);
++
++    useEffect(() => {
++        if (!IS_ANDROID) return;
++        let cancelled = false;
++        const tryAttach = () => {
++            if (cancelled) return;
++            const axisEl = axisWrapRef.current;
++            const rulerEl = rulerContentRef.current;
++            if (!axisEl || !rulerEl) {
++                requestAnimationFrame(tryAttach);
++                return;
++            }
++            const vh = () => Math.max(1, scrollerRef.current?.clientHeight ?? 1);
++            const currentRow = () => {
++                const h = vh();
++                const view = getCurrentViewportForScrollbar(editParamRef.current);
++                const rowHeight = h / Math.max(1e-6, view.span);
++                return {
++                    rowHeight,
++                    scrollTop: view.center * rowHeight - h / 2,
++                    span: view.span,
++                    center: view.center,
++                };
++            };
++            const attach = (el: HTMLElement, axis: "x" | "y"): (() => void) => {
++                el.style.touchAction = "none";
++                const pointers = new Map<number, { x: number; y: number }>();
++                // 单指平移基准
++                let pan:
++                    | { x0: number; y0: number; sl0: number; center0: number; span0: number; rowH0: number }
++                    | null = null;
++                // 双指捏合基准
++                let two:
++                    | { mid0: number; sp0: number; pps0: number; sec0: number; rowH0: number; rowAtMid0: number }
++                    | null = null;
++                const onDown = (e: PointerEvent) => {
++                    if (e.pointerType === "mouse") return;
++                    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
++                    try {
++                        el.setPointerCapture(e.pointerId);
++                    } catch {
++                        /* ignore */
++                    }
++                    if (pointers.size === 1) {
++                        if (axis === "x") {
++                            pan = { x0: e.clientX, y0: e.clientY, sl0: scrollLeftRef.current, center0: 0, span0: 1, rowH0: 1 };
++                        } else {
++                            const row = currentRow();
++                            pan = { x0: e.clientX, y0: e.clientY, sl0: 0, center0: row.center, span0: row.span, rowH0: row.rowHeight };
++                        }
++                        two = null;
++                    } else if (pointers.size === 2) {
++                        pan = null;
++                        const pts = [...pointers.values()];
++                        const sp = (axis === "x" ? Math.abs(pts[0].x - pts[1].x) : Math.abs(pts[0].y - pts[1].y)) || 1;
++                        const mid = axis === "x" ? (pts[0].x + pts[1].x) / 2 : (pts[0].y + pts[1].y) / 2;
++                        if (axis === "x") {
++                            const pps0 = pxPerSecRef.current || 1;
++                            two = { mid0: mid, sp0: sp, pps0, sec0: (scrollLeftRef.current + mid) / pps0, rowH0: 1, rowAtMid0: 0 };
++                        } else {
++                            const row = currentRow();
++                            two = {
++                                mid0: mid,
++                                sp0: sp,
++                                pps0: 1,
++                                sec0: 0,
++                                rowH0: row.rowHeight,
++                                rowAtMid0: (row.scrollTop + mid) / row.rowHeight,
++                            };
++                        }
++                    }
++                };
++                const onMove = (e: PointerEvent) => {
++                    const p = pointers.get(e.pointerId);
++                    if (!p) return;
++                    p.x = e.clientX;
++                    p.y = e.clientY;
++                    if (pointers.size >= 2 && two) {
++                        const pts = [...pointers.values()];
++                        const sp = (axis === "x" ? Math.abs(pts[0].x - pts[1].x) : Math.abs(pts[0].y - pts[1].y)) || 1;
++                        const mid = axis === "x" ? (pts[0].x + pts[1].x) / 2 : (pts[0].y + pts[1].y) / 2;
++                        const k = sp / two.sp0;
++                        if (axis === "x") {
++                            const pps = Math.min(8000, Math.max(10, two.pps0 * k));
++                            horizontalZoomRef.current(pps, two.sec0 * pps - mid);
++                        } else {
++                            const h = vh();
++                            const newRowH = Math.min(1e6, Math.max(0.2, two.rowH0 * k));
++                            const span = h / newRowH;
++                            const scrollTop = two.rowAtMid0 * newRowH - mid;
++                            syncVerticalScrollbarForViewport(editParamRef.current, {
++                                center: (scrollTop + h / 2) / newRowH,
++                                span,
++                            });
++                        }
++                    } else if (pointers.size === 1 && pan) {
++                        if (axis === "x") {
++                            horizontalZoomRef.current(pxPerSecRef.current, pan.sl0 + (e.clientX - pan.x0));
++                        } else {
++                            const center = pan.center0 + (pan.y0 - e.clientY) / pan.rowH0;
++                            syncVerticalScrollbarForViewport(editParamRef.current, {
++                                center,
++                                span: pan.span0,
++                            });
++                        }
++                    }
++                };
++                const onUp = (e: PointerEvent) => {
++                    pointers.delete(e.pointerId);
++                    if (pointers.size < 2) two = null;
++                    if (pointers.size < 1) pan = null;
++                };
++                el.addEventListener("pointerdown", onDown);
++                el.addEventListener("pointermove", onMove);
++                el.addEventListener("pointerup", onUp);
++                el.addEventListener("pointercancel", onUp);
++                return () => {
++                    el.removeEventListener("pointerdown", onDown);
++                    el.removeEventListener("pointermove", onMove);
++                    el.removeEventListener("pointerup", onUp);
++                    el.removeEventListener("pointercancel", onUp);
++                };
++            };
++            const offY = attach(axisEl, "y");
++            const offX = attach(rulerEl, "x");
++            axisGesturesRef.current = [offY, offX];
++        };
++        tryAttach();
++        return () => {
++            cancelled = true;
++            for (const off of axisGesturesRef.current) off();
++            axisGesturesRef.current = [];
++        };
++        // eslint-disable-next-line react-hooks/exhaustive-deps
++    }, []);
++
+     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+     const axisCanvasRef = useRef<HTMLCanvasElement | null>(null);
+     const axisWrapRef = useRef<HTMLDivElement | null>(null);
+@@ -7239,7 +7382,9 @@ export const PianoRollPanel: React.FC = () => {
+                 importTempoMapKeySignature={importTempoMapKeySignature}
+                 onImportTempoMapKeySignatureChange={handleImportTempoMapKeySignatureChange}
+             />
+-            {ctxMenu && s.toolMode === "select" && (
++            {/* 手机（用户要求）：绘制工具下长按也要能打开编辑菜单，去掉 toolMode 限制。
++                桌面不受影响（长按/contextmenu 主要是触屏路径）。 */}
++            {ctxMenu && (
+                 <EditContextMenu
+                     x={ctxMenu.x}
+                     y={ctxMenu.y}
+diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
+index 41cb7a6d..2bc61d61 100644
+--- a/frontend/src/components/layout/timeline/TrackList.tsx
++++ b/frontend/src/components/layout/timeline/TrackList.tsx
+@@ -1981,6 +1981,12 @@ const TrackListInner: React.FC<TrackListProps> = ({
+                                                             aria-label={volumeTooltip}
+                                                             data-track-volume-knob
+                                                             data-track-id={track.id}
++                                                            // 手机（用户要求）：触屏拖动调值必须有
++                                                            // touch-action:none，否则划动几像素就被浏览器
++                                                            // 接管为滚动手势（pointercancel）——表现为
++                                                            // "只能小幅划动"。pointerdown 的
++                                                            // preventDefault 挡不住触摸滚动。
++                                                            style={{ touchAction: "none" }}
+                                                             onPointerEnter={(e) => {
+                                                                 setVolumeHoveredTrackId(track.id);
+                                                                 setVolumeTooltipPos({
+diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
+index 9d4e9331..fc50d81c 100644
+--- a/frontend/src/components/mobile/MobileBottomBar.tsx
++++ b/frontend/src/components/mobile/MobileBottomBar.tsx
+@@ -21,6 +21,8 @@ import {
+     cycleRippleMode,
+     persistUiSettings,
+     playOriginal,
++    setEditParam,
++    setParamEditorSyncTimeline,
+     setToolMode,
+     stopAudioPlayback,
+     toggleAutoCrossfade,
+@@ -153,6 +155,8 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+     const s = useAppSelector(
+         (st) => ({
+             toolModeGroup: st.session.toolModeGroup,
++            editParam: st.session.editParam,
++            paramEditorSyncTimeline: st.session.paramEditorSyncTimeline,
+             metronomeEnabled: st.session.metronomeEnabled,
+             autoCrossfadeEnabled: st.session.autoCrossfadeEnabled,
+             splitTransitionEnabled: st.session.splitTransitionEnabled,
+@@ -174,7 +178,8 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+ 
+     const rippleLabel = s.rippleMode === "off" ? "波纹:关" : s.rippleMode === "track" ? "波纹:轨" : "波纹:全";
+ 
+-    const foldItems: FoldItem[] = [
++    // 轨道页签浮层：10 个低频开关
++    const trackFoldItems: FoldItem[] = [
+         {
+             id: "metronome",
+             label: "节拍器",
+@@ -238,6 +243,39 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+         { id: "ignoreGrouping", label: "忽略编组", on: s.ignoreGrouping, icon: <IconUnlink />, act: flip(toggleIgnoreGrouping) },
+     ];
+ 
++    // 参数页签浮层：面板头部工具行已隐藏（ps1.png 布局），把「同步轨道」与
++    // 「音高~声像参数选择」搬到这里（与面板内同款 id，redux 单一来源）。
++    // 参考轨道组/导入 MIDI 依赖面板内部 handler，暂留在轨道页签文件流程，后续批次补。
++    const PARAM_TABS: Array<[string, string]> = [
++        ["pitch", "音高"],
++        ["formant_shift_cents", "共振峰"],
++        ["breathiness", "气声"],
++        ["tension", "张力"],
++        ["volume", "音量"],
++        ["pan", "声像"],
++    ];
++    const paramFoldItems: FoldItem[] = [
++        {
++            id: "syncTimeline",
++            label: "同步轨道",
++            on: s.paramEditorSyncTimeline,
++            act: () => {
++                dispatch(setParamEditorSyncTimeline(!s.paramEditorSyncTimeline));
++                void dispatch(persistUiSettings());
++            },
++        },
++        ...PARAM_TABS.map(([pid, label]) => ({
++            id: `param:${pid}`,
++            label,
++            on: s.editParam === pid,
++            act: () => {
++                dispatch(setEditParam(pid));
++            },
++        })),
++    ];
++
++    const foldItems: FoldItem[] = isParams ? paramFoldItems : trackFoldItems;
++
+     // 视觉对齐原版（真机读到的 token）：选中 = Radix solid（accent 实底白字），
+     // 未选中 = ghost（透明底 + accent 色图标）；直接用 Radix IconButton 继承主题，
+     // 尺寸保持 ≥44 触摸目标（原版 24px 是桌面密度，手机不够按）。
+@@ -275,7 +313,8 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                 ? iconBtn("绘制", s.toolModeGroup === "draw", () => dispatch(setToolMode("draw")), <Pencil1Icon width={18} height={18} />)
+                 : null}
+ 
+-            {!isParams ? (
++            {/* ∧ 折叠：两个页签都有（轨道=低频开关，参数=同步轨道+参数选择） */}
++            {(
+                 <IconButton
+                     size="3"
+                     variant={foldOpen ? "solid" : "ghost"}
+@@ -289,7 +328,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                         <path d="M3 10 L8 5 L13 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                     </SvgWrap>
+                 </IconButton>
+-            ) : null}
++            )}
+ 
+             {isParams ? (
+                 <IconButton
+@@ -418,7 +457,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                                     WebkitTapHighlightColor: "transparent",
+                                 }}
+                             >
+-                                {item.icon ?? <span style={{ fontSize: 13 }}>{item.label.split(":")[0]}</span>}
++                                {item.icon ?? null}
+                                 <span>{item.label}</span>
+                             </button>
+                         ))}
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index c70f6cdd..2273d9e4 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -526,6 +526,34 @@ textarea {
+     .hs-tracklist-title {
+         display: none;
+     }
++    /* 参数面板头部两行工具行（用户要求，ps1.png 布局）：手机上移除，
++       功能搬进底栏 ∧ 浮层（同步轨道/参数 pills 在 MobileBottomBar 有同款）。 */
++    .hs-param-head,
++    .hs-param-toolbar {
++        display: none;
++    }
++    /* B 阶段触摸目标：轨道头 C/M/S（Radix size-1，20px）与增益旋钮（32px）。
++       视觉尺寸不变，用伪元素外扩命中区；C/M/S 水平相邻，横向只外扩 6px
++       避免相邻按钮命中区互相覆盖。 */
++    .rt-IconButton.rt-r-size-1 {
++        position: relative;
++    }
++    .rt-IconButton.rt-r-size-1::after {
++        content: "";
++        position: absolute;
++        left: -6px;
++        right: -6px;
++        top: -12px;
++        bottom: -12px;
++    }
++    [data-track-volume-knob] {
++        position: relative;
++    }
++    [data-track-volume-knob]::after {
++        content: "";
++        position: absolute;
++        inset: -6px;
++    }
+ }
+ 
+ /* 手机按钮按压反馈（对齐原版 Radix 按钮的按压语义：按下整体变暗一档） */

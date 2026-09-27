@@ -1,0 +1,471 @@
+diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
+index 8deeb5ef..ca2637ce 100644
+--- a/frontend/src/components/mobile/MobileBottomBar.tsx
++++ b/frontend/src/components/mobile/MobileBottomBar.tsx
+@@ -1,25 +1,25 @@
+ /**
+- * MobileBottomBar — 手机底部**单行**工具条（按 PS 设计稿 ps1.png）。
++ * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png，图标化对齐原版）。
+  *
+- * 把此前的「开关条(48) + 播放条(56)」两行合并成一行 44px：
++ *   [选择|绘制(仅参数页签,图标)] [∧折叠(仅轨道页签)] [👁(参数页签,占位)]   [⏹][▶][●]
+  *
+- *   [选择|绘制(仅参数页签)] [∧ 折叠] [👁(仅参数页签)]      [⏹][▶][●]
+- *
+- * - ∧ 折叠：低频开关（节拍器/网格/自动交叉…忽略编组，以及参数页签的同步轨道）
+- *   收进一个弹出面板 —— 「非最常用的功能折叠成一个按钮」。
+- * - 👁：「所有的隐藏/显示」统一入口；参数覆盖层的可见性状态在 PianoRollPanel
+- *   组件内（`useState`），暂以占位接入，后续把状态提升后接管。
+- * - 播放控制与桌面 Transport 同语义。
++ * - 折叠浮层里的开关按钮用**原版同款图标**（自 ActionBar 抄 SVG）+ 小字标签；
++ *   波纹是三态（关/轨/全），状态本身是信息，保留文字。
++ * - 去重（2026-09-19 盘点）：参数页签浮层原本也有「同步轨道」，但面板内工具行
++ *   （`PianoRollPanel.tsx:5848`）已有同款 —— 删浮层份，故参数页签不渲染 ∧。
++ *   底栏「选择/绘制」与面板内工具按钮并存是 PS 稿的设计（底栏常驻），保留。
++ * - 👁：「所有的隐藏/显示」统一入口；覆盖层可见性目前是 PianoRollPanel 组件内
++ *   useState（:1631），暂以占位接入，状态提升后接管。
+  */
+ 
+ import React from "react";
+ import { useAppDispatch, useAppSelector } from "../../app/hooks";
+ import { shallowEqual } from "react-redux";
++import { CursorArrowIcon, Pencil1Icon, DoubleArrowRightIcon } from "@radix-ui/react-icons";
+ import {
+     cycleRippleMode,
+     persistUiSettings,
+     playOriginal,
+-    setParamEditorSyncTimeline,
+     setToolMode,
+     stopAudioPlayback,
+     toggleAutoCrossfade,
+@@ -40,7 +40,90 @@ import { updateMetronome } from "../../features/session/thunks/transportThunks";
+ 
+ export const MOBILE_BOTTOM_BAR_HEIGHT = 44;
+ 
+-function Svg({ children }: { children: React.ReactNode }) {
++/* ── 原版同款图标（自 ActionBar 抄录的 SVG）────────────────────────── */
++
++function IconCrossfade() {
++    return (
++        <svg width="18" height="18" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++            <path d="M2 12L7.5 3L13 12" stroke="currentColor" strokeWidth="1.2" fill="none" />
++            <path d="M2 3L7.5 12L13 3" stroke="currentColor" strokeWidth="1.2" fill="none" opacity="0.5" />
++        </svg>
++    );
++}
++
++function IconSplit() {
++    return (
++        <svg width="18" height="18" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++            <path d="M7.5 1.5V13.5" stroke="currentColor" strokeWidth="1.2" />
++            <path d="M3.5 3.5L7.5 5.5L3.5 7.5Z" fill="currentColor" opacity="0.85" />
++            <path d="M11.5 7.5L7.5 9.5L11.5 11.5Z" fill="currentColor" opacity="0.45" />
++        </svg>
++    );
++}
++
++function IconSnap() {
++    return (
++        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
++            <path
++                d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15Z"
++                stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
++            />
++            <path d="m5 8 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
++            <path d="m12 15 4 4" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
++        </svg>
++    );
++}
++
++function IconPlayheadZoom() {
++    return (
++        <svg width="18" height="18" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++            <path d="M7.5 2V13" stroke="currentColor" strokeWidth="1.2" />
++            <path d="M6 3.5L7.5 2L9 3.5" stroke="currentColor" strokeWidth="1" />
++            <path d="M5.5 5.5L4 7.5L5.5 9.5" stroke="currentColor" strokeWidth="1.2" />
++            <path d="M9.5 5.5L11 7.5L9.5 9.5" stroke="currentColor" strokeWidth="1.2" />
++            <path d="M3 12H12" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
++        </svg>
++    );
++}
++
++function IconParamSeek() {
++    return (
++        <svg width="18" height="18" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++            <path d="M2 2.5H13" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
++            <path d="M2 12.5H13" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
++            <path d="M7.5 3.5V11.5" stroke="currentColor" strokeWidth="1.2" />
++            <path d="M6 4.5L7.5 3L9 4.5" stroke="currentColor" strokeWidth="1" />
++            <path
++                d="M7.8 8.2C8.9 8.2 9.8 9.1 9.8 10.2C9.8 11.3 8.9 12.2 7.8 12.2C6.9 12.2 6.2 11.6 6 10.8H7.8V8.2Z"
++                fill="currentColor"
++            />
++        </svg>
++    );
++}
++
++/** 节拍器（简版自绘：梯形机身 + 摆锤）。 */
++function IconMetronome() {
++    return (
++        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
++            <path d="M6 2.5 H10 L12.5 13.5 H3.5 Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
++            <path d="M5 9.5 H11" stroke="currentColor" strokeWidth="1" opacity="0.5" />
++            <path d="M4.5 11 L11.5 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
++        </svg>
++    );
++}
++
++/** 忽略编组（简版自绘：断裂链）。 */
++function IconUnlink() {
++    return (
++        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
++            <path d="M6.5 4 L4.8 4 A2.3 2.3 0 0 0 4.8 8.6 L6.5 8.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
++            <path d="M9.5 7.4 L11.2 7.4 A2.3 2.3 0 0 1 11.2 12 L9.5 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" transform="translate(0 -2.7)" />
++            <path d="M12.5 2.5 L14 1.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
++        </svg>
++    );
++}
++
++function SvgWrap({ children }: { children: React.ReactNode }) {
+     return (
+         <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+             {children}
+@@ -52,6 +135,7 @@ interface FoldItem {
+     id: string;
+     label: string;
+     on: boolean;
++    icon?: React.ReactNode;
+     act: () => void;
+ }
+ 
+@@ -65,7 +149,6 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+     const s = useAppSelector(
+         (st) => ({
+             toolModeGroup: st.session.toolModeGroup,
+-            paramEditorSyncTimeline: st.session.paramEditorSyncTimeline,
+             metronomeEnabled: st.session.metronomeEnabled,
+             autoCrossfadeEnabled: st.session.autoCrossfadeEnabled,
+             splitTransitionEnabled: st.session.splitTransitionEnabled,
+@@ -87,89 +170,94 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+ 
+     const rippleLabel = s.rippleMode === "off" ? "波纹:关" : s.rippleMode === "track" ? "波纹:轨" : "波纹:全";
+ 
+-    const foldItems: FoldItem[] = isParams
+-        ? [
+-              {
+-                  id: "syncTimeline",
+-                  label: "同步轨道",
+-                  on: s.paramEditorSyncTimeline,
+-                  act: () => {
+-                      dispatch(setParamEditorSyncTimeline(!s.paramEditorSyncTimeline));
+-                      void dispatch(persistUiSettings());
+-                  },
+-              },
+-          ]
+-        : [
+-              {
+-                  id: "metronome",
+-                  label: "节拍器",
+-                  on: s.metronomeEnabled,
+-                  act: () => {
+-                      void dispatch(updateMetronome({ metronomeEnabled: !s.metronomeEnabled }));
+-                  },
+-              },
+-              { id: "snap", label: "网格", on: s.snapEnabled, act: flip(toggleSnap) },
+-              {
+-                  id: "autoCrossfade",
+-                  label: "自动交叉",
+-                  on: s.autoCrossfadeEnabled,
+-                  act: flip(toggleAutoCrossfade),
+-              },
+-              {
+-                  id: "splitTransition",
+-                  label: "分割过渡",
+-                  on: s.splitTransitionEnabled,
+-                  act: flip(toggleSplitTransition),
+-              },
+-              {
+-                  id: "ripple",
+-                  label: rippleLabel,
+-                  on: s.rippleMode !== "off",
+-                  act: () => {
+-                      dispatch(cycleRippleMode());
+-                      void dispatch(persistUiSettings());
+-                  },
+-              },
+-              {
+-                  id: "playheadZoom",
+-                  label: "播放头缩放",
+-                  on: s.playheadZoomEnabled,
+-                  act: flip(togglePlayheadZoom),
+-              },
+-              { id: "autoScroll", label: "自动滚动", on: s.autoScrollEnabled, act: flip(toggleAutoScroll) },
+-              {
+-                  id: "paramSeek",
+-                  label: "参数跟随",
+-                  on: s.paramEditorSeekPlayheadEnabled,
+-                  act: flip(toggleParamEditorSeekPlayhead),
+-              },
+-              {
+-                  id: "clickSelectTrack",
+-                  label: "点击选轨",
+-                  on: s.paramEditorTimelineClickSelectTrackEnabled,
+-                  act: flip(toggleParamEditorTimelineClickSelectTrack),
+-              },
+-              { id: "ignoreGrouping", label: "忽略编组", on: s.ignoreGrouping, act: flip(toggleIgnoreGrouping) },
+-          ];
++    const foldItems: FoldItem[] = [
++        {
++            id: "metronome",
++            label: "节拍器",
++            on: s.metronomeEnabled,
++            icon: <IconMetronome />,
++            act: () => {
++                void dispatch(updateMetronome({ metronomeEnabled: !s.metronomeEnabled }));
++            },
++        },
++        { id: "snap", label: "网格", on: s.snapEnabled, icon: <IconSnap />, act: flip(toggleSnap) },
++        {
++            id: "autoCrossfade",
++            label: "自动交叉",
++            on: s.autoCrossfadeEnabled,
++            icon: <IconCrossfade />,
++            act: flip(toggleAutoCrossfade),
++        },
++        {
++            id: "splitTransition",
++            label: "分割过渡",
++            on: s.splitTransitionEnabled,
++            icon: <IconSplit />,
++            act: flip(toggleSplitTransition),
++        },
++        {
++            id: "ripple",
++            label: rippleLabel,
++            on: s.rippleMode !== "off",
++            act: () => {
++                dispatch(cycleRippleMode());
++                void dispatch(persistUiSettings());
++            },
++        },
++        {
++            id: "playheadZoom",
++            label: "播放头缩放",
++            on: s.playheadZoomEnabled,
++            icon: <IconPlayheadZoom />,
++            act: flip(togglePlayheadZoom),
++        },
++        {
++            id: "autoScroll",
++            label: "自动滚动",
++            on: s.autoScrollEnabled,
++            icon: <DoubleArrowRightIcon width={18} height={18} />,
++            act: flip(toggleAutoScroll),
++        },
++        {
++            id: "paramSeek",
++            label: "参数跟随",
++            on: s.paramEditorSeekPlayheadEnabled,
++            icon: <IconParamSeek />,
++            act: flip(toggleParamEditorSeekPlayhead),
++        },
++        {
++            id: "clickSelectTrack",
++            label: "点击选轨",
++            on: s.paramEditorTimelineClickSelectTrackEnabled,
++            act: flip(toggleParamEditorTimelineClickSelectTrack),
++        },
++        { id: "ignoreGrouping", label: "忽略编组", on: s.ignoreGrouping, icon: <IconUnlink />, act: flip(toggleIgnoreGrouping) },
++    ];
+ 
+-    const toolBtn = (label: string, on: boolean, onClick: () => void) => (
++    const iconBtn = (
++        label: string,
++        on: boolean,
++        onClick: () => void,
++        icon: React.ReactNode,
++        extra: React.CSSProperties = {},
++    ) => (
+         <button
+             type="button"
+             onClick={onClick}
++            aria-label={label}
+             aria-pressed={on}
+             className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+             style={{
+                 minWidth: 44,
+                 minHeight: 40,
+                 borderRadius: 8,
+-                fontSize: 14,
+-                fontWeight: on ? 600 : 400,
+                 opacity: on ? 1 : 0.65,
+                 background: on ? "rgba(127,119,221,0.18)" : "transparent",
+                 WebkitTapHighlightColor: "transparent",
++                ...extra,
+             }}
+         >
+-            {label}
++            {icon}
+         </button>
+     );
+ 
+@@ -180,28 +268,34 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+             role="toolbar"
+             aria-label="底部工具条"
+         >
+-            {isParams ? toolBtn("选择", s.toolModeGroup === "select", () => dispatch(setToolMode("select"))) : null}
+-            {isParams ? toolBtn("绘制", s.toolModeGroup === "draw", () => dispatch(setToolMode("draw"))) : null}
++            {isParams
++                ? iconBtn("选择", s.toolModeGroup === "select", () => dispatch(setToolMode("select")), <CursorArrowIcon width={18} height={18} />)
++                : null}
++            {isParams
++                ? iconBtn("绘制", s.toolModeGroup === "draw", () => dispatch(setToolMode("draw")), <Pencil1Icon width={18} height={18} />)
++                : null}
+ 
+-            <button
+-                type="button"
+-                onClick={() => setFoldOpen((v) => !v)}
+-                aria-label="更多开关"
+-                aria-expanded={foldOpen}
+-                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+-                style={{
+-                    minWidth: 44,
+-                    minHeight: 40,
+-                    borderRadius: 8,
+-                    opacity: foldOpen ? 1 : 0.7,
+-                    background: foldOpen ? "rgba(127,119,221,0.18)" : "transparent",
+-                    WebkitTapHighlightColor: "transparent",
+-                }}
+-            >
+-                <Svg>
+-                    <path d="M3 10 L8 5 L13 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+-                </Svg>
+-            </button>
++            {!isParams ? (
++                <button
++                    type="button"
++                    onClick={() => setFoldOpen((v) => !v)}
++                    aria-label="更多开关"
++                    aria-expanded={foldOpen}
++                    className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
++                    style={{
++                        minWidth: 44,
++                        minHeight: 40,
++                        borderRadius: 8,
++                        opacity: foldOpen ? 1 : 0.7,
++                        background: foldOpen ? "rgba(127,119,221,0.18)" : "transparent",
++                        WebkitTapHighlightColor: "transparent",
++                    }}
++                >
++                    <SvgWrap>
++                        <path d="M3 10 L8 5 L13 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
++                    </SvgWrap>
++                </button>
++            ) : null}
+ 
+             {isParams ? (
+                 <button
+@@ -211,16 +305,16 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                     className="flex items-center justify-center border-0"
+                     style={{ minWidth: 44, minHeight: 40, borderRadius: 8, opacity: 0.35, background: "transparent" }}
+                 >
+-                    <Svg>
++                    <SvgWrap>
+                         <path d="M1.5 8 C3.5 4.8, 6 3.2, 8 3.2 C10 3.2, 12.5 4.8, 14.5 8 C12.5 11.2, 10 12.8, 8 12.8 C6 12.8, 3.5 11.2, 1.5 8 Z" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                         <circle cx="8" cy="8" r="2.2" />
+-                    </Svg>
++                    </SvgWrap>
+                 </button>
+             ) : null}
+ 
+             <span className="flex-1" />
+ 
+-            {/* ── 播放控制（并入本行右侧，不再单独占一行）────────────── */}
++            {/* ── 播放控制（并入本行右侧）────────────────────────────── */}
+             <button
+                 type="button"
+                 onClick={() => dispatch(stopAudioPlayback({ restoreAnchor: true }))}
+@@ -228,9 +322,9 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                 className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+                 style={{ minWidth: 48, minHeight: 40, borderRadius: 8, WebkitTapHighlightColor: "transparent" }}
+             >
+-                <Svg>
++                <SvgWrap>
+                     <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
+-                </Svg>
++                </SvgWrap>
+             </button>
+             <button
+                 type="button"
+@@ -240,7 +334,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                 className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+                 style={{ minWidth: 48, minHeight: 40, borderRadius: 8, WebkitTapHighlightColor: "transparent" }}
+             >
+-                <Svg>
++                <SvgWrap>
+                     {isPlaying ? (
+                         <>
+                             <rect x="3.5" y="3" width="3.2" height="10" rx="1" />
+@@ -249,7 +343,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                     ) : (
+                         <path d="M4.5 2.5 L13 8 L4.5 13.5 Z" />
+                     )}
+-                </Svg>
++                </SvgWrap>
+             </button>
+             <button
+                 type="button"
+@@ -269,9 +363,9 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                     WebkitTapHighlightColor: "transparent",
+                 }}
+             >
+-                <Svg>
++                <SvgWrap>
+                     <circle cx="8" cy="8" r="5.5" />
+-                </Svg>
++                </SvgWrap>
+             </button>
+ 
+             {foldOpen ? (
+@@ -293,7 +387,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                             borderRadius: 10,
+                             padding: 6,
+                             display: "grid",
+-                            gridTemplateColumns: "1fr 1fr",
++                            gridTemplateColumns: "repeat(3, 1fr)",
+                             gap: 4,
+                         }}
+                     >
+@@ -301,24 +395,23 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                             <button
+                                 key={item.id}
+                                 type="button"
+-                                onClick={() => {
+-                                    item.act();
+-                                }}
++                                onClick={item.act}
+                                 aria-pressed={item.on}
+-                                className="flex items-center bg-transparent border-0 cursor-pointer"
++                                className="flex flex-col items-center justify-center bg-transparent border-0 cursor-pointer"
+                                 style={{
+-                                    minHeight: 44,
+-                                    padding: "0 10px",
+-                                    fontSize: 14,
++                                    minHeight: 52,
++                                    padding: "4px 2px",
++                                    fontSize: 11,
+                                     borderRadius: 8,
++                                    gap: 2,
+                                     fontWeight: item.on ? 600 : 400,
+                                     opacity: item.on ? 1 : 0.6,
+                                     background: item.on ? "rgba(127,119,221,0.18)" : "transparent",
+-                                    textAlign: "left",
+                                     WebkitTapHighlightColor: "transparent",
+                                 }}
+                             >
+-                                {item.label}
++                                {item.icon ?? <span style={{ fontSize: 13 }}>{item.label.split(":")[0]}</span>}
++                                <span>{item.label}</span>
+                             </button>
+                         ))}
+                     </div>

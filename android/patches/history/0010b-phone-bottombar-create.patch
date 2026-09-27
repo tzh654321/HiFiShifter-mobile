@@ -1,0 +1,335 @@
+diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
+new file mode 100644
+index 00000000..8deeb5ef
+--- /dev/null
++++ b/frontend/src/components/mobile/MobileBottomBar.tsx
+@@ -0,0 +1,329 @@
++/**
++ * MobileBottomBar — 手机底部**单行**工具条（按 PS 设计稿 ps1.png）。
++ *
++ * 把此前的「开关条(48) + 播放条(56)」两行合并成一行 44px：
++ *
++ *   [选择|绘制(仅参数页签)] [∧ 折叠] [👁(仅参数页签)]      [⏹][▶][●]
++ *
++ * - ∧ 折叠：低频开关（节拍器/网格/自动交叉…忽略编组，以及参数页签的同步轨道）
++ *   收进一个弹出面板 —— 「非最常用的功能折叠成一个按钮」。
++ * - 👁：「所有的隐藏/显示」统一入口；参数覆盖层的可见性状态在 PianoRollPanel
++ *   组件内（`useState`），暂以占位接入，后续把状态提升后接管。
++ * - 播放控制与桌面 Transport 同语义。
++ */
++
++import React from "react";
++import { useAppDispatch, useAppSelector } from "../../app/hooks";
++import { shallowEqual } from "react-redux";
++import {
++    cycleRippleMode,
++    persistUiSettings,
++    playOriginal,
++    setParamEditorSyncTimeline,
++    setToolMode,
++    stopAudioPlayback,
++    toggleAutoCrossfade,
++    toggleAutoScroll,
++    toggleIgnoreGrouping,
++    toggleParamEditorSeekPlayhead,
++    toggleParamEditorTimelineClickSelectTrack,
++    togglePlayheadZoom,
++    toggleSnap,
++    toggleSplitTransition,
++} from "../../features/session/sessionSlice";
++import {
++    cancelRecordingCountdown,
++    startRecordingFlow,
++    stopRecordingFlow,
++} from "../../features/recording/recordingSlice";
++import { updateMetronome } from "../../features/session/thunks/transportThunks";
++
++export const MOBILE_BOTTOM_BAR_HEIGHT = 44;
++
++function Svg({ children }: { children: React.ReactNode }) {
++    return (
++        <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
++            {children}
++        </svg>
++    );
++}
++
++interface FoldItem {
++    id: string;
++    label: string;
++    on: boolean;
++    act: () => void;
++}
++
++export function MobileBottomBar({ tab }: { tab: string }) {
++    const dispatch = useAppDispatch();
++    const [foldOpen, setFoldOpen] = React.useState(false);
++    const isParams = tab === "params";
++
++    const isPlaying = useAppSelector((s) => s.session.runtime.isPlaying);
++    const recording = useAppSelector((s) => s.recording, shallowEqual);
++    const s = useAppSelector(
++        (st) => ({
++            toolModeGroup: st.session.toolModeGroup,
++            paramEditorSyncTimeline: st.session.paramEditorSyncTimeline,
++            metronomeEnabled: st.session.metronomeEnabled,
++            autoCrossfadeEnabled: st.session.autoCrossfadeEnabled,
++            splitTransitionEnabled: st.session.splitTransitionEnabled,
++            snapEnabled: st.session.snapEnabled,
++            rippleMode: st.session.rippleMode,
++            playheadZoomEnabled: st.session.playheadZoomEnabled,
++            autoScrollEnabled: st.session.autoScrollEnabled,
++            paramEditorSeekPlayheadEnabled: st.session.paramEditorSeekPlayheadEnabled,
++            paramEditorTimelineClickSelectTrackEnabled: st.session.paramEditorTimelineClickSelectTrackEnabled,
++            ignoreGrouping: st.session.ignoreGrouping,
++        }),
++        shallowEqual,
++    );
++
++    const flip = (toggle: () => { type: string }) => () => {
++        dispatch(toggle());
++        void dispatch(persistUiSettings());
++    };
++
++    const rippleLabel = s.rippleMode === "off" ? "波纹:关" : s.rippleMode === "track" ? "波纹:轨" : "波纹:全";
++
++    const foldItems: FoldItem[] = isParams
++        ? [
++              {
++                  id: "syncTimeline",
++                  label: "同步轨道",
++                  on: s.paramEditorSyncTimeline,
++                  act: () => {
++                      dispatch(setParamEditorSyncTimeline(!s.paramEditorSyncTimeline));
++                      void dispatch(persistUiSettings());
++                  },
++              },
++          ]
++        : [
++              {
++                  id: "metronome",
++                  label: "节拍器",
++                  on: s.metronomeEnabled,
++                  act: () => {
++                      void dispatch(updateMetronome({ metronomeEnabled: !s.metronomeEnabled }));
++                  },
++              },
++              { id: "snap", label: "网格", on: s.snapEnabled, act: flip(toggleSnap) },
++              {
++                  id: "autoCrossfade",
++                  label: "自动交叉",
++                  on: s.autoCrossfadeEnabled,
++                  act: flip(toggleAutoCrossfade),
++              },
++              {
++                  id: "splitTransition",
++                  label: "分割过渡",
++                  on: s.splitTransitionEnabled,
++                  act: flip(toggleSplitTransition),
++              },
++              {
++                  id: "ripple",
++                  label: rippleLabel,
++                  on: s.rippleMode !== "off",
++                  act: () => {
++                      dispatch(cycleRippleMode());
++                      void dispatch(persistUiSettings());
++                  },
++              },
++              {
++                  id: "playheadZoom",
++                  label: "播放头缩放",
++                  on: s.playheadZoomEnabled,
++                  act: flip(togglePlayheadZoom),
++              },
++              { id: "autoScroll", label: "自动滚动", on: s.autoScrollEnabled, act: flip(toggleAutoScroll) },
++              {
++                  id: "paramSeek",
++                  label: "参数跟随",
++                  on: s.paramEditorSeekPlayheadEnabled,
++                  act: flip(toggleParamEditorSeekPlayhead),
++              },
++              {
++                  id: "clickSelectTrack",
++                  label: "点击选轨",
++                  on: s.paramEditorTimelineClickSelectTrackEnabled,
++                  act: flip(toggleParamEditorTimelineClickSelectTrack),
++              },
++              { id: "ignoreGrouping", label: "忽略编组", on: s.ignoreGrouping, act: flip(toggleIgnoreGrouping) },
++          ];
++
++    const toolBtn = (label: string, on: boolean, onClick: () => void) => (
++        <button
++            type="button"
++            onClick={onClick}
++            aria-pressed={on}
++            className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
++            style={{
++                minWidth: 44,
++                minHeight: 40,
++                borderRadius: 8,
++                fontSize: 14,
++                fontWeight: on ? 600 : 400,
++                opacity: on ? 1 : 0.65,
++                background: on ? "rgba(127,119,221,0.18)" : "transparent",
++                WebkitTapHighlightColor: "transparent",
++            }}
++        >
++            {label}
++        </button>
++    );
++
++    return (
++        <div
++            className="shrink-0 relative flex items-center gap-1 px-1 bg-qt-window border-t border-qt-border"
++            style={{ minHeight: MOBILE_BOTTOM_BAR_HEIGHT }}
++            role="toolbar"
++            aria-label="底部工具条"
++        >
++            {isParams ? toolBtn("选择", s.toolModeGroup === "select", () => dispatch(setToolMode("select"))) : null}
++            {isParams ? toolBtn("绘制", s.toolModeGroup === "draw", () => dispatch(setToolMode("draw"))) : null}
++
++            <button
++                type="button"
++                onClick={() => setFoldOpen((v) => !v)}
++                aria-label="更多开关"
++                aria-expanded={foldOpen}
++                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
++                style={{
++                    minWidth: 44,
++                    minHeight: 40,
++                    borderRadius: 8,
++                    opacity: foldOpen ? 1 : 0.7,
++                    background: foldOpen ? "rgba(127,119,221,0.18)" : "transparent",
++                    WebkitTapHighlightColor: "transparent",
++                }}
++            >
++                <Svg>
++                    <path d="M3 10 L8 5 L13 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
++                </Svg>
++            </button>
++
++            {isParams ? (
++                <button
++                    type="button"
++                    aria-label="显示/隐藏（待接参数覆盖层）"
++                    disabled
++                    className="flex items-center justify-center border-0"
++                    style={{ minWidth: 44, minHeight: 40, borderRadius: 8, opacity: 0.35, background: "transparent" }}
++                >
++                    <Svg>
++                        <path d="M1.5 8 C3.5 4.8, 6 3.2, 8 3.2 C10 3.2, 12.5 4.8, 14.5 8 C12.5 11.2, 10 12.8, 8 12.8 C6 12.8, 3.5 11.2, 1.5 8 Z" fill="none" stroke="currentColor" strokeWidth="1.4" />
++                        <circle cx="8" cy="8" r="2.2" />
++                    </Svg>
++                </button>
++            ) : null}
++
++            <span className="flex-1" />
++
++            {/* ── 播放控制（并入本行右侧，不再单独占一行）────────────── */}
++            <button
++                type="button"
++                onClick={() => dispatch(stopAudioPlayback({ restoreAnchor: true }))}
++                aria-label="停止"
++                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
++                style={{ minWidth: 48, minHeight: 40, borderRadius: 8, WebkitTapHighlightColor: "transparent" }}
++            >
++                <Svg>
++                    <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
++                </Svg>
++            </button>
++            <button
++                type="button"
++                onClick={() => (isPlaying ? dispatch(stopAudioPlayback()) : dispatch(playOriginal()))}
++                aria-label={isPlaying ? "暂停" : "播放"}
++                aria-pressed={isPlaying}
++                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
++                style={{ minWidth: 48, minHeight: 40, borderRadius: 8, WebkitTapHighlightColor: "transparent" }}
++            >
++                <Svg>
++                    {isPlaying ? (
++                        <>
++                            <rect x="3.5" y="3" width="3.2" height="10" rx="1" />
++                            <rect x="9.3" y="3" width="3.2" height="10" rx="1" />
++                        </>
++                    ) : (
++                        <path d="M4.5 2.5 L13 8 L4.5 13.5 Z" />
++                    )}
++                </Svg>
++            </button>
++            <button
++                type="button"
++                onClick={() => {
++                    if (recording.active) void dispatch(stopRecordingFlow());
++                    else if (recording.countdownRemaining > 0) void dispatch(cancelRecordingCountdown());
++                    else void dispatch(startRecordingFlow());
++                }}
++                aria-label={recording.active ? "停止录制" : "录制"}
++                aria-pressed={recording.active}
++                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
++                style={{
++                    minWidth: 48,
++                    minHeight: 40,
++                    borderRadius: 8,
++                    color: recording.active ? "#e5484d" : undefined,
++                    WebkitTapHighlightColor: "transparent",
++                }}
++            >
++                <Svg>
++                    <circle cx="8" cy="8" r="5.5" />
++                </Svg>
++            </button>
++
++            {foldOpen ? (
++                <>
++                    <button
++                        type="button"
++                        aria-label="关闭更多开关"
++                        onClick={() => setFoldOpen(false)}
++                        className="fixed border-0 cursor-pointer"
++                        style={{ inset: 0, background: "transparent", zIndex: 40 }}
++                    />
++                    <div
++                        className="absolute bg-qt-window border border-qt-border"
++                        style={{
++                            bottom: "100%",
++                            left: 4,
++                            right: 4,
++                            zIndex: 41,
++                            borderRadius: 10,
++                            padding: 6,
++                            display: "grid",
++                            gridTemplateColumns: "1fr 1fr",
++                            gap: 4,
++                        }}
++                    >
++                        {foldItems.map((item) => (
++                            <button
++                                key={item.id}
++                                type="button"
++                                onClick={() => {
++                                    item.act();
++                                }}
++                                aria-pressed={item.on}
++                                className="flex items-center bg-transparent border-0 cursor-pointer"
++                                style={{
++                                    minHeight: 44,
++                                    padding: "0 10px",
++                                    fontSize: 14,
++                                    borderRadius: 8,
++                                    fontWeight: item.on ? 600 : 400,
++                                    opacity: item.on ? 1 : 0.6,
++                                    background: item.on ? "rgba(127,119,221,0.18)" : "transparent",
++                                    textAlign: "left",
++                                    WebkitTapHighlightColor: "transparent",
++                                }}
++                            >
++                                {item.label}
++                            </button>
++                        ))}
++                    </div>
++                </>
++            ) : null}
++        </div>
++    );
++}

@@ -1,0 +1,15 @@
+{
+    "name": "m0-probe",
+    "private": true,
+    "version": "0.1.0",
+    "type": "module",
+    "scripts": {
+        "tauri": "tauri",
+        "android:init": "tauri android init",
+        "android:dev": "tauri android dev",
+        "android:build": "tauri android build"
+    },
+    "devDependencies": {
+        "@tauri-apps/cli": "^2"
+    }
+}

@@ -1,0 +1,339 @@
+── HiFiShifter Android 环境 ──
+  ✅ JDK 17 → openjdk version "17.0.18" 2026-01-20 LTS
+  ✅ JAVA_HOME = D:\Download\zulu17.64.17-ca-jdk17.0.18-win_x64
+  ✅ SDK platform 35
+  ✅ build-tools 35.0.0
+  ✅ build-tools 34.0.0（重力四子棋在用）
+  ✅ NDK 27.2.12479018
+  ✅ TEMP → D:\hs-tmp（不占 C:）
+  ✅ adb → Android Debug Bridge version 1.0.41
+  ✅ rustc → rustc 1.98.1 (48a229cea 2026-09-01)
+  ✅ target aarch64-linux-android
+  ✅ tauri-cli ?（npm 装的，构建脚本会自动加进 PATH）
+──────────────────────────────
+▸ HS-NODE-PATH-FIX：已摘掉 WorkBuddy 的 node（规避 node.exe.bat）
+▸ 已清 /c/Users/tzh/Documents/code/HiFiShifter-mobile/upstream-src/frontend/dist（用 /usr/bin/rm 绕开 safe-delete shim）
+▸ 同步原生库到 jniLibs
+  ✓ x86_64/libonnxruntime.so  34M
+  ✓ x86_64/libSoundTouchDLL.so  512K（兜底同步）
+已同步 1 个 ABI → /c/Users/tzh/Documents/code/HiFiShifter-mobile/upstream-src/backend/src-tauri/gen/android/app/src/main/jniLibs
+
+提示：确认 APK 里真的带上了（打包后）：
+  unzip -l <app>.apk | grep libonnxruntime
+▸ 已清上次的 APK 输出（避免旧条目残留在 zip 里）
+▸ 已清原生库/资源的 merge 中间产物
+▸ 清掉 2 个陈旧 Gradle 锁（D:/gradle-home/caches 下的 *.lock）
+
+▸ ABI=x86_64  ARCH=x86_64  TRIPLE=x86_64-linux-android
+▸ cmake   = /d/Android/Sdk/cmake/3.22.1/bin/cmake
+▸ shim    = c:/Users/tzh/Documents/code/HiFiShifter-mobile/android/shim/fdk-aac-log
+▸ scope   = --debug
+▸ 前端会由 tauri 的 beforeBuildCommand 自动构建（npm --prefix ../frontend run build）
+
+        Info Using installed NDK: D:\Android\Sdk\ndk\27.2.12479018
+        Info Looking up installed tauri packages to check mismatched versions...
+     Running beforeBuildCommand `npm --prefix ../frontend run build`
+
+> frontend@0.1.0-beta.14 build
+> tsc -b && vite build
+
+[36mvite v7.3.1 [32mbuilding client environment for production...[36m[39m
+transforming...
+[32m✓[39m 632 modules transformed.
+rendering chunks...
+computing gzip size...
+[2mdist/[22m[32mappearance.html                            [39m[1m[2m    1.10 kB[22m[1m[22m[2m │ gzip:   0.43 kB[22m
+[2mdist/[22m[32mindex.html                                 [39m[1m[2m    1.60 kB[22m[1m[22m[2m │ gzip:   0.74 kB[22m
+[2mdist/[22m[32mwaveform-test.html                         [39m[1m[2m    1.65 kB[22m[1m[22m[2m │ gzip:   0.64 kB[22m
+[2mdist/[22m[35massets/AppearanceWindow-CUTnnIae.css       [39m[1m[2m   45.44 kB[22m[1m[22m[2m │ gzip:   9.49 kB[22m
+[2mdist/[22m[35massets/radix-ui-AIZBKKKp.css               [39m[1m[2m  710.92 kB[22m[1m[22m[2m │ gzip:  82.09 kB[22m
+[2mdist/[22m[36massets/appearance-DxL7qvBe.js              [39m[1m[2m    0.39 kB[22m[1m[22m[2m │ gzip:   0.27 kB[22m
+[2mdist/[22m[36massets/diagnostics-CMhmBFWG.js             [39m[1m[2m    0.39 kB[22m[1m[22m[2m │ gzip:   0.26 kB[22m
+[2mdist/[22m[36massets/modulepreload-polyfill-B5Qt9EMX.js  [39m[1m[2m    0.71 kB[22m[1m[22m[2m │ gzip:   0.40 kB[22m
+[2mdist/[22m[36massets/waveformTest-Bmml3mc7.js            [39m[1m[2m    1.38 kB[22m[1m[22m[2m │ gzip:   0.73 kB[22m
+[2mdist/[22m[36massets/surfaceRenderer-B9IE4DBG.js         [39m[1m[2m    6.60 kB[22m[1m[22m[2m │ gzip:   2.68 kB[22m
+[2mdist/[22m[36massets/tauri-hipcsozV.js                   [39m[1m[2m   21.04 kB[22m[1m[22m[2m │ gzip:   4.81 kB[22m
+[2mdist/[22m[36massets/icons-DBB3pG9S.js                   [39m[1m[2m   25.97 kB[22m[1m[22m[2m │ gzip:   7.83 kB[22m
+[2mdist/[22m[36massets/redux-DiK67xQV.js                   [39m[1m[2m   29.52 kB[22m[1m[22m[2m │ gzip:  11.34 kB[22m
+[2mdist/[22m[36massets/vendor-BxO3atPl.js                  [39m[1m[2m   39.08 kB[22m[1m[22m[2m │ gzip:  14.65 kB[22m
+[2mdist/[22m[36massets/radix-ui-BNZrzX91.js                [39m[1m[2m  136.96 kB[22m[1m[22m[2m │ gzip:  38.90 kB[22m
+[2mdist/[22m[36massets/react-D-vZGLVf.js                   [39m[1m[2m  192.94 kB[22m[1m[22m[2m │ gzip:  60.54 kB[22m
+[2mdist/[22m[36massets/AppearanceWindow-5fdEzLua.js        [39m[1m[2m  388.98 kB[22m[1m[22m[2m │ gzip: 112.91 kB[22m
+[2mdist/[22m[36massets/main-BfhGX2bq.js                    [39m[1m[33m1,203.21 kB[39m[22m[2m │ gzip: 340.49 kB[22m
+[33m
+(!) Some chunks are larger than 1000 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.[39m
+[32m✓ built in 7.68s[39m
+[1m[92m   Compiling[0m HiFiShifter v0.1.0-beta.14 (C:\Users\tzh\Documents\code\HiFiShifter-mobile\upstream-src\backend\src-tauri)
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [Frontend] dist 已存在，跳过构建（删除 frontend/dist 可强制重建）
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] starting build_soundtouch...
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] TARGET=x86_64-linux-android TARGET_OS=android
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] is_windows=false is_apple=false
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] build_dir=D:/hfshifter-target-upstream\x86_64-linux-android\debug\build\HiFiShifter-055a1518547bb92d\out\soundtouch_build
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] running cmake configure...
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] Android 交叉编译: abi=x86_64 platform=android-26 toolchain=D:/Android/Sdk/ndk/27.2.12479018/build/cmake/android.toolchain.cmake
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] spawning cmake configure...
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] cmake configure exit status: exit code: 0
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] cmake configure succeeded
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] spawning cmake build...
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] cmake build exit status: exit code: 0
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] cmake build succeeded
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] found shared lib: D:/hfshifter-target-upstream\x86_64-linux-android\debug\build\HiFiShifter-055a1518547bb92d\out\soundtouch_build\libSoundTouchDLL.so
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] 同步进 jniLibs: C:\Users\tzh\Documents\code\HiFiShifter-mobile\upstream-src\backend\src-tauri\gen\android\app\src\main\jniLibs\x86_64\libSoundTouchDLL.so (521648 字节)
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] copied D:/hfshifter-target-upstream\x86_64-linux-android\debug\build\HiFiShifter-055a1518547bb92d\out\soundtouch_build\libSoundTouchDLL.so to D:/hfshifter-target-upstream\x86_64-linux-android\debug\libSoundTouchDLL.so
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] copied D:/hfshifter-target-upstream\x86_64-linux-android\debug\build\HiFiShifter-055a1518547bb92d\out\soundtouch_build\libSoundTouchDLL.so to D:/hfshifter-target-upstream\x86_64-linux-android\debug\deps\libSoundTouchDLL.so
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] macOS framework dylib unchanged, skipping write
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [ort] DirectML.dll not found at D:/hfshifter-target-upstream\x86_64-linux-android\debug\DirectML.dll
+[1m[93mwarning[0m[1m[97m: constant `PIPE_BUFFER_BYTES` is never used[0m
+  [1m[96m--> [0msrc\logging.rs:31:7
+   [1m[96m|[0m
+[1m[96m31[0m [1m[96m|[0m const PIPE_BUFFER_BYTES: usize = 1024 * 1024;
+   [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: constant `EXPORT_DIR` is never used[0m
+  [1m[96m--> [0msrc\platform\saf.rs:55:11
+   [1m[96m|[0m
+[1m[96m55[0m [1m[96m|[0m     const EXPORT_DIR: &str = "saf_export";
+   [1m[96m|[0m           [1m[93m^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: fields `pid`, `sample_rate`, and `channels` are never read[0m
+   [1m[96m--> [0msrc\recording\capture.rs:123:9
+    [1m[96m|[0m
+[1m[96m122[0m [1m[96m|[0m     Application {
+    [1m[96m|[0m     [1m[96m-----------[0m [1m[96mfields in this variant[0m
+[1m[96m123[0m [1m[96m|[0m         pid: u32,
+    [1m[96m|[0m         [1m[93m^^^[0m
+[1m[96m124[0m [1m[96m|[0m         sample_rate: u32,
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^[0m
+[1m[96m125[0m [1m[96m|[0m         channels: u16,
+    [1m[96m|[0m         [1m[93m^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `CapturePlan` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[93mwarning[0m[1m[97m: constant `SMOKE_TEST_FRAMES` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:39:11
+   [1m[96m|[0m
+[1m[96m39[0m [1m[96m|[0m pub const SMOKE_TEST_FRAMES: usize = 4096;
+   [1m[96m|[0m           [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `SMOKE_TEST_TIMEOUT` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:49:7
+   [1m[96m|[0m
+[1m[96m49[0m [1m[96m|[0m const SMOKE_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+   [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `smoke_test_timeout` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:54:4
+   [1m[96m|[0m
+[1m[96m54[0m [1m[96m|[0m fn smoke_test_timeout(ep_name: &str) -> std::time::Duration {
+   [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `creation_timeout` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:68:4
+   [1m[96m|[0m
+[1m[96m68[0m [1m[96m|[0m fn creation_timeout(ep_name: &str) -> std::time::Duration {
+   [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: static `DIRECTML_DISABLED` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:89:8
+   [1m[96m|[0m
+[1m[96m89[0m [1m[96m|[0m static DIRECTML_DISABLED: OnceLock<std::sync::atomic::AtomicBool> = OnceLock::new();
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `smoke_test_gpu_session` is never used[0m
+   [1m[96m--> [0msrc\vocoder\ort_session.rs:868:4
+    [1m[96m|[0m
+[1m[96m868[0m [1m[96m|[0m fn smoke_test_gpu_session(
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `OBJECT_FORMAT` is never used[0m
+  [1m[96m--> [0msrc\system_clipboard.rs:42:11
+   [1m[96m|[0m
+[1m[96m42[0m [1m[96m|[0m pub const OBJECT_FORMAT: &str = "application/x-hifishifter-object";
+   [1m[96m|[0m           [1m[93m^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `REAPER_MEDIA_FORMAT` is never used[0m
+  [1m[96m--> [0msrc\system_clipboard.rs:44:11
+   [1m[96m|[0m
+[1m[96m44[0m [1m[96m|[0m pub const REAPER_MEDIA_FORMAT: &str = "REAPERMedia";
+   [1m[96m|[0m           [1m[93m^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: static `CLIPBOARD_LOCK` is never used[0m
+  [1m[96m--> [0msrc\system_clipboard.rs:51:8
+   [1m[96m|[0m
+[1m[96m51[0m [1m[96m|[0m static CLIPBOARD_LOCK: Mutex<()> = Mutex::new(());
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `invalidate_clipboard_cache` is never used[0m
+   [1m[96m--> [0msrc\system_clipboard.rs:179:8
+    [1m[96m|[0m
+[1m[96m179[0m [1m[96m|[0m pub fn invalidate_clipboard_cache() {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m: `HiFiShifter` (lib) generated 13 warnings
+[1m[92m    Finished[0m `dev` profile [unoptimized] target(s) in 57.38s
+        Info symlinking lib "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" in jniLibs dir "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\app/src/main/jniLibs/x86_64"
+        Info "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libandroid.so"
+        Info "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "liblog.so"
+        Info "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libc++_shared.so"
+        Info "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libSoundTouchDLL.so"
+        Info "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libdl.so"
+        Info "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libOpenSLES.so"
+        Info "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libm.so"
+        Info "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libc.so"
+        Info lib "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires "libc++_shared.so"
+        Info symlinking lib "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\sysroot/usr/lib\\x86_64-linux-android\\libc++_shared.so" in jniLibs dir "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\app/src/main/jniLibs/x86_64"
+        Info symlink at "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\app/src/main/jniLibs/x86_64\\libbackend_lib.so" points to "D:\\hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so"
+        Info symlink at "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\app/src/main/jniLibs/x86_64\\libc++_shared.so" points to "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains\\llvm\\prebuilt\\windows-x86_64\\sysroot\\usr\\lib\\x86_64-linux-android\\libc++_shared.so"
+        Info connection; remote_addr=127.0.0.1:54336 conn_id=0
+[1m[32m        Info[0m Using installed NDK: D:\Android\Sdk\ndk\27.2.12479018
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [Frontend] dist �Ѵ��ڣ�����������ɾ�� frontend/dist ��ǿ���ؽ���
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] starting build_soundtouch...
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] TARGET=x86_64-linux-android TARGET_OS=android
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] is_windows=false is_apple=false
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] build_dir=D:/hfshifter-target-upstream\x86_64-linux-android\debug\build\HiFiShifter-055a1518547bb92d\out\soundtouch_build
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] running cmake configure...
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] Android �������: abi=x86_64 platform=android-26 toolchain=D:/Android/Sdk/ndk/27.2.12479018/build/cmake/android.toolchain.cmake
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] spawning cmake configure...
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] cmake configure exit status: exit code: 0
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] cmake configure succeeded
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] spawning cmake build...
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] cmake build exit status: exit code: 0
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] cmake build succeeded
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] found shared lib: D:/hfshifter-target-upstream\x86_64-linux-android\debug\build\HiFiShifter-055a1518547bb92d\out\soundtouch_build\libSoundTouchDLL.so
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] ͬ���� jniLibs: C:\Users\tzh\Documents\code\HiFiShifter-mobile\upstream-src\backend\src-tauri\gen\android\app\src\main\jniLibs\x86_64\libSoundTouchDLL.so (521648 �ֽ�)
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] copied D:/hfshifter-target-upstream\x86_64-linux-android\debug\build\HiFiShifter-055a1518547bb92d\out\soundtouch_build\libSoundTouchDLL.so to D:/hfshifter-target-upstream\x86_64-linux-android\debug\libSoundTouchDLL.so
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] copied D:/hfshifter-target-upstream\x86_64-linux-android\debug\build\HiFiShifter-055a1518547bb92d\out\soundtouch_build\libSoundTouchDLL.so to D:/hfshifter-target-upstream\x86_64-linux-android\debug\deps\libSoundTouchDLL.so
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [soundtouch] macOS framework dylib unchanged, skipping write
+[1m[93mwarning[0m: HiFiShifter@0.1.0-beta.14: [ort] DirectML.dll not found at D:/hfshifter-target-upstream\x86_64-linux-android\debug\DirectML.dll
+[1m[92m   Compiling[0m HiFiShifter v0.1.0-beta.14 (C:\Users\tzh\Documents\code\HiFiShifter-mobile\upstream-src\backend\src-tauri)
+[1m[93mwarning[0m[1m[97m: constant `PIPE_BUFFER_BYTES` is never used[0m
+  [1m[96m--> [0msrc\logging.rs:31:7
+   [1m[96m|[0m
+[1m[96m31[0m [1m[96m|[0m const PIPE_BUFFER_BYTES: usize = 1024 * 1024;
+   [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^[0m
+   [1m[96m|[0m
+   [1m[96m= [0m[1m[97mnote[0m: `#[warn(dead_code)]` (part of `#[warn(unused)]`) on by default
+
+[1m[93mwarning[0m[1m[97m: constant `EXPORT_DIR` is never used[0m
+  [1m[96m--> [0msrc\platform\saf.rs:55:11
+   [1m[96m|[0m
+[1m[96m55[0m [1m[96m|[0m     const EXPORT_DIR: &str = "saf_export";
+   [1m[96m|[0m           [1m[93m^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: fields `pid`, `sample_rate`, and `channels` are never read[0m
+   [1m[96m--> [0msrc\recording\capture.rs:123:9
+    [1m[96m|[0m
+[1m[96m122[0m [1m[96m|[0m     Application {
+    [1m[96m|[0m     [1m[96m-----------[0m [1m[96mfields in this variant[0m
+[1m[96m123[0m [1m[96m|[0m         pid: u32,
+    [1m[96m|[0m         [1m[93m^^^[0m
+[1m[96m124[0m [1m[96m|[0m         sample_rate: u32,
+    [1m[96m|[0m         [1m[93m^^^^^^^^^^^[0m
+[1m[96m125[0m [1m[96m|[0m         channels: u16,
+    [1m[96m|[0m         [1m[93m^^^^^^^^[0m
+    [1m[96m|[0m
+    [1m[96m= [0m[1m[97mnote[0m: `CapturePlan` has derived impls for the traits `Clone` and `Debug`, but these are intentionally ignored during dead code analysis
+
+[1m[93mwarning[0m[1m[97m: constant `SMOKE_TEST_FRAMES` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:39:11
+   [1m[96m|[0m
+[1m[96m39[0m [1m[96m|[0m pub const SMOKE_TEST_FRAMES: usize = 4096;
+   [1m[96m|[0m           [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `SMOKE_TEST_TIMEOUT` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:49:7
+   [1m[96m|[0m
+[1m[96m49[0m [1m[96m|[0m const SMOKE_TEST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+   [1m[96m|[0m       [1m[93m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `smoke_test_timeout` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:54:4
+   [1m[96m|[0m
+[1m[96m54[0m [1m[96m|[0m fn smoke_test_timeout(ep_name: &str) -> std::time::Duration {
+   [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `creation_timeout` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:68:4
+   [1m[96m|[0m
+[1m[96m68[0m [1m[96m|[0m fn creation_timeout(ep_name: &str) -> std::time::Duration {
+   [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: static `DIRECTML_DISABLED` is never used[0m
+  [1m[96m--> [0msrc\vocoder\ort_session.rs:89:8
+   [1m[96m|[0m
+[1m[96m89[0m [1m[96m|[0m static DIRECTML_DISABLED: OnceLock<std::sync::atomic::AtomicBool> = OnceLock::new();
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `smoke_test_gpu_session` is never used[0m
+   [1m[96m--> [0msrc\vocoder\ort_session.rs:868:4
+    [1m[96m|[0m
+[1m[96m868[0m [1m[96m|[0m fn smoke_test_gpu_session(
+    [1m[96m|[0m    [1m[93m^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `OBJECT_FORMAT` is never used[0m
+  [1m[96m--> [0msrc\system_clipboard.rs:42:11
+   [1m[96m|[0m
+[1m[96m42[0m [1m[96m|[0m pub const OBJECT_FORMAT: &str = "application/x-hifishifter-object";
+   [1m[96m|[0m           [1m[93m^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: constant `REAPER_MEDIA_FORMAT` is never used[0m
+  [1m[96m--> [0msrc\system_clipboard.rs:44:11
+   [1m[96m|[0m
+[1m[96m44[0m [1m[96m|[0m pub const REAPER_MEDIA_FORMAT: &str = "REAPERMedia";
+   [1m[96m|[0m           [1m[93m^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: static `CLIPBOARD_LOCK` is never used[0m
+  [1m[96m--> [0msrc\system_clipboard.rs:51:8
+   [1m[96m|[0m
+[1m[96m51[0m [1m[96m|[0m static CLIPBOARD_LOCK: Mutex<()> = Mutex::new(());
+   [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m[1m[97m: function `invalidate_clipboard_cache` is never used[0m
+   [1m[96m--> [0msrc\system_clipboard.rs:179:8
+    [1m[96m|[0m
+[1m[96m179[0m [1m[96m|[0m pub fn invalidate_clipboard_cache() {
+    [1m[96m|[0m        [1m[93m^^^^^^^^^^^^^^^^^^^^^^^^^^[0m
+
+[1m[93mwarning[0m: `HiFiShifter` (lib) generated 13 warnings
+[1m[92m    Finished[0m `dev` profile [unoptimized] target(s) in 39.00s
+[1m[32m        Info[0m symlinking lib "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" in jniLibs dir "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\app/src/main/jniLibs/x86_64"
+[1m[32m        Info[0m "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libandroid.so"
+[1m[32m        Info[0m "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "liblog.so"
+[1m[32m        Info[0m "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libc++_shared.so"
+[1m[32m        Info[0m "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libSoundTouchDLL.so"
+[1m[32m        Info[0m "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libdl.so"
+[1m[32m        Info[0m "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libOpenSLES.so"
+[1m[32m        Info[0m "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libm.so"
+[1m[32m        Info[0m "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires shared lib "libc.so"
+[1m[32m        Info[0m lib "D:/hfshifter-target-upstream\\x86_64-linux-android\\debug\\libbackend_lib.so" requires "libc++_shared.so"
+[1m[32m        Info[0m symlinking lib "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\sysroot/usr/lib\\x86_64-linux-android\\libc++_shared.so" in jniLibs dir "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\app/src/main/jniLibs/x86_64"
+
+[Incubating] Problems report is available at: file:///C:/Users/tzh/Documents/code/HiFiShifter-mobile/upstream-src/backend/src-tauri/gen/android/build/reports/problems/problems-report.html
+
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+Execution failed for task ':app:mergeUniversalDebugNativeLibs'.
+> A failure occurred while executing com.android.build.gradle.internal.tasks.MergeNativeLibsTask$MergeNativeLibsTaskWorkAction
+   > ���̿ռ䲻�㡣
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --info or --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+Deprecated Gradle features were used in this build, making it incompatible with Gradle 9.0.
+
+You can use '--warning-mode all' to show the individual deprecation warnings and determine if they come from your own scripts or plugins.
+
+For more on this, please refer to https://docs.gradle.org/8.14.3/userguide/command_line_interface.html#sec:command_line_warnings in the Gradle documentation.
+
+BUILD FAILED in 46s
+failed to build APK: Failed to assemble APK with Io(BeforeSpawn(<closure>), Io(StderrFile(OwnedHandle { handle: 0x34c }), Io(StdoutFile(OwnedHandle { handle: 0x364 }), Io(StdinFile(OwnedHandle { handle: 0x3ec }), Io(Env("PATH", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\probes\\m0-probe\\node_modules\\.bin;D:\\Android\\Sdk\\cmake\\3.22.1\\bin;D:\\Android\\Sdk\\build-tools\\35.0.0;D:\\Android\\Sdk\\platform-tools;D:\\Download\\zulu17.64.17-ca-jdk17.0.18-win_x64\\bin;C:\\Users\\tzh\\.cargo\\bin;D;C:\\Program Files\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\vendor\\shim\\safe-bin;C:\\Users\\tzh\\.workbuddy\\binaries\\python\\versions\\3.13.12;C:\\Users\\tzh\\.workbuddy\\binaries\\python\\envs\\default\\Scripts;D;C:\\Program Files\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\vendor\\shim\\safe-bin;C:\\Users\\tzh\\.workbuddy\\binaries\\PortableGit\\versions\\1.2.0\\mingw64\\bin;C:\\Users\\tzh\\.workbuddy\\binaries\\PortableGit\\versions\\1.2.0\\usr\\bin;C:\\Users\\tzh\\bin;D:\\Program Files\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin\\runtime\\git\\bin;C:\\Users\\tzh\\.workbuddy\\binaries\\PortableGit\\versions\\1.2.0\\usr\\bin;C:\\Python314\\Scripts;C:\\Python314;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.9\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.9\\libnvvp;C:\\Program Files\\Common Files\\Oracle\\Java\\javapath;C:\\Program Files (x86)\\Common Files\\Intel\\Shared Libraries\\redist\\intel64\\compiler;C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path;C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath;C:\\windows\\system32;C:\\windows;C:\\windows\\System32\\Wbem;C:\\windows\\System32\\WindowsPowerShell\\v1.0;C:\\windows\\System32\\OpenSSH;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Program Files\\HP\\OMEN-Broadcast\\Common;C:\\Program File\\ffmpeg\\bin;C:\\Program Files\\Bandizip;C:\\Program Files\\VoukoderPro;C:\\Program Files\\dotnet;C:\\Program Files\\NVIDIA Corporation\\NVIDIA app\\NvDLISR;C:\\Program Files (x86)\\ZeroTier\\One;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2025.2.1;C:\\Program Files\\nodejs;C:\\ProgramData\\chocolatey\\bin;C:\\Users\\tzh\\.cargo\\bin;C:\\Users\\tzh\\AppData\\Local\\Programs\\garyttierney\\me3\\bin;C:\\Users\\tzh\\AppData\\Local\\Programs\\Python\\Python38\\Scripts;C:\\Users\\tzh\\AppData\\Local\\Programs\\Python\\Python38;C:\\Users\\tzh\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\tzh\\.dotnet\\tools;C:\\Users\\tzh\\AppData\\Local\\Muse Hub\\lib;C:\\Users\\tzh\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\tzh\\Downloads\\BBDown-v1.6.3;C:\\Users\\tzh\\AppData\\Local\\GitHubDesktop\\bin;D:\\Download\\platform-tools;D:\\Program Files\\JetBrains\\IntelliJ IDEA 2025.3.3\\bin;C:\\Users\\tzh\\AppData\\Roaming\\npm;D:\\DeskBoxDev\\dotnet-home\\.dotnet\\tools"), Io(Env("TAURI_ANDROID_PROJECT_PATH", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android"), Io(Env("TERM", "xterm-256color"), Io(Env("TAURI_ANDROID_PACKAGE_UNESCAPED", "com.arounder.hifishifter"), Io(Env("USERPROFILE", "C:\\Users\\tzh"), Io(Env("CARGO_INCREMENTAL", "0"), Io(Env("WRY_ANDROID_KOTLIN_FILES_OUT_DIR", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\app/src/main\\java/com/arounder/hifishifter\\generated"), Io(Env("ANDROID_HOME", "D:\\Android\\Sdk"), Io(Env("WRY_ANDROID_PACKAGE", "com.arounder.hifishifter"), Io(Env("PATHEXT", ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"), Io(Env("CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS", "-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES"), Io(Env("CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS", "-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES"), Io(Env("TAURI_CLI_VERBOSITY", "0"), Io(Env("ProgramData", "C:\\ProgramData"), Io(Env("RUST_LOG_STYLE", "always"), Io(Env("CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS", "-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES"), Io(Env("CARGO_TARGET_I686_LINUX_ANDROID_LINKER", "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\bin\\i686-linux-android24-clang.cmd"), Io(Env("TEMP", "D:\\hs-tmp"), Io(Env("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\bin\\aarch64-linux-android24-clang.cmd"), Io(Env("CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER", "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\bin\\armv7a-linux-androideabi24-clang.cmd"), Io(Env("SystemRoot", "C:\\windows"), Io(Env("TMP", "D:\\hs-tmp"), Io(Env("CARGO_BUILD_JOBS", "1"), Io(Env("NDK_HOME", "D:\\Android\\Sdk\\ndk\\27.2.12479018"), Io(Env("CARGO_PROFILE_DEV_DEBUG", "0"), Io(Env("CARGO_TARGET_I686_LINUX_ANDROID_RUSTFLAGS", "-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES"), Io(Env("TMPDIR", "D:\\hs-tmp"), Io(Env("WRY_ANDROID_LIBRARY", "backend_lib"), Io(Env("CARGO_TARGET_DIR", "D:/hfshifter-target-upstream"), Io(Env("CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER", "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\bin\\x86_64-linux-android24-clang.cmd"), Cmd(["C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\gradlew.bat", "--project-dir", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android"]))))))))))))))))))))))))))))))))))): command ["C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\gradlew.bat", "--project-dir", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android"] exited with code 1
+       Error failed to build APK: Failed to assemble APK with Io(BeforeSpawn(<closure>), Io(StderrFile(OwnedHandle { handle: 0x34c }), Io(StdoutFile(OwnedHandle { handle: 0x364 }), Io(StdinFile(OwnedHandle { handle: 0x3ec }), Io(Env("PATH", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\probes\\m0-probe\\node_modules\\.bin;D:\\Android\\Sdk\\cmake\\3.22.1\\bin;D:\\Android\\Sdk\\build-tools\\35.0.0;D:\\Android\\Sdk\\platform-tools;D:\\Download\\zulu17.64.17-ca-jdk17.0.18-win_x64\\bin;C:\\Users\\tzh\\.cargo\\bin;D;C:\\Program Files\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\vendor\\shim\\safe-bin;C:\\Users\\tzh\\.workbuddy\\binaries\\python\\versions\\3.13.12;C:\\Users\\tzh\\.workbuddy\\binaries\\python\\envs\\default\\Scripts;D;C:\\Program Files\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\vendor\\shim\\safe-bin;C:\\Users\\tzh\\.workbuddy\\binaries\\PortableGit\\versions\\1.2.0\\mingw64\\bin;C:\\Users\\tzh\\.workbuddy\\binaries\\PortableGit\\versions\\1.2.0\\usr\\bin;C:\\Users\\tzh\\bin;D:\\Program Files\\WorkBuddy\\resources\\app.asar.unpacked\\cli\\bin\\runtime\\git\\bin;C:\\Users\\tzh\\.workbuddy\\binaries\\PortableGit\\versions\\1.2.0\\usr\\bin;C:\\Python314\\Scripts;C:\\Python314;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.9\\bin;C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.9\\libnvvp;C:\\Program Files\\Common Files\\Oracle\\Java\\javapath;C:\\Program Files (x86)\\Common Files\\Intel\\Shared Libraries\\redist\\intel64\\compiler;C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\java8path;C:\\Program Files (x86)\\Common Files\\Oracle\\Java\\javapath;C:\\windows\\system32;C:\\windows;C:\\windows\\System32\\Wbem;C:\\windows\\System32\\WindowsPowerShell\\v1.0;C:\\windows\\System32\\OpenSSH;C:\\Program Files (x86)\\NVIDIA Corporation\\PhysX\\Common;C:\\Users\\Administrator\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Program Files\\HP\\OMEN-Broadcast\\Common;C:\\Program File\\ffmpeg\\bin;C:\\Program Files\\Bandizip;C:\\Program Files\\VoukoderPro;C:\\Program Files\\dotnet;C:\\Program Files\\NVIDIA Corporation\\NVIDIA app\\NvDLISR;C:\\Program Files (x86)\\ZeroTier\\One;C:\\Program Files\\NVIDIA Corporation\\Nsight Compute 2025.2.1;C:\\Program Files\\nodejs;C:\\ProgramData\\chocolatey\\bin;C:\\Users\\tzh\\.cargo\\bin;C:\\Users\\tzh\\AppData\\Local\\Programs\\garyttierney\\me3\\bin;C:\\Users\\tzh\\AppData\\Local\\Programs\\Python\\Python38\\Scripts;C:\\Users\\tzh\\AppData\\Local\\Programs\\Python\\Python38;C:\\Users\\tzh\\AppData\\Local\\Microsoft\\WindowsApps;C:\\Users\\tzh\\.dotnet\\tools;C:\\Users\\tzh\\AppData\\Local\\Muse Hub\\lib;C:\\Users\\tzh\\AppData\\Local\\Programs\\Microsoft VS Code\\bin;C:\\Users\\tzh\\Downloads\\BBDown-v1.6.3;C:\\Users\\tzh\\AppData\\Local\\GitHubDesktop\\bin;D:\\Download\\platform-tools;D:\\Program Files\\JetBrains\\IntelliJ IDEA 2025.3.3\\bin;C:\\Users\\tzh\\AppData\\Roaming\\npm;D:\\DeskBoxDev\\dotnet-home\\.dotnet\\tools"), Io(Env("TAURI_ANDROID_PROJECT_PATH", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android"), Io(Env("TERM", "xterm-256color"), Io(Env("TAURI_ANDROID_PACKAGE_UNESCAPED", "com.arounder.hifishifter"), Io(Env("USERPROFILE", "C:\\Users\\tzh"), Io(Env("CARGO_INCREMENTAL", "0"), Io(Env("WRY_ANDROID_KOTLIN_FILES_OUT_DIR", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\app/src/main\\java/com/arounder/hifishifter\\generated"), Io(Env("ANDROID_HOME", "D:\\Android\\Sdk"), Io(Env("WRY_ANDROID_PACKAGE", "com.arounder.hifishifter"), Io(Env("PATHEXT", ".COM;.EXE;.BAT;.CMD;.VBS;.VBE;.JS;.JSE;.WSF;.WSH;.MSC;.PY;.PYW"), Io(Env("CARGO_TARGET_X86_64_LINUX_ANDROID_RUSTFLAGS", "-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES"), Io(Env("CARGO_TARGET_AARCH64_LINUX_ANDROID_RUSTFLAGS", "-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES"), Io(Env("TAURI_CLI_VERBOSITY", "0"), Io(Env("ProgramData", "C:\\ProgramData"), Io(Env("RUST_LOG_STYLE", "always"), Io(Env("CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_RUSTFLAGS", "-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES"), Io(Env("CARGO_TARGET_I686_LINUX_ANDROID_LINKER", "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\bin\\i686-linux-android24-clang.cmd"), Io(Env("TEMP", "D:\\hs-tmp"), Io(Env("CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER", "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\bin\\aarch64-linux-android24-clang.cmd"), Io(Env("CARGO_TARGET_ARMV7_LINUX_ANDROIDEABI_LINKER", "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\bin\\armv7a-linux-androideabi24-clang.cmd"), Io(Env("SystemRoot", "C:\\windows"), Io(Env("TMP", "D:\\hs-tmp"), Io(Env("CARGO_BUILD_JOBS", "1"), Io(Env("NDK_HOME", "D:\\Android\\Sdk\\ndk\\27.2.12479018"), Io(Env("CARGO_PROFILE_DEV_DEBUG", "0"), Io(Env("CARGO_TARGET_I686_LINUX_ANDROID_RUSTFLAGS", "-Clink-arg=-landroid -Clink-arg=-llog -Clink-arg=-lOpenSLES"), Io(Env("TMPDIR", "D:\\hs-tmp"), Io(Env("WRY_ANDROID_LIBRARY", "backend_lib"), Io(Env("CARGO_TARGET_DIR", "D:/hfshifter-target-upstream"), Io(Env("CARGO_TARGET_X86_64_LINUX_ANDROID_LINKER", "D:\\Android\\Sdk\\ndk\\27.2.12479018\\toolchains/llvm/prebuilt/windows-x86_64\\bin\\x86_64-linux-android24-clang.cmd"), Cmd(["C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\gradlew.bat", "--project-dir", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android"]))))))))))))))))))))))))))))))))))): command ["C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android\\gradlew.bat", "--project-dir", "C:\\Users\\tzh\\Documents\\code\\HiFiShifter-mobile\\upstream-src\\backend\\src-tauri\\gen/android"] exited with code 1

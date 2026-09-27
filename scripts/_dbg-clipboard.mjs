@@ -1,0 +1,14 @@
+import { execSync } from "node:child_process";
+import { Cdp } from "./lib/cdp.mjs";
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const pid = execSync("adb -s emulator-5554 shell pidof com.arounder.hifishifter").toString().trim();
+execSync(`adb -s emulator-5554 forward tcp:9222 localabstract:webview_devtools_remote_${pid}`);
+const cdp = await Cdp.attach({ host: "127.0.0.1", port: 9222 });
+await cdp.send("Runtime.enable");
+const inv = (cmd, args) => cdp.call((c, a) => window.__TAURI_INTERNALS__.invoke(c, a).catch((e) => ({ err: String(e) })), cmd, args);
+console.log("kind(初始)=" + JSON.stringify(await inv("clipboard_kind")));
+console.log("读原始剪贴板字节: " + JSON.stringify(await cdp.call(() => window.__TAURI_INTERNALS__.invoke("read_system_clipboard_object").then((r) => (typeof r === "string" ? r.length : JSON.stringify(r).slice(0, 60))).catch((e) => "err:" + String(e)))));
+console.log("写 param 载荷: " + JSON.stringify(await inv("write_system_clipboard_object", { payload: "hello-hifi-test", textSummary: "t" })));
+console.log("kind(写后)=" + JSON.stringify(await inv("clipboard_kind")));
+console.log("has_timeline_clipboard=" + JSON.stringify(await inv("has_timeline_clipboard")));
+cdp.close();

@@ -1,0 +1,186 @@
+diff --git a/backend/src-tauri/build.rs b/backend/src-tauri/build.rs
+index 21b713a4..a60998fb 100644
+--- a/backend/src-tauri/build.rs
++++ b/backend/src-tauri/build.rs
+@@ -79,8 +79,23 @@ fn main() {
+     // the load never triggers); the main binary keeps its v6 manifest and
+     // binds v6 on first real dialog use. `cargo test` and `cargo build`
+     // work directly on Windows with no manifest injection of any kind.
+-    #[cfg(all(target_os = "windows", target_env = "msvc"))]
+-    {
++    // ⚠️ 必须用**目标**的 OS/env 判断，**不能**用 `cfg!(target_os = "windows")`。
++    //
++    // `cfg!` 在 build script 里求值的是**编译 build.rs 时所用的宿主平台**。
++    // 交叉编译（例如从 Windows 到 Android）时宿主仍是 windows，于是下面这些
++    // MSVC 风格的链接参数会被塞进 Android 的 clang 命令行 —— clang 不认识
++    // `/DELAYLOAD:...`，会把它当成**文件路径**：
++    //
++    //     clang: error: no such file or directory: '/DELAYLOAD:comctl32.dll'
++    //     clang: error: no such file or directory: '/DEFAULTLIB:delayimp.lib'
++    //     clang: error: no such file or directory: '/IGNORE:4199'
++    //
++    // 后果是**整个 Android 目标链接失败**（`linking with ... failed: exit code 1`）。
++    // 所以改成运行时读目标三元组信息 —— `CARGO_CFG_TARGET_OS` /
++    // `CARGO_CFG_TARGET_ENV` 描述的都是**目标**，这正是我们要的语义。
++    let tgt_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
++    let tgt_env = std::env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
++    if tgt_os == "windows" && tgt_env == "msvc" {
+         // Delay-load comctl32 for all targets of this package (bin, lib
+         // unit-test harness, integration tests). Static TaskDialogIndirect
+         // imports are only resolvable against the v6 assembly; delaying the
+@@ -555,6 +570,7 @@ fn build_soundtouch() {
+ 
+     let is_windows = target_os == "windows";
+     let is_apple = target_os == "macos";
++    let is_android = target_os == "android";
+ 
+     // Patch SoundTouchDLL.rc to use windows.h instead of afxres.h (MFC header not always available)
+     if is_windows {
+@@ -635,6 +651,88 @@ fn build_soundtouch() {
+         cfg.arg("-DCMAKE_MACOSX_RPATH=ON");
+     }
+ 
++    // ── Android：必须显式指定 NDK 的 CMake toolchain ────────────────────
++    //
++    // 不指定的话 cmake 会用**宿主编译器**去 configure，产出的是宿主平台的
++    // 二进制（在 Windows 上就是一个 DLL），于是下面按 `libSoundTouchDLL.so`
++    // 找产物时必然 `panic!("Could not find ...")`。
++    //
++    // 注意 `target` 是**目标** triple（`aarch64-linux-android`），
++    // 而上面 `is_windows` / `is_apple` 用的 `target_os` 来自 `CARGO_CFG_TARGET_OS`
++    // 环境变量 —— 那是目标 OS，不是宿主（这点上游处理是对的；
++    // 但同一个文件里 `copy_directml_dll()` 等函数用的是 `cfg!(target_os = ...)`，
++    // 那个判断的是**编译 build.rs 时的宿主**，交叉编译下会误判 —— 本次不受影响，
++    // 因为它们的后果只是"找不到文件打条 warning"）。
++    // Android ABI 名（arm64-v8a 等）。非 Android 平台为 None。
++    // Step 3.5 要用它把 libSoundTouchDLL.so 同步进 jniLibs。
++    let android_abi: Option<&'static str> = if is_android {
++        Some(if target.starts_with("aarch64") {
++            "arm64-v8a"
++        } else if target.starts_with("x86_64") {
++            "x86_64"
++        } else if target.starts_with("armv7") {
++            "armeabi-v7a"
++        } else if target.starts_with("i686") {
++            "x86"
++        } else {
++            panic!("[soundtouch] 未知的 Android target: {target}");
++        })
++    } else {
++        None
++    };
++
++    if is_android {
++        let ndk = std::env::var("ANDROID_NDK_HOME")
++            .or_else(|_| std::env::var("ANDROID_NDK_ROOT"))
++            .unwrap_or_else(|_| {
++                panic!(
++                    "[soundtouch] Android 构建需要 ANDROID_NDK_HOME 或 ANDROID_NDK_ROOT \
++                     （由 scripts/build-android.sh 设置）"
++                )
++            });
++        // NDK 路径可能带反斜杠；CMake 与 -D 参数里统一用正斜杠。
++        let ndk = ndk.replace('\\', "/");
++        let toolchain = format!("{ndk}/build/cmake/android.toolchain.cmake");
++        if !std::path::Path::new(&toolchain).exists() {
++            panic!("[soundtouch] 找不到 NDK 的 CMake toolchain: {toolchain}");
++        }
++
++        let abi = android_abi.expect("is_android 为真时 android_abi 必然有值");
++
++        // minSdk 与 ADR-011 保持一致（26）。
++        // 与 NDK clang wrapper 上的 `-android26` 必须一致，否则同一份产物里
++        // 会出现两套 API level，运行期行为不可预测。
++        let api = std::env::var("ANDROID_MIN_SDK").unwrap_or_else(|_| "26".to_string());
++
++        // ⚠️ 必须显式指定生成器。
++        //
++        // cmake 的生成器是在**加载 toolchain file 之前**就定下来的：
++        // 在 Windows 上默认选 "Visual Studio 17 2022"，而 VS 生成器强制使用
++        // MSVC 编译器，会完全忽略 toolchain file 里的 clang。实测表现是
++        // configure 阶段直接死在 `project()` 上：
++        //
++        //     CMake Error at CMakeLists.txt:2 (project):
++        //       Failed to run MSBuild command:
++        //         .../MSBuild.exe to get the value of VCTargetsPath:
++        //         Access violation
++        //
++        // Android NDK 的官方做法是配 Ninja（SDK 的 cmake 包自带 ninja.exe，
++        // 与 cmake 同目录，所以只要 cmake 在 PATH 里 Ninja 就能找到）。
++        cfg.arg("-G").arg("Ninja");
++
++        cfg.arg(format!("-DCMAKE_TOOLCHAIN_FILE={toolchain}"));
++        cfg.arg(format!("-DANDROID_ABI={abi}"));
++        cfg.arg(format!("-DANDROID_PLATFORM=android-{api}"));
++        // 动态 STL：与 cpal/Oboe 用的是同一份 libc++_shared.so（tauri-cli 会
++        // 自动把它 symlink 进 jniLibs，见 docs/10 §5.7），避免重复打包两套 STL。
++        cfg.arg("-DANDROID_STL=c++_shared");
++        // Android 没有 install_name 概念，也不需要 macOS 的 rpath 处理。
++        println!(
++            "cargo:warning=[soundtouch] Android 交叉编译: abi={abi} \
++             platform=android-{api} toolchain={toolchain}"
++        );
++    }
++
+     println!("cargo:warning=[soundtouch] spawning cmake configure...");
+     let status = cfg
+         .status()
+@@ -697,6 +795,58 @@ fn build_soundtouch() {
+         "cargo:warning=[soundtouch] found shared lib: {}",
+         lib_src.display()
+     );
++    // 产物变了就重跑本脚本，好让下面的 jniLibs 同步跟着更新。
++    println!("cargo:rerun-if-changed={}", lib_src.display());
++
++    // ── Step 3.5：Android 上把 libSoundTouchDLL.so 同步进 jniLibs ────────
++    //
++    // 为什么必须做：`libbackend_lib.so` 对它有 **DT_NEEDED** 依赖，而
++    // **tauri-cli 只会自动 symlink `libbackend_lib.so` 与 `libc++_shared.so`**，
++    // 不会带上这个第三方库。缺了它的表现是 App 在启动最早期就死，
++    // 且堆栈停在 `WryActivity.<clinit>` 的 `System.loadLibrary`：
++    //
++    //     java.lang.UnsatisfiedLinkError: dlopen failed:
++    //       library "libSoundTouchDLL.so" not found:
++    //       needed by base.apk!/lib/<abi>/libbackend_lib.so
++    //
++    // 放在 build.rs 而不是构建脚本里，是为了让 `tauri android dev/build`
++    // 直接可用，不依赖我们自己的包装脚本。
++    if let Some(abi) = android_abi {
++        if let Ok(manifest) = std::env::var("CARGO_MANIFEST_DIR") {
++            let jni_dir = std::path::Path::new(&manifest)
++                .join("gen")
++                .join("android")
++                .join("app")
++                .join("src")
++                .join("main")
++                .join("jniLibs")
++                .join(abi);
++            // 只有 `tauri android init` 跑过之后才存在；init 之前不要创建它。
++            if jni_dir.parent().map(|p| p.exists()).unwrap_or(false) {
++                std::fs::create_dir_all(&jni_dir).unwrap_or_else(|e| {
++                    panic!("[soundtouch] 创建 jniLibs 目录失败 {}: {e}", jni_dir.display())
++                });
++                let dst = jni_dir.join(&lib_filename);
++                match std::fs::copy(&lib_src, &dst) {
++                    Ok(bytes) => println!(
++                        "cargo:warning=[soundtouch] 同步进 jniLibs: {} ({bytes} 字节)",
++                        dst.display()
++                    ),
++                    Err(e) => panic!(
++                        "[soundtouch] 无法把 {} 拷到 {}: {e}\n\
++                         （libbackend_lib.so 对它有 DT_NEEDED 依赖，缺了整个 App 起不来）",
++                        lib_filename,
++                        dst.display()
++                    ),
++                }
++            } else {
++                println!(
++                    "cargo:warning=[soundtouch] 跳过 jniLibs 同步：还没有 \
++                     gen/android/app/src/main/jniLibs（先跑 `tauri android init`）"
++                );
++            }
++        }
++    }
+ 
+     // Force a stable, relocatable Mach-O install name.  The library is bundled
+     // into HiFiShifter.app/Contents/Frameworks and loaded through @rpath, so it

@@ -1,0 +1,30 @@
+# HiFiShifter 在 Android 真机上的运行时日志
+# 设备：221deeb / PKR110 / arm64-v8a / Android API 35 / 1080x2376 @480dpi（=360x792 CSS）
+# 版本：0.1.0-beta.14
+#   APK: dist/hifishifter-arm64-debug-20260918.apk（257.1 MB, md5 b9a7552e67a461f389256ab51f7942ff）
+# 采集：am force-stop → 删 logs/android.log → logcat -c → am start → 21 秒窗口 → run-as cat
+# 原始 1255 行，其中 ERROR 1235 行（唯一一类：ResizeObserver 反馈环）；
+# 重复行折叠后 23 行。
+[INFO] backend_lib::platform::logging: [platform::logging] Android 日志后端就绪，落盘于 /data/user/0/com.arounder.hifishifter/logs/android.log
+[INFO] backend_lib: [setup] 日志文件：/data/user/0/com.arounder.hifishifter/logs/android.log（adb exec-out run-as … cat 可读）
+[INFO] backend_lib: [setup] ndk_context 已就绪（cpal/Oboe 可用）
+[INFO] backend_lib::platform::resources: [resources] 模型就绪：拷贝 0 / 跳过 5 / 缺失 0，耗时 2 ms
+[WARN] backend_lib::nsf_hifigan_onnx: [ort] initialized: ORT Build Info: git-branch=HEAD, git-commit-id=da9b5e364c, fp8-kv-cache=1, build type=Release
+[WARN] backend_lib::nsf_hifigan_onnx: [ort] available providers: ["CPUExecutionProvider"]
+[WARN] backend_lib::vocoder_ort_session: ort_session[Vocoder]: model=pc_nsf_hifigan.onnx ep=cpu (choice=auto, global_env=auto)
+[WARN] backend_lib::vocoder_ort_session: ort_session[Vocoder]: created session ep=cpu intra_threads=4 commit_ms=116
+[WARN] backend_lib::vocoder_ort_session: ort_session[Separator]: model=hnsep.onnx ep=cpu (choice=cpu, global_env=auto)
+[WARN] backend_lib::vocoder_ort_session: ort_session[Separator]: created session ep=cpu intra_threads=8 commit_ms=160
+[WARN] backend_lib::vocoder_ort_session: ort_session[PitchDetector]: model=fcpe.onnx ep=cpu (choice=auto, global_env=auto)
+[WARN] backend_lib::vocoder_ort_session: ort_session[PitchDetector]: created session ep=cpu intra_threads=4 commit_ms=72
+[WARN] backend_lib::fcpe_onnx: [fcpe] inference device changed during session build — rebuilding with the new EP
+[WARN] backend_lib::vocoder_ort_session: ort_session[PitchDetector]: model=fcpe.onnx ep=cpu (choice=auto, global_env=auto)
+[WARN] backend_lib::vocoder_ort_session: ort_session[PitchDetector]: created session ep=cpu intra_threads=4 commit_ms=23
+[WARN] backend_lib::vocoder_ort_session: ort_session[Vocoder]: model=pc_nsf_hifigan.onnx ep=cpu (choice=auto, global_env=auto)
+[WARN] backend_lib::vocoder_ort_session: ort_session[Vocoder]: created session ep=cpu intra_threads=4 commit_ms=83
+[WARN] backend_lib::vocoder_ort_session: ort_session[Separator]: model=hnsep.onnx ep=cpu (choice=cpu, global_env=auto)
+[ERROR] backend_lib::commands::diagnostics: [frontend] Uncaught error: ResizeObserver loop completed with undelivered notifications. | detail: http://tauri.localhost/:0:0
+[WARN] backend_lib::vocoder_ort_session: ort_session[Separator]: created session ep=cpu intra_threads=8 commit_ms=121
+[17×] [ERROR] backend_lib::commands::diagnostics: [frontend] Uncaught error: ResizeObserver loop completed with undelivered notifications. | detail: http://tauri.localhost/:0:0
+[WARN] backend_lib::commands::playback: [bg_render] no clips need rendering (ready=0 skipped_not_ready=0)
+[1217×] [ERROR] backend_lib::commands::diagnostics: [frontend] Uncaught error: ResizeObserver loop completed with undelivered notifications. | detail: http://tauri.localhost/:0:0

@@ -1,201 +1,46 @@
-# Byte-compiled / optimized / DLL files
-__pycache__/
-*.py[cod]
-*$py.class
+# 本项目的 gitignore
+#
+# ⚠️ gitignore **不支持行内注释** —— 注释必须独占一行。
+#    写 `.setup/   # 说明` 会让整行变成一个匹配不到任何东西的模式
+#    （这个坑当场踩过一次：`.setup/` `.replay/` 照旧被 `git add -A` 收了进去）。
 
-# C extensions
-*.so
+# ── 上游源码克隆（不进仓库）─────────────────────────────────────────────
+# upstream-src/ 是上游 HiFiShifter 的完整克隆（自带 .git）。
+# 不该被本仓库收录：嵌套 git 仓库会被记成 gitlink（没有 .gitmodules 的
+# "半吊子 submodule"，clone 下来是空目录）；上游代码应回到上游仓库取。
+# 复现：克隆上游 → 检出基线 7f0a4105 → bash scripts/setup-gen-android.sh <abi>
+# 重放 android/patches/*.patch（见 docs/00）。本项目**全部实际改动**都在
+# android/patches/ 里，可脱离 upstream-src 保存。
+upstream-src/
 
-# Distribution / packaging
-.Python
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-share/python-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-MANIFEST
+# ── 本地会话数据（WorkBuddy 的工作记忆/日志，含本机路径）───────────────
+.workbuddy/
 
-# PyInstaller
-#  Usually these files are written by a python script from a template
-#  before PyInstaller builds the exe, so as to inject date/other infos into it.
-*.manifest
-*.spec
+# ── 临时/中间目录 ──────────────────────────────────────────────────────
+# 环境准备期的下载物与日志
+.setup/
+# 基线重放用的上游副本（448 MB）
+.replay/
+# verify-patches.sh 的临时索引
+.patch-check/
+# fix-apk-native-libs.sh 的中间产物
+.apk-fix/
+# 本地 cargo 配置/缓存
+.cargo/
 
-# Installer logs
-pip-log.txt
-pip-delete-this-directory.txt
+# ── 探针工程的构建产物 ────────────────────────────────────────────────
+probes/*/src-tauri/target/
+probes/*/src-tauri/gen/
+probes/*/src-tauri/resources/probe.bin
 
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/
-
-# Translations
-*.mo
-*.pot
-
-# Django stuff:
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-
-# Flask stuff:
-instance/
-.webassets-cache
-
-# Scrapy stuff:
-.scrapy
-
-# Sphinx documentation
-docs/_build/
-
-# PyBuilder
-.pybuilder/
+# ── Rust 构建产物（若把 target 放在项目内）────────────────────────────
 target/
-backend/src-tauri/target-codex/
 
-# Jupyter Notebook
-.ipynb_checkpoints
+# ── 打包产物 ──────────────────────────────────────────────────────────
+*.apk
+*.aab
+!probes/**/jniLibs/**/*.so
 
-# IPython
-profile_default/
-ipython_config.py
-
-# pyenv
-#   For a library or package, you might want to ignore these files since the code is
-#   intended to run in multiple environments; otherwise, check them in:
-# .python-version
-
-# pipenv
-#   According to pypa/pipenv#598, it is recommended to include Pipfile.lock in version control.
-#   However, in case of collaboration, if having platform-specific dependencies or dependencies
-#   having no cross-platform support, pipenv may install dependencies that don't work, or not
-#   install all needed dependencies.
-#Pipfile.lock
-
-# poetry
-#   Similar to Pipfile.lock, it is generally recommended to include poetry.lock in version control.
-#   This is especially recommended for binary packages to ensure reproducibility, and is more
-#   commonly ignored for libraries.
-#   https://python-poetry.org/docs/basic-usage/#commit-your-poetrylock-file-to-version-control
-#poetry.lock
-
-# pdm
-#   Similar to Pipfile.lock, it is generally recommended to include pdm.lock in version control.
-#pdm.lock
-#   pdm stores project-wide configurations in .pdm.toml, but it is recommended to not include it
-#   in version control.
-#   https://pdm.fming.dev/#use-with-ide
-.pdm.toml
-
-# PEP 582; used by e.g. github.com/David-OConnor/pyflow and github.com/pdm-project/pdm
-__pypackages__/
-
-# Celery stuff
-celerybeat-schedule
-celerybeat.pid
-
-# SageMath parsed files
-*.sage.py
-
-# Environments
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-
-# Spyder project settings
-.spyderproject
-.spyproject
-
-# Rope project settings
-.ropeproject
-
-# mkdocs documentation
-/site
-
-# mypy
-.mypy_cache/
-.dmypy.json
-dmypy.json
-
-# Pyre type checker
-.pyre/
-
-# pytype static type analyzer
-.pytype/
-
-# Cython debug symbols
-cython_debug/
-
-# PyCharm
-#  JetBrains specific template is maintained in a separate JetBrains.gitignore that can
-#  be found at https://github.com/github/gitignore/blob/main/Global/JetBrains.gitignore
-#  and can be added to the global gitignore or merged into this file.  For a more nuclear
-#  option (not recommended) you can uncomment the following to ignore the entire idea folder.
-.idea/
-
-/data/
-/experiments/
-/pretrained/
-
-run_gui.bat
-build_and_run.bat
-
-.claude/settings.json
-.claude/settings.local.json
-
-.hifigan_optimization.md
-.tension_analysis.md
-# Cloned third-party sources (built at compile time)
-backend/src-tauri/third_party/soundtouch-static/soundtouch/
-
-# Local portable Rust toolchain (installed via setup-rust-env.ps1)
-.rust/
-
-# Temp directory created by setup-gpu-deps.ps1
-temp_ort_setup/
-
-# DirectML.dll copied by build.rs from ORT build output for Tauri bundling
-backend/src-tauri/resources/DirectML.dll
-
-# CoreML model variant generated by build.rs (generate_coreml_model_variant) on
-# macOS: a ~56 MB derivative of pc_nsf_hifigan.onnx, rebuilt whenever the base
-# model or the pads patch changes. Not a source file — never commit it.
-backend/src-tauri/resources/models/nsf_hifigan/pc_nsf_hifigan_coreml.onnx
-
-# Node.js dependencies (frontend/node_modules is covered by frontend/.gitignore;
-# this catches accidental npm install at project root)
-node_modules/
-
-# Temporary AppImage extraction directories (created by --appimage-extract)
-squashfs-root/
-
-# AppImage build artifacts (may be generated in CWD by linuxdeploy)
-*.AppImage
-.codebuddy
+# ── 编辑器 / 系统 ─────────────────────────────────────────────────────
+Thumbs.db
+desktop.ini

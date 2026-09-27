@@ -1,0 +1,1061 @@
+{
+  "viewport": {
+    "w": 360,
+    "h": 731,
+    "dpr": 3
+  },
+  "url": "http://tauri.localhost/",
+  "total": 47,
+  "items": [
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "选择",
+      "rect": {
+        "x": 2,
+        "y": 45,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "绘制",
+      "rect": {
+        "x": 44,
+        "y": 45,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "参数与覆盖层",
+      "rect": {
+        "x": 86,
+        "y": 45,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "参数菜单",
+      "rect": {
+        "x": 128,
+        "y": 45,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.absolute.rounded-[3px]",
+      "label": "显示速度映射",
+      "rect": {
+        "x": 37,
+        "y": 115,
+        "w": 16,
+        "h": 16
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 16,
+          "h": 16,
+          "hit": {
+            "w": 17,
+            "h": 17
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "更多开关",
+      "rect": {
+        "x": 2,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "撤销",
+      "rect": {
+        "x": 150,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "重做",
+      "rect": {
+        "x": 192,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "停止",
+      "rect": {
+        "x": 234,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "播放",
+      "rect": {
+        "x": 276,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "录制",
+      "rect": {
+        "x": 318,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        },
+        "tooSmall": {
+          "w": 40,
+          "h": 40,
+          "hit": {
+            "w": 41,
+            "h": 41
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "文件",
+      "rect": {
+        "x": 4,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "编辑",
+      "rect": {
+        "x": 50,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "轨道",
+      "rect": {
+        "x": 96,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "视图",
+      "rect": {
+        "x": 142,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "选项",
+      "rect": {
+        "x": 188,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "帮助",
+      "rect": {
+        "x": 234,
+        "y": 0,
+        "w": 46,
+        "h": 44
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "div.absolute.inset-0",
+      "label": "div.absolute.inset-0",
+      "rect": {
+        "x": 56,
+        "y": 135,
+        "w": 304,
+        "h": 474
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "轨道",
+      "rect": {
+        "x": 0,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "参数",
+      "rect": {
+        "x": 90,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "文件",
+      "rect": {
+        "x": 180,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "笔记",
+      "rect": {
+        "x": 270,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.fixed.border-0",
+          "text": "关闭参数菜单"
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 23,
+        "y": 500,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 43,
+            "h": 60
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 116,
+        "y": 500,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 43,
+            "h": 60
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 156,
+        "y": 500,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 43,
+            "h": 60
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 196,
+        "y": 500,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 43,
+            "h": 60
+          }
+        }
+      }
+    },
+    {
+      "sel": "input.qt-range",
+      "label": "0",
+      "rect": {
+        "x": 327,
+        "y": 504,
+        "w": 120,
+        "h": 28
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 120,
+          "h": 28,
+          "hit": {
+            "w": 120,
+            "h": 29
+          }
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 102.03125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button#radix-_r_3d_.rt-reset.rt-BaseButton",
+      "label": "参考轨道组",
+      "rect": {
+        "x": 15,
+        "y": 542,
+        "w": 92.2,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 92.2,
+          "h": 36,
+          "hit": {
+            "w": 92,
+            "h": 37
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "导入 MIDI",
+      "rect": {
+        "x": 111.2,
+        "y": 542,
+        "w": 68.3,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 68.3,
+          "h": 36,
+          "hit": {
+            "w": 68,
+            "h": 37
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "音高",
+      "rect": {
+        "x": 184.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "音高",
+      "rect": {
+        "x": 220.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "隐藏副参数叠加曲线",
+      "rect": {
+        "x": 262.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "共振峰",
+      "rect": {
+        "x": 298.5,
+        "y": 549,
+        "w": 46,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 46,
+          "h": 36,
+          "hit": {
+            "w": 46,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "显示副参数叠加曲线",
+      "rect": {
+        "x": 350.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "气声",
+      "rect": {
+        "x": 386.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--breath",
+      "label": "气声: 关闭",
+      "rect": {
+        "x": 422.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "显示副参数叠加曲线",
+      "rect": {
+        "x": 464.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "张力",
+      "rect": {
+        "x": 500.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "显示副参数叠加曲线",
+      "rect": {
+        "x": 542.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "音量",
+      "rect": {
+        "x": 578.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "显示副参数叠加曲线",
+      "rect": {
+        "x": 620.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "声像",
+      "rect": {
+        "x": 656.5,
+        "y": 549,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 36,
+          "h": 36,
+          "hit": {
+            "w": 37,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 13
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-SelectTrigger",
+      "label": "nsf-hifigan",
+      "rect": {
+        "x": 47.1,
+        "y": 584,
+        "w": 104.8,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 104.8,
+          "h": 36,
+          "hit": {
+            "w": 105,
+            "h": 37
+          }
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-fd-column",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 0,
+            "bottom": 11
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.fixed.border-0",
+      "label": "关闭参数菜单",
+      "rect": {
+        "x": 0,
+        "y": 0,
+        "w": 360,
+        "h": 731
+      },
+      "flags": {
+        "needScroll": {
+          "by": "div.shrink-0.relative",
+          "cut": {
+            "left": 0,
+            "right": 0,
+            "top": 45,
+            "bottom": 645
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "同步时间轴视图",
+      "rect": {
+        "x": 15,
+        "y": 458,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 63,
+        "y": 500,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 236,
+        "y": 500,
+        "w": 36,
+        "h": 36
+      },
+      "flags": {}
+    }
+  ],
+  "truncated": 0
+}

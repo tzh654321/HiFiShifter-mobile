@@ -1,0 +1,540 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 0d69658e..b3101838 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -12,8 +12,7 @@ import { IS_LINUX } from "./utils/platform";
+ import { useLayoutMode } from "./utils/layoutMode";
+ import { MobileTopBar } from "./components/mobile/MobileTopBar";
+ import { BottomTabs, type MobileTab } from "./components/mobile/BottomTabs";
+-import { PlaybackBar } from "./components/mobile/PlaybackBar";
+-import { MobileToolbar } from "./components/mobile/MobileToolbar";
++import { MobileBottomBar } from "./components/mobile/MobileBottomBar";
+ import { clipboardErrorKey } from "./utils/clipboardError";
+ import {
+     closeVocalShifterSkippedFilesDialog,
+@@ -486,6 +485,16 @@ function AppInner() {
+     const layoutMode = useLayoutMode();
+     const isPhone = layoutMode === "phone";
+     const [mobileTab, setMobileTab] = useState<MobileTab>("timeline");
++    // 状态栏右侧的系统信息（用户要求显示 CPU 等）：WebView 拿不到系统 CPU，
++    // 先给 JS 堆内存（performance.memory，Chromium 可用）；CPU 需 Rust 侧暴露，后续接。
++    const [jsHeapMb, setJsHeapMb] = useState<number | null>(null);
++    useEffect(() => {
++        const id = setInterval(() => {
++            const m = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
++            if (m) setJsHeapMb(Math.round(m.usedJSHeapSize / 1048576));
++        }, 2000);
++        return () => clearInterval(id);
++    }, []);
+     const [autoBackupSettings, setAutoBackupSettings] = useState<AutoBackupSettings>(
+         DEFAULT_AUTO_BACKUP_SETTINGS,
+     );
+@@ -3907,10 +3916,8 @@ function AppInner() {
+             </Flex>
+             )}
+ 
+-            {/* 开关条（节拍器/网格/…）只属于轨道页签：参数页签的第一档外显
+-                （同步轨道/选择·绘制/参数选择框）面板内自带，重复显示只会挤占高度。 */}
+-            {isPhone && mobileTab === "timeline" ? <MobileToolbar /> : null}
+-            {isPhone ? <PlaybackBar /> : null}
++            {/* 单行底部工具条（ps1.png）：工具 + 折叠开关 + 播放控制合并为一行 */}
++            {isPhone ? <MobileBottomBar tab={mobileTab} /> : null}
+             {isPhone ? <BottomTabs active={mobileTab} onChange={setMobileTab} /> : null}
+ 
+             {/* Quick Search Popup */}
+@@ -4000,6 +4007,12 @@ function AppInner() {
+                         {errorText}
+                     </Text>
+                 </Flex>
++                {/* 状态栏右侧：系统信息（先 JS 堆；CPU 待 Rust 侧暴露后接入） */}
++                {jsHeapMb != null ? (
++                    <Text size="1" color="gray" className="shrink-0">
++                        {`堆 ${jsHeapMb}MB`}
++                    </Text>
++                ) : null}
+             </Flex>
+         </Flex>
+     );
+diff --git a/frontend/src/components/layout/timeline/TimeRuler.tsx b/frontend/src/components/layout/timeline/TimeRuler.tsx
+index 147331ce..c8e3ae39 100644
+--- a/frontend/src/components/layout/timeline/TimeRuler.tsx
++++ b/frontend/src/components/layout/timeline/TimeRuler.tsx
+@@ -141,7 +141,7 @@ const TimeRulerMarks = React.memo(function TimeRulerMarks({
+                             }}
+                         />
+                         <div
+-                            className="flex flex-col justify-center h-full pl-2 pr-1 select-none"
++                            className="flex flex-row items-center h-full pl-2 pr-1 select-none"
+                             style={{
+                                 maxWidth: labelMaxWidth,
+                                 overflow: "hidden",
+@@ -158,12 +158,9 @@ const TimeRulerMarks = React.memo(function TimeRulerMarks({
+                                 {tick.primaryLabel}
+                             </div>
+                             {tick.secondaryLabel != null ? (
+-                                <>
+-                                    <div className="w-5 border-t border-qt-border/20 my-[3px]" />
+-                                    <div className="text-[10px] leading-tight text-qt-text-muted/45 tabular-nums whitespace-nowrap">
+-                                        {tick.secondaryLabel}
+-                                    </div>
+-                                </>
++                                <div className="text-[9px] leading-tight text-qt-text-muted/45 tabular-nums whitespace-nowrap ml-[3px]">
++                                    {tick.secondaryLabel}
++                                </div>
+                             ) : null}
+                         </div>
+                     </div>
+diff --git a/frontend/src/components/mobile/MobileToolbar.tsx b/frontend/src/components/mobile/MobileToolbar.tsx
+deleted file mode 100644
+index 332c5ca9..00000000
+--- a/frontend/src/components/mobile/MobileToolbar.tsx
++++ /dev/null
+@@ -1,146 +0,0 @@
+-/**
+- * MobileToolbar — 手机形态的「第二档」外显开关条（`docs/04` 外显优先级）。
+- *
+- * 排序依据（你给的轨道界面优先级）：
+- *   ① 停止/播放/录制 → `PlaybackBar`，常驻
+- *   ② 节拍器 / 网格 / 自动交叉…忽略编组 → 本组件，横向滚动外显
+- *   ③ 文件管理 / 记事本 → 已由底部页签承担，不再占工具栏
+- *   bpm / 拍号 / 基准音阶 → 移进「工程设置」（后续）
+- *
+- * 用文字按钮而非图标：一排 10 个自定义图标在 360px 下会挤成一团且难以辨认，
+- * 文字更直观（`docs/04` §8 的降级顺序里，图标化是最后一级，不是首选）。
+- * 横向滚动保证 10 个都可达，不牺牲任何一项。
+- */
+-
+-import { useAppDispatch, useAppSelector } from "../../app/hooks";
+-import { shallowEqual } from "react-redux";
+-import {
+-    cycleRippleMode,
+-    persistUiSettings,
+-    toggleAutoCrossfade,
+-    toggleAutoScroll,
+-    toggleIgnoreGrouping,
+-    toggleParamEditorSeekPlayhead,
+-    toggleParamEditorTimelineClickSelectTrack,
+-    togglePlayheadZoom,
+-    toggleSnap,
+-    toggleSplitTransition,
+-} from "../../features/session/sessionSlice";
+-import { updateMetronome } from "../../features/session/thunks/transportThunks";
+-
+-interface ToggleItem {
+-    id: string;
+-    label: string;
+-    on: boolean;
+-    act: () => void;
+-}
+-
+-export function MobileToolbar() {
+-    const dispatch = useAppDispatch();
+-    const s = useAppSelector(
+-        (st) => ({
+-            metronomeEnabled: st.session.metronomeEnabled,
+-            autoCrossfadeEnabled: st.session.autoCrossfadeEnabled,
+-            splitTransitionEnabled: st.session.splitTransitionEnabled,
+-            snapEnabled: st.session.snapEnabled,
+-            rippleMode: st.session.rippleMode,
+-            playheadZoomEnabled: st.session.playheadZoomEnabled,
+-            autoScrollEnabled: st.session.autoScrollEnabled,
+-            paramEditorSeekPlayheadEnabled: st.session.paramEditorSeekPlayheadEnabled,
+-            paramEditorTimelineClickSelectTrackEnabled: st.session.paramEditorTimelineClickSelectTrackEnabled,
+-            ignoreGrouping: st.session.ignoreGrouping,
+-        }),
+-        shallowEqual,
+-    );
+-
+-    const flip = (toggle: () => { type: string }) => () => {
+-        dispatch(toggle());
+-        void dispatch(persistUiSettings());
+-    };
+-
+-    const rippleLabel = s.rippleMode === "off" ? "波纹:关" : s.rippleMode === "track" ? "波纹:轨" : "波纹:全";
+-
+-    const items: ToggleItem[] = [
+-        {
+-            id: "metronome",
+-            label: "节拍器",
+-            on: s.metronomeEnabled,
+-            act: () => {
+-                void dispatch(updateMetronome({ metronomeEnabled: !s.metronomeEnabled }));
+-            },
+-        },
+-        { id: "snap", label: "网格", on: s.snapEnabled, act: flip(toggleSnap) },
+-        {
+-            id: "autoCrossfade",
+-            label: "自动交叉",
+-            on: s.autoCrossfadeEnabled,
+-            act: flip(toggleAutoCrossfade),
+-        },
+-        {
+-            id: "splitTransition",
+-            label: "分割过渡",
+-            on: s.splitTransitionEnabled,
+-            act: flip(toggleSplitTransition),
+-        },
+-        {
+-            id: "ripple",
+-            label: rippleLabel,
+-            on: s.rippleMode !== "off",
+-            act: () => {
+-                dispatch(cycleRippleMode());
+-                void dispatch(persistUiSettings());
+-            },
+-        },
+-        {
+-            id: "playheadZoom",
+-            label: "播放头缩放",
+-            on: s.playheadZoomEnabled,
+-            act: flip(togglePlayheadZoom),
+-        },
+-        { id: "autoScroll", label: "自动滚动", on: s.autoScrollEnabled, act: flip(toggleAutoScroll) },
+-        {
+-            id: "paramSeek",
+-            label: "参数跟随",
+-            on: s.paramEditorSeekPlayheadEnabled,
+-            act: flip(toggleParamEditorSeekPlayhead),
+-        },
+-        {
+-            id: "clickSelectTrack",
+-            label: "点击选轨",
+-            on: s.paramEditorTimelineClickSelectTrackEnabled,
+-            act: flip(toggleParamEditorTimelineClickSelectTrack),
+-        },
+-        { id: "ignoreGrouping", label: "忽略编组", on: s.ignoreGrouping, act: flip(toggleIgnoreGrouping) },
+-    ];
+-
+-    return (
+-        <div
+-            className="shrink-0 flex items-center gap-1 px-2 bg-qt-window border-t border-qt-border"
+-            style={{ minHeight: 48, overflowX: "auto", WebkitOverflowScrolling: "touch" }}
+-            role="toolbar"
+-            aria-label="编辑开关"
+-        >
+-            {items.map((item) => (
+-                <button
+-                    key={item.id}
+-                    type="button"
+-                    onClick={item.act}
+-                    aria-pressed={item.on}
+-                    className="shrink-0 bg-transparent border-0 cursor-pointer whitespace-nowrap"
+-                    style={{
+-                        minHeight: 44,
+-                        padding: "0 12px",
+-                        fontSize: 14,
+-                        borderRadius: 8,
+-                        fontWeight: item.on ? 600 : 400,
+-                        opacity: item.on ? 1 : 0.65,
+-                        background: item.on ? "rgba(127,119,221,0.18)" : "transparent",
+-                        WebkitTapHighlightColor: "transparent",
+-                    }}
+-                >
+-                    {item.label}
+-                </button>
+-            ))}
+-        </div>
+-    );
+-}
+diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
+index 1c5fac80..1344fa34 100644
+--- a/frontend/src/components/mobile/MobileTopBar.tsx
++++ b/frontend/src/components/mobile/MobileTopBar.tsx
+@@ -1,11 +1,9 @@
+ /**
+- * MobileTopBar — 手机形态的顶部栏（替代桌面 MenuBar，`docs/04` §9）。
++ * MobileTopBar — 手机形态顶部**横向菜单栏**（按 PS 设计稿 ps1.png）。
+  *
+- * 手机上没有顶部菜单栏的使用习惯，桌面 `MenuBar` 的菜单语义改为汉堡入口。
+- * 现阶段只把最关键的「新建 / 打开工程」放进来（否则手机上一启动就没有任何工程入口），
+- * 其余菜单项在触控交互阶段（`docs/03`）补齐。
+- *
+- * 顶部预留 `env(safe-area-inset-top)`：inset 修复后状态栏仍会压住最顶端的内容。
++ * 桌面 MenuBar 的语义保留（文件/编辑/轨道/视图/选项/帮助），右侧「语言」入口。
++ * 本轮「文件」接通新建/打开；其余菜单的表项在后续批次补齐（先视觉到位）。
++ * 顶部预留 `env(safe-area-inset-top)`；行高从 48 收紧到 40（用户要求缩小行距）。
+  */
+ 
+ import React from "react";
+@@ -15,87 +13,96 @@ interface MobileTopBarProps {
+     onOpenProject?: () => void;
+ }
+ 
+-export const MOBILE_TOP_BAR_HEIGHT = 48;
++export const MOBILE_TOP_BAR_HEIGHT = 40;
++
++const MENUS = ["文件", "编辑", "轨道", "视图", "选项", "帮助"] as const;
+ 
+ export function MobileTopBar({ onNewProject, onOpenProject }: MobileTopBarProps) {
+-    const [menuOpen, setMenuOpen] = React.useState(false);
++    const [openMenu, setOpenMenu] = React.useState<string | null>(null);
++
++    const close = () => setOpenMenu(null);
+ 
+-    const run = (action?: () => void) => () => {
+-        setMenuOpen(false);
+-        action?.();
++    const menus: Record<string, ReadonlyArray<{ label: string; action?: () => void }>> = {
++        文件: [
++            { label: "新建工程", action: onNewProject },
++            { label: "打开工程", action: onOpenProject },
++        ],
+     };
+ 
+-    const items: ReadonlyArray<{ label: string; action?: () => void }> = [
+-        { label: "新建工程", action: onNewProject },
+-        { label: "打开工程", action: onOpenProject },
+-    ];
++    const items = openMenu != null ? (menus[openMenu] ?? []) : [];
+ 
+     return (
+         <header
+-            className="shrink-0 relative flex items-center gap-2 px-3 bg-qt-window border-b border-qt-border"
++            className="shrink-0 relative flex items-center px-1 bg-qt-window border-b border-qt-border"
+             style={{
+                 minHeight: MOBILE_TOP_BAR_HEIGHT,
+                 paddingTop: "env(safe-area-inset-top, 0px)",
+             }}
+         >
++            {MENUS.map((name) => (
++                <button
++                    key={name}
++                    type="button"
++                    onClick={() => setOpenMenu((v) => (v === name ? null : name))}
++                    aria-expanded={openMenu === name}
++                    className="bg-transparent border-0 cursor-pointer"
++                    style={{
++                        minHeight: 36,
++                        padding: "0 9px",
++                        fontSize: 14,
++                        fontWeight: openMenu === name ? 600 : 400,
++                        color: openMenu === name ? "var(--accent-9, #7f77dd)" : undefined,
++                        WebkitTapHighlightColor: "transparent",
++                    }}
++                >
++                    {name}
++                </button>
++            ))}
++
++            <span className="flex-1" />
++
+             <button
+                 type="button"
+-                onClick={() => setMenuOpen((v) => !v)}
+-                aria-label="主菜单"
+-                aria-expanded={menuOpen}
++                aria-label="语言"
+                 className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+-                style={{
+-                    minWidth: 44,
+-                    minHeight: 44,
+-                    fontSize: 18,
+-                    WebkitTapHighlightColor: "transparent",
+-                }}
++                style={{ minWidth: 44, minHeight: 36, fontSize: 14, WebkitTapHighlightColor: "transparent" }}
+             >
+-                <span aria-hidden="true">≡</span>
++                🌐 语言
+             </button>
+ 
+-            <span className="flex-1 truncate" style={{ fontSize: 16, fontWeight: 500 }}>
+-                HiFiShifter
+-            </span>
+-
+-            {menuOpen ? (
++            {openMenu != null ? (
+                 <>
+                     <button
+                         type="button"
+                         aria-label="关闭菜单"
+-                        onClick={() => setMenuOpen(false)}
++                        onClick={close}
+                         className="fixed border-0 cursor-pointer"
+                         style={{ inset: 0, background: "transparent", zIndex: 40 }}
+                     />
+                     <div
+                         role="menu"
+                         className="absolute bg-qt-window border border-qt-border"
+-                        style={{
+-                            top: "100%",
+-                            left: 8,
+-                            minWidth: 180,
+-                            zIndex: 41,
+-                            borderRadius: 8,
+-                            overflow: "hidden",
+-                        }}
++                        style={{ top: "100%", left: 4, minWidth: 168, zIndex: 41, borderRadius: 8, overflow: "hidden" }}
+                     >
+-                        {items.map((item) => (
+-                            <button
+-                                key={item.label}
+-                                type="button"
+-                                role="menuitem"
+-                                onClick={run(item.action)}
+-                                className="flex w-full items-center bg-transparent border-0 cursor-pointer"
+-                                style={{
+-                                    minHeight: 48,
+-                                    padding: "0 16px",
+-                                    fontSize: 16,
+-                                    textAlign: "left",
+-                                }}
+-                            >
+-                                {item.label}
+-                            </button>
+-                        ))}
++                        {items.length > 0 ? (
++                            items.map((item) => (
++                                <button
++                                    key={item.label}
++                                    type="button"
++                                    role="menuitem"
++                                    onClick={() => {
++                                        close();
++                                        item.action?.();
++                                    }}
++                                    className="flex w-full items-center bg-transparent border-0 cursor-pointer"
++                                    style={{ minHeight: 44, padding: "0 14px", fontSize: 15, textAlign: "left" }}
++                                >
++                                    {item.label}
++                                </button>
++                            ))
++                        ) : (
++                            <div style={{ padding: "12px 14px", fontSize: 14, opacity: 0.55 }}>{openMenu} 菜单整理中</div>
++                        )}
+                     </div>
+                 </>
+             ) : null}
+diff --git a/frontend/src/components/mobile/PlaybackBar.tsx b/frontend/src/components/mobile/PlaybackBar.tsx
+deleted file mode 100644
+index ec7fd62a..00000000
+--- a/frontend/src/components/mobile/PlaybackBar.tsx
++++ /dev/null
+@@ -1,128 +0,0 @@
+-/**
+- * PlaybackBar — 手机常驻播放条（`docs/03` §2.2：播放条必须常驻，不能藏进菜单）。
+- *
+- * 按你给的「轨道界面外显优先级」排序，这一组（停止 / 播放 / 录制）是**第一档**，
+- * 因此常驻显示在底部页签之上；手机上此前没有任何播放入口，这是补上的第一块。
+- *
+- * 语义与桌面 Transport 完全一致：
+- * - 停止：`stopAudioPlayback({ restoreAnchor: true })`
+- * - 播放/暂停：`isPlaying ? stopAudioPlayback() : playOriginal()`
+- * - 录制：`active ? stop : countdown>0 ? cancel : start`
+- */
+-
+-import React from "react";
+-import { useAppDispatch, useAppSelector } from "../../app/hooks";
+-import { shallowEqual } from "react-redux";
+-import { playOriginal, stopAudioPlayback } from "../../features/session/sessionSlice";
+-import {
+-    cancelRecordingCountdown,
+-    startRecordingFlow,
+-    stopRecordingFlow,
+-} from "../../features/recording/recordingSlice";
+-
+-export const PLAYBACK_BAR_HEIGHT = 56;
+-
+-function Svg({ children }: { children: React.ReactNode }) {
+-    return (
+-        <svg width="20" height="20" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+-            {children}
+-        </svg>
+-    );
+-}
+-
+-interface BtnProps {
+-    label: string;
+-    active: boolean;
+-    danger?: boolean;
+-    onClick: () => void;
+-    children: React.ReactNode;
+-}
+-
+-function TransportButton({ label, active, danger, onClick, children }: BtnProps) {
+-    return (
+-        <button
+-            type="button"
+-            onClick={onClick}
+-            aria-label={label}
+-            aria-pressed={active}
+-            className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+-            style={{
+-                minWidth: 56,
+-                minHeight: 48,
+-                borderRadius: 8,
+-                color: danger ? "#e5484d" : undefined,
+-                background: active ? "rgba(127,119,221,0.18)" : "transparent",
+-                WebkitTapHighlightColor: "transparent",
+-            }}
+-        >
+-            {children}
+-        </button>
+-    );
+-}
+-
+-export function PlaybackBar() {
+-    const dispatch = useAppDispatch();
+-    const isPlaying = useAppSelector((s) => s.session.runtime.isPlaying);
+-    const recording = useAppSelector((s) => s.recording, shallowEqual);
+-
+-    const handleStop = () => {
+-        dispatch(stopAudioPlayback({ restoreAnchor: true }));
+-    };
+-
+-    const handlePlayToggle = () => {
+-        if (isPlaying) {
+-            dispatch(stopAudioPlayback());
+-        } else {
+-            dispatch(playOriginal());
+-        }
+-    };
+-
+-    const handleRecordToggle = () => {
+-        if (recording.active) {
+-            void dispatch(stopRecordingFlow());
+-        } else if (recording.countdownRemaining > 0) {
+-            void dispatch(cancelRecordingCountdown());
+-        } else {
+-            void dispatch(startRecordingFlow());
+-        }
+-    };
+-
+-    return (
+-        <div
+-            className="shrink-0 flex items-center gap-1 px-2 bg-qt-window border-t border-qt-border"
+-            style={{ minHeight: PLAYBACK_BAR_HEIGHT }}
+-            role="toolbar"
+-            aria-label="播放控制"
+-        >
+-            <TransportButton label="停止" active={false} onClick={handleStop}>
+-                <Svg>
+-                    <rect x="3" y="3" width="10" height="10" rx="1.5" />
+-                </Svg>
+-            </TransportButton>
+-
+-            <TransportButton label={isPlaying ? "暂停" : "播放"} active={isPlaying} onClick={handlePlayToggle}>
+-                <Svg>
+-                    {isPlaying ? (
+-                        <>
+-                            <rect x="3" y="2.5" width="3.5" height="11" rx="1" />
+-                            <rect x="9.5" y="2.5" width="3.5" height="11" rx="1" />
+-                        </>
+-                    ) : (
+-                        <path d="M4 2.5 L13 8 L4 13.5 Z" />
+-                    )}
+-                </Svg>
+-            </TransportButton>
+-
+-            <TransportButton
+-                label={recording.active ? "停止录制" : "录制"}
+-                active={recording.active}
+-                danger={recording.active}
+-                onClick={handleRecordToggle}
+-            >
+-                <Svg>
+-                    <circle cx="8" cy="8" r="5.5" />
+-                </Svg>
+-            </TransportButton>
+-        </div>
+-    );
+-}

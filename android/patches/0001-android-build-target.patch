@@ -1,0 +1,97 @@
+diff --git a/backend/src-tauri/Cargo.lock b/backend/src-tauri/Cargo.lock
+index 7f985275..9237ed66 100644
+--- a/backend/src-tauri/Cargo.lock
++++ b/backend/src-tauri/Cargo.lock
+@@ -17,12 +17,14 @@ dependencies = [
+  "encoding_rs",
+  "hound",
+  "id3",
++ "jni",
+  "libc",
+  "libloading 0.8.9",
+  "log",
+  "lru",
+  "midly",
+  "ndarray 0.16.1",
++ "ndk-context",
+  "num-complex",
+  "objc2",
+  "objc2-app-kit",
+@@ -2538,6 +2540,16 @@ dependencies = [
+  "windows-link 0.2.1",
+ ]
+ 
++[[package]]
++name = "libloading"
++version = "0.9.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "754ca22de805bb5744484a5b151a9e1a8e837d5dc232c2d7d8c2e3492edc8b60"
++dependencies = [
++ "cfg-if",
++ "windows-link 0.2.1",
++]
++
+ [[package]]
+ name = "libm"
+ version = "0.2.16"
+@@ -3286,6 +3298,7 @@ version = "2.0.0-rc.13"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "4336a1e2b38848325241c72889086886004e589b7c74f335e60a8e8db5138a0b"
+ dependencies = [
++ "libloading 0.9.0",
+  "ndarray 0.17.2",
+  "ort-sys",
+  "smallvec",
+diff --git a/backend/src-tauri/Cargo.toml b/backend/src-tauri/Cargo.toml
+index a876647b..7458d551 100644
+--- a/backend/src-tauri/Cargo.toml
++++ b/backend/src-tauri/Cargo.toml
+@@ -33,9 +33,16 @@ rmp-serde = "1"
+ uuid = { version = "1", features = ["v4"] }
+ base64 = "0.22"
+ chrono = { version = "0.4", default-features = false, features = ["clock"] }
+-rfd = "0.15"
++# rfd 见下方 [target.'cfg(not(target_os = "android"))'.dependencies]：
++# rfd 0.15 在 Android 上没有实现任何对话框后端，**它自己就编译不过**
++# （FileDialog: FileSaveDialogImpl 不成立，12 个 E0277），
++# 所以不能放在全局依赖里。Android 侧由 crate::platform::FileDialog 兜底。
+ hound = "3"
+-cpal = "0.15"
++# Android 后端是 Oboe，必须显式开 oboe-shared-stdcxx，否则真机 dlopen 时
++# 找不到 libc++_shared.so（实测见 docs/10）。该 feature 引用的 `oboe` 是
++# cpal 自己的 android-only 依赖，在桌面 target 上不激活 —— 与下面 `onnx`
++# feature 引用 `dep:ort-tract` 是同一模式，Cargo 接受。
++cpal = { version = "0.15", features = ["oboe-shared-stdcxx"] }
+ rubato = "0.15"
+ arc-swap = "1.7"
+ symphonia = { version = "0.6.1", features = ["all"] }
+@@ -81,6 +88,29 @@ libc = "0.2"
+ xcb = { version = "0.8", features = ["thread"] }
+ wl-clipboard-rs = "0.9"
+ 
++# ── Android ─────────────────────────────────────────────────────────────
++# 与 macOS Intel 段的 `alternative-backend` 不同，Android 走 `load-dynamic`：
++# ONNX Runtime 由官方 `onnxruntime-android` AAR 提供 libonnxruntime.so，
++# 经 scripts/sync-native-libs.sh 放进 jniLibs/<abi>/，运行时由 Android
++# linker 在 nativeLibraryDir 内解析（裸 soname "libonnxruntime.so" 即可）。
++#
++# 刻意**不加 tls-native**：load-dynamic 不走 ort-sys 的下载路径，
++# 加上只会把 native-tls/openssl 拖进交叉编译链。
++#
++# `jni` / `ndk-context` 用于初始化 ndk_context：Tauri 栈（tao/wry/
++# tauri-runtime-wry）全都不做这件事，而 cpal 的 Oboe 后端强依赖它，
++# 且未初始化时直接 panic。详见 docs/10 §4 与 platform/ndk_context.rs。
++[target.'cfg(target_os = "android")'.dependencies]
++ort = { version = "2.0.0-rc.13", optional = true, default-features = false, features = ["std", "ndarray", "load-dynamic"] }
++jni = "0.21"
++ndk-context = "0.1"
++
++# ── 桌面（Android 上编不过或无意义的一律 gated 掉）──────────────────────
++# 这里的 crate 在 Android 上要么**自身编译失败**、要么语义上不成立；
++# 统一在这里排除，避免在每个使用点散落 #[cfg]。
++[target.'cfg(not(target_os = "android"))'.dependencies]
++rfd = "0.15"
++
+ [features]
+ default = ["onnx", "vslib"]
+ onnx = ["dep:ort", "dep:ndarray", "dep:ort-tract"]

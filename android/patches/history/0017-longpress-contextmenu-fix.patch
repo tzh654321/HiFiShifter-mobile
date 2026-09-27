@@ -1,0 +1,53 @@
+diff --git a/frontend/src/components/layout/touchGesture.ts b/frontend/src/components/layout/touchGesture.ts
+index e15e98c7..99ce51f5 100644
+--- a/frontend/src/components/layout/touchGesture.ts
++++ b/frontend/src/components/layout/touchGesture.ts
+@@ -174,14 +174,19 @@ export class TwoFingerGestureController {
+         if (this.pointers.size === 1) {
+             for (const id of this.pointers.keys()) this.abortPointer(id);
+         }
+-        try {
+-            this.target.setPointerCapture(e.pointerId);
+-        } catch {
+-            /* 某些环境下 capture 可能失败，忽略即可 */
+-        }
+         this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+         if (this.pointers.size === 2) {
+-            // 第二指落下：拦截其 pointerdown，避免既有单指拖拽起步（宿主在容器 bubble 阶段）。
++            // 第二指落下才捕获指针（2026-09-19 修复）：单指期间绝不能 capture——
++            // 捕获态会让 WebView 不合成原生 long-press → contextmenu，参数面板等
++            // 把 onContextMenu 绑在内部元素上的菜单就再也弹不出来（时间线的菜单
++            // 绑在容器层所以之前没暴露）。双指期间捕获把 move 锁到 target。
++            for (const id of this.pointers.keys()) {
++                try {
++                    this.target.setPointerCapture(id);
++                } catch {
++                    /* 某些环境下 capture 可能失败，忽略即可 */
++                }
++            }
+             e.preventDefault();
+             e.stopPropagation();
+             this.beginSession();
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index be7c1dfb..c70f6cdd 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -527,3 +527,18 @@ textarea {
+         display: none;
+     }
+ }
++
++/* 手机按钮按压反馈（对齐原版 Radix 按钮的按压语义：按下整体变暗一档） */
++.hs-icon-btn:active {
++    filter: brightness(0.88);
++}
++
++/* 无键盘设备上，长按/右键菜单里的快捷键列（Ctrl+C 等）是噪音 —— 隐藏。
++   覆盖两种菜单容器：Radix popper 版 与 EditContextMenu 的 fixed z-[9999] 版；
++   只命中各自容器内的 10px 灰字（shortcutClass），不影响其它位置的 10px 文本。 */
++@media (max-width: 599px) {
++    [data-radix-popper-content-wrapper] span.text-\[10px\],
++    div.z-\[9999\] span.text-\[10px\] {
++        display: none;
++    }
++}

@@ -1,0 +1,339 @@
+{
+  "viewport": {
+    "w": 360,
+    "h": 731,
+    "dpr": 3
+  },
+  "url": "http://tauri.localhost/",
+  "total": 22,
+  "items": [
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "文件",
+      "rect": {
+        "x": 4,
+        "y": 1.5,
+        "w": 46,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 46,
+          "h": 36
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "编辑",
+      "rect": {
+        "x": 50,
+        "y": 1.5,
+        "w": 46,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 46,
+          "h": 36
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "轨道",
+      "rect": {
+        "x": 96,
+        "y": 1.5,
+        "w": 46,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 46,
+          "h": 36
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "视图",
+      "rect": {
+        "x": 142,
+        "y": 1.5,
+        "w": 46,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 46,
+          "h": 36
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "选项",
+      "rect": {
+        "x": 188,
+        "y": 1.5,
+        "w": 46,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 46,
+          "h": 36
+        }
+      }
+    },
+    {
+      "sel": "button.bg-transparent.border-0",
+      "label": "帮助",
+      "rect": {
+        "x": 234,
+        "y": 1.5,
+        "w": 46,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 46,
+          "h": 36
+        }
+      }
+    },
+    {
+      "sel": "button.flex.items-center",
+      "label": "语言",
+      "rect": {
+        "x": 307.1,
+        "y": 1.5,
+        "w": 48.9,
+        "h": 36
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 48.9,
+          "h": 36
+        }
+      }
+    },
+    {
+      "sel": "button.absolute.rounded-[3px]",
+      "label": "显示速度映射",
+      "rect": {
+        "x": 112,
+        "y": 68,
+        "w": 16,
+        "h": 16
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 16,
+          "h": 16
+        }
+      }
+    },
+    {
+      "sel": "button.w-3.5.h-3.5",
+      "label": "button.w-3.5.h-3.5",
+      "rect": {
+        "x": 8,
+        "y": 96.6,
+        "w": 14,
+        "h": 14
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 14,
+          "h": 14
+        }
+      }
+    },
+    {
+      "sel": "button.relative.w-8",
+      "label": "增益：0 dB",
+      "rect": {
+        "x": 8,
+        "y": 129.5,
+        "w": 32,
+        "h": 32
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 32,
+          "h": 32
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "C",
+      "rect": {
+        "x": 82,
+        "y": 93.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "M",
+      "rect": {
+        "x": 82,
+        "y": 117.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "S",
+      "rect": {
+        "x": 82,
+        "y": 141.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "更多开关",
+      "rect": {
+        "x": 2,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "停止",
+      "rect": {
+        "x": 234,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "播放",
+      "rect": {
+        "x": 276,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40
+        }
+      }
+    },
+    {
+      "sel": "button.hs-bar-btn",
+      "label": "录制",
+      "rect": {
+        "x": 318,
+        "y": 610,
+        "w": 40,
+        "h": 40
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 40
+        }
+      }
+    },
+    {
+      "sel": "div.relative.flex-1",
+      "label": "div.relative.flex-1",
+      "rect": {
+        "x": 132,
+        "y": 88,
+        "w": 228,
+        "h": 521
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "轨道",
+      "rect": {
+        "x": 0,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "参数",
+      "rect": {
+        "x": 90,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "文件",
+      "rect": {
+        "x": 180,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    },
+    {
+      "sel": "button.flex-1.flex",
+      "label": "笔记",
+      "rect": {
+        "x": 270,
+        "y": 651,
+        "w": 90,
+        "h": 56
+      },
+      "flags": {}
+    }
+  ],
+  "truncated": 0
+}

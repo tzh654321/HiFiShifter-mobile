@@ -1,0 +1,1097 @@
+{
+  "viewport": {
+    "w": 800,
+    "h": 1176,
+    "dpr": 2
+  },
+  "url": "http://tauri.localhost/",
+  "total": 55,
+  "items": [
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 136.9,
+        "y": 276.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "occluded": {
+          "by": "span",
+          "text": "参考轨道组"
+        },
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 44.2265625,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 192.9,
+        "y": 276.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "occluded": {
+          "by": "button#radix-_r_3t_.rt-reset.rt-BaseButton",
+          "text": "参考轨道组"
+        },
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 100.2265625,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 220.9,
+        "y": 276.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "occluded": {
+          "by": "button.rt-reset.rt-BaseButton",
+          "text": "导入 MIDI"
+        },
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 128.2265625,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "input.qt-range",
+      "label": "0",
+      "rect": {
+        "x": 294.1,
+        "y": 281.5,
+        "w": 101.9,
+        "h": 14
+      },
+      "flags": {
+        "occluded": {
+          "by": "svg",
+          "text": ""
+        },
+        "tooSmall": {
+          "w": 101.9,
+          "h": 14
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 279.3125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "input.rt-reset.rt-TextFieldInput",
+      "label": "120",
+      "rect": {
+        "x": 73.6,
+        "y": 36.5,
+        "w": 58,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 58,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "input.rt-reset.rt-TextFieldInput",
+      "label": "4",
+      "rect": {
+        "x": 176.6,
+        "y": 36.5,
+        "w": 40,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 40,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-SelectTrigger",
+      "label": "4",
+      "rect": {
+        "x": 230.5,
+        "y": 35.5,
+        "w": 48,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 48,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-SelectTrigger",
+      "label": "1/4",
+      "rect": {
+        "x": 321.5,
+        "y": 35.5,
+        "w": 47.5,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 47.5,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-SelectTrigger",
+      "label": "C / Am",
+      "rect": {
+        "x": 436.1,
+        "y": 35.5,
+        "w": 66.3,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 66.3,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 526.4,
+        "y": 35.5,
+        "w": 31,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 31,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 561.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 589.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 637.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 665.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 713.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 741.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 789.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 13.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 817.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 41.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 845.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 69.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 873.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 97.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 906.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 130.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 934.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 158.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 967.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 191.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 995.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 219.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 1028.4,
+        "y": 35.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 252.3828125,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.absolute.rounded-[3px]",
+      "label": "显示速度映射",
+      "rect": {
+        "x": 236,
+        "y": 92,
+        "w": 16,
+        "h": 16
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 16,
+          "h": 16
+        }
+      }
+    },
+    {
+      "sel": "button.w-3.5.h-3.5",
+      "label": "button.w-3.5.h-3.5",
+      "rect": {
+        "x": 8,
+        "y": 120.4,
+        "w": 14,
+        "h": 14
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 14,
+          "h": 14
+        }
+      }
+    },
+    {
+      "sel": "button.relative.w-8",
+      "label": "增益：0 dB",
+      "rect": {
+        "x": 8,
+        "y": 153.5,
+        "w": 32,
+        "h": 32
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 32,
+          "h": 32
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "C",
+      "rect": {
+        "x": 205.3,
+        "y": 117.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "M",
+      "rect": {
+        "x": 205.3,
+        "y": 141.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "S",
+      "rect": {
+        "x": 205.3,
+        "y": 165.5,
+        "w": 20,
+        "h": 20
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 20,
+          "h": 20
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "同步时间轴视图",
+      "rect": {
+        "x": 8,
+        "y": 276.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 68,
+        "y": 276.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 96,
+        "y": 276.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 3.34375,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "button.rt-reset.rt-BaseButton",
+      "rect": {
+        "x": 164.9,
+        "y": 276.5,
+        "w": 24,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "div.rt-Flex.rt-r-ai-center",
+          "cut": {
+            "left": 0,
+            "right": 72.2265625,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button#radix-_r_3t_.rt-reset.rt-BaseButton",
+      "label": "参考轨道组",
+      "rect": {
+        "x": 116.7,
+        "y": 276.5,
+        "w": 92.2,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 92.2,
+          "h": 24
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-BaseButton",
+      "label": "导入 MIDI",
+      "rect": {
+        "x": 212.8,
+        "y": 276.5,
+        "w": 68.3,
+        "h": 24
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 68.3,
+          "h": 24
+        },
+        "needScroll": {
+          "by": "span.inline-flex",
+          "cut": {
+            "left": 0,
+            "right": 11.40625,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "音高",
+      "rect": {
+        "x": 274.8,
+        "y": 277.5,
+        "w": 24,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "音高",
+      "rect": {
+        "x": 298.8,
+        "y": 277.5,
+        "w": 34,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 34,
+          "h": 22
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 8.6875,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "隐藏副参数叠加曲线",
+      "rect": {
+        "x": 329.1,
+        "y": 277.5,
+        "w": 24,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "共振峰",
+      "rect": {
+        "x": 353.1,
+        "y": 277.5,
+        "w": 46,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 46,
+          "h": 22
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 10.6875,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "显示副参数叠加曲线",
+      "rect": {
+        "x": 393.4,
+        "y": 277.5,
+        "w": 24,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "气声",
+      "rect": {
+        "x": 417.4,
+        "y": 277.5,
+        "w": 34,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 34,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--breath",
+      "label": "气声: 关闭",
+      "rect": {
+        "x": 451.4,
+        "y": 277.5,
+        "w": 22,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 22,
+          "h": 22
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 12.359375,
+            "top": 0,
+            "bottom": 0
+          }
+        },
+        "needsTapArea": true
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "显示副参数叠加曲线",
+      "rect": {
+        "x": 466,
+        "y": 277.5,
+        "w": 24,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "张力",
+      "rect": {
+        "x": 490,
+        "y": 277.5,
+        "w": 34,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 34,
+          "h": 22
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 8.6875,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "显示副参数叠加曲线",
+      "rect": {
+        "x": 520.3,
+        "y": 277.5,
+        "w": 24,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "音量",
+      "rect": {
+        "x": 544.3,
+        "y": 277.5,
+        "w": 34,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 34,
+          "h": 22
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 8.6875,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--eye",
+      "label": "显示副参数叠加曲线",
+      "rect": {
+        "x": 574.6,
+        "y": 277.5,
+        "w": 24,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 24,
+          "h": 22
+        }
+      }
+    },
+    {
+      "sel": "button.param-pill__seg.param-pill__seg--label",
+      "label": "声像",
+      "rect": {
+        "x": 598.6,
+        "y": 277.5,
+        "w": 34,
+        "h": 22
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 34,
+          "h": 22
+        },
+        "needScroll": {
+          "by": "div.param-pill",
+          "cut": {
+            "left": 0,
+            "right": 8.6875,
+            "top": 0,
+            "bottom": 0
+          }
+        }
+      }
+    },
+    {
+      "sel": "button.rt-reset.rt-SelectTrigger",
+      "label": "nsf-hifigan",
+      "rect": {
+        "x": 652,
+        "y": 272.5,
+        "w": 140,
+        "h": 32
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 140,
+          "h": 32
+        }
+      }
+    },
+    {
+      "sel": "button.absolute.rounded-[3px]",
+      "label": "显示速度映射",
+      "rect": {
+        "x": 37,
+        "y": 333,
+        "w": 16,
+        "h": 16
+      },
+      "flags": {
+        "tooSmall": {
+          "w": 16,
+          "h": 16
+        }
+      }
+    },
+    {
+      "sel": "div.relative.flex-1",
+      "label": "div.relative.flex-1",
+      "rect": {
+        "x": 256,
+        "y": 112,
+        "w": 544,
+        "h": 151
+      },
+      "flags": {}
+    },
+    {
+      "sel": "div.absolute.inset-0",
+      "label": "div.absolute.inset-0",
+      "rect": {
+        "x": 56,
+        "y": 353,
+        "w": 744,
+        "h": 799
+      },
+      "flags": {}
+    }
+  ],
+  "truncated": 0
+}

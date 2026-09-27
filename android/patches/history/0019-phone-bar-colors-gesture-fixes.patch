@@ -1,0 +1,1498 @@
+diff --git a/frontend/src/components/layout/touchGesture.ts b/frontend/src/components/layout/touchGesture.ts
+index 99ce51f..a702a78 100644
+--- a/frontend/src/components/layout/touchGesture.ts
++++ b/frontend/src/components/layout/touchGesture.ts
+@@ -110,6 +110,11 @@ export class TwoFingerGestureController {
+     private readonly verticalZoom: boolean;
+ 
+     private readonly pointers = new Map<number, ActivePointer>();
++    /** 每个指针落在哪个「表面」上（用于 pointer capture / release）。 */
++    private readonly pointerSurface = new Map<number, HTMLElement>();
++    /** 额外注册的手势表面（拍数栏 / 琴键轴）：与 target 共用同一套状态机。 */
++    private readonly surfaces = new Set<HTMLElement>();
++    private readonly surfaceOffs = new Map<HTMLElement, () => void>();
+     private session: Session | null = null;
+     private cooldownUntil = 0;
+     private attached = false;
+@@ -139,17 +144,56 @@ export class TwoFingerGestureController {
+         this.attached = true;
+         // 接管双指手势：浏览器不得自行平移/缩放本容器（覆盖 body 的 pan-x pan-y）。
+         this.target.style.touchAction = "none";
+-        this.target.addEventListener("pointerdown", this.onPointerDown, { passive: false });
+-        this.target.addEventListener("pointermove", this.onPointerMove, { passive: false });
+-        this.target.addEventListener("pointerup", this.onPointerUp);
+-        this.target.addEventListener("pointercancel", this.onPointerCancel);
++        this.bindSurface(this.target);
+         // 手势进行中屏蔽合成 wheel（双指捏合 → Ctrl+wheel），避免双重缩放（§6）。
+         window.addEventListener("wheel", this.onWheel, { passive: false, capture: true });
+     }
+ 
++    /**
++     * 把主题（拍数栏 / 琴键轴）之外的表层也接进同一个状态机。
++     *
++     * 为什么必须共用状态机而不是各挂一套：用户的双指手势常常**跨区**——
++     * 一指落在拍数栏（47px 高）或琴键轴上，另一指落在画布上。两套独立监听各只看到
++     * 一个指针，都判不出「双指」，于是什么都不发生（用户实测：一拍数栏+一画布的双指
++     * 完全无反应）。共用一个 controller 后，两指无论落在哪个表面都进入同一次会话。
++     *
++     * 锚点仍以 `target`（真正持 scrollLeft/scrollTop 的滚动容器）的 rect 为坐标系：
++     * 拍数栏在滚动容器上方，其 y 在容器坐标系里是负值 —— 这是同一个坐标系里的
++     * 合法坐标，不需要额外补偿。
++     */
++    attachSurface(el: HTMLElement): () => void {
++        if (this.surfaces.has(el)) return () => undefined;
++        this.surfaces.add(el);
++        const off = this.bindSurface(el);
++        this.surfaceOffs.set(el, off);
++        return () => {
++            off();
++            this.surfaceOffs.delete(el);
++            this.surfaces.delete(el);
++        };
++    }
++
++    private bindSurface(el: HTMLElement): () => void {
++        el.addEventListener("pointerdown", this.onPointerDown, { passive: false });
++        el.addEventListener("pointermove", this.onPointerMove, { passive: false });
++        el.addEventListener("pointerup", this.onPointerUp);
++        el.addEventListener("pointercancel", this.onPointerCancel);
++        return () => {
++            el.removeEventListener("pointerdown", this.onPointerDown);
++            el.removeEventListener("pointermove", this.onPointerMove);
++            el.removeEventListener("pointerup", this.onPointerUp);
++            el.removeEventListener("pointercancel", this.onPointerCancel);
++        };
++    }
++
+     detach(): void {
+         if (!this.attached) return;
+         this.attached = false;
++        for (const el of [...this.surfaces]) {
++            this.surfaceOffs.get(el)?.();
++            this.surfaceOffs.delete(el);
++            this.surfaces.delete(el);
++        }
+         this.target.style.touchAction = "";
+         this.target.removeEventListener("pointerdown", this.onPointerDown);
+         this.target.removeEventListener("pointermove", this.onPointerMove);
+@@ -157,6 +201,7 @@ export class TwoFingerGestureController {
+         this.target.removeEventListener("pointercancel", this.onPointerCancel);
+         window.removeEventListener("wheel", this.onWheel, { capture: true } as EventListenerOptions);
+         this.pointers.clear();
++        this.pointerSurface.clear();
+         this.session = null;
+         this.setActiveFlag(false);
+     }
+@@ -173,16 +218,29 @@ export class TwoFingerGestureController {
+         // 1→2 过渡：先存在的单指拖拽必须干净中止（docs/08 §4.1）。
+         if (this.pointers.size === 1) {
+             for (const id of this.pointers.keys()) this.abortPointer(id);
++            // 额外表面（拍数栏/琴键轴）上的单指平移：自行退出（见 PianoRollPanel 的
++            // singleFingerBail 判定）——合成 pointercancel 只在 window 上派发，
++            // 绑在元素上的单指处理器收不到，故以手势标志位协同。
+         }
+         this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
++        // 一致性自愈：已经有 ≥2 个指针在案却没有会话，说明上一轮有 pointerup 没送到
++        // 我们手上（多表面 + 合成 pointercancel 的时序残留），陈旧指针会让后续所有
++        // 手势永远判不出"两指"。此时清空重建，以本次指针为准。
++        if (this.pointers.size >= 3 && this.session === null) {
++            this.pointers.clear();
++            this.pointerSurface.clear();
++            this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
++        }
++        const surface = (e.currentTarget ?? this.target) as HTMLElement;
++        this.pointerSurface.set(e.pointerId, surface);
+         if (this.pointers.size === 2) {
+             // 第二指落下才捕获指针（2026-09-19 修复）：单指期间绝不能 capture——
+             // 捕获态会让 WebView 不合成原生 long-press → contextmenu，参数面板等
+             // 把 onContextMenu 绑在内部元素上的菜单就再也弹不出来（时间线的菜单
+-            // 绑在容器层所以之前没暴露）。双指期间捕获把 move 锁到 target。
++            // 绑在容器层所以之前没暴露）。双指期间捕获把 move 锁到各自表面。
+             for (const id of this.pointers.keys()) {
+                 try {
+-                    this.target.setPointerCapture(id);
++                    this.pointerSurface.get(id)?.setPointerCapture(id);
+                 } catch {
+                     /* 某些环境下 capture 可能失败，忽略即可 */
+                 }
+@@ -200,6 +258,17 @@ export class TwoFingerGestureController {
+         if (p === undefined) return; // 冷却期/非手势指针：忽略
+         p.x = e.clientX;
+         p.y = e.clientY;
++        // 【自愈】两指在案却没有会话 ⇒ 立刻补建。
++        // 为什么需要：本控制器现在由**多个表面**（滚动容器 + 拍数栏 + 琴键轴）共同喂事件，
++        // 序列可能是「第一指在某表面落下 → 第二指落另一表面」，也可能被合成
++        // pointercancel/pointerup（1→2 过渡时中止单指拖拽用的）穿插，导致某一对指针
++        // 落齐而 beginSession 没走到。实测：拍数栏起手的双指能看到两指事件、也派发了
++        // 中止合成事件，却没有会话 ⇒ 手势整体无反应。这里以「状态」为准而不是以
++        // 「某一次 down 的时序」为准，任何后续 move 都能把会话补起来。
++        if (this.pointers.size >= 2 && this.session === null && this.now() >= this.cooldownUntil) {
++            this.beginSession();
++            this.setActiveFlag(true);
++        }
+         if (this.pointers.size < 2) return; // 仍在冷却的单指：忽略
+         e.preventDefault();
+         if (this.now() < this.cooldownUntil) return; // 2→1 冷却期
+@@ -218,10 +287,11 @@ export class TwoFingerGestureController {
+         if (!this.pointers.has(id)) return;
+         this.pointers.delete(id);
+         try {
+-            this.target.releasePointerCapture(id);
++            this.pointerSurface.get(id)?.releasePointerCapture(id);
+         } catch {
+             /* ignore */
+         }
++        this.pointerSurface.delete(id);
+         if (this.pointers.size < 2) {
+             // 2→1：进入冷却期（docs/08 §4.2），期间忽略单指事件。
+             if (this.session !== null) {
+diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
+index 6e07221..7d3a100 100644
+--- a/frontend/src/components/layout/PianoRollPanel.tsx
++++ b/frontend/src/components/layout/PianoRollPanel.tsx
+@@ -1389,7 +1389,125 @@ export const PianoRollPanel: React.FC = () => {
+                 lastScrollLeftRef.current = next;
+                 commitViewportNow(next);
+                 setScrollLeft(next);
+-    }, [pxPerSec, s.paramEditorSyncTimeline]);
++            }
++        };
++    }, [s.paramEditorSyncTimeline]);
++
++    // 布局偏移变化时，同一共享视口对应的绘制坐标也会变化。
++    // 重新按当前偏移计算状态，让同步对齐始终使用最新几何位置。
++    useEffect(() => {
++        if (!s.paramEditorSyncTimeline) return;
++        const store = timelineViewportSync.get();
++        const drawingScrollLeft = timelineViewportNativeToState(
++            store.scrollLeft,
++            timelineOffsetRef.current,
++        );
++        timelineSyncApplyingRef.current = true;
++        pendingParamSyncViewportRef.current = { pxPerSec: store.pxPerSec };
++        setScrollLeft(drawingScrollLeft);
++        timelineSyncApplyingRef.current = false;
++    }, [timelineOffsetPx, s.paramEditorSyncTimeline]);
++
++    // 同步视口必须等内容宽度按新 pxPerSec 更新后再落到 DOM。
++    // 否则设置 scroller.scrollLeft 时会被浏览器钳回旧的最大滚动位置，
++    // 形成“缩放已变、滚动没变”的水平漂移。
++    //
++    // 【为什么位置取"共享视口的当前值"而不是捕获时的快照，且不再比对 React state】
++    // 这条落地路径原先要求 `React scrollLeft state` 恰好等于 pending 的目标值，否则
++    // **直接 return 把 pending 搁置**。而 state 是异步提交的：同期可能被其它写入点
++    // （量化提交的 rAF、纯滚动广播、以及参数编辑器自己发布的回声）覆盖成更旧的值，
++    // 于是这次落地被静默取消——面板停在旧位置、缩放却已生效，两个面板从此错开一段
++    // 距离（用户报告：「参数编辑器的偏移量有误」，且**随机**出现）。位置本身在共享
++    // 视口里就是权威且最新的，直接取它即可；只要该视口的**缩放**与本次 pending 一致
++    // （说明这是"同一个缩放代"的落地），落地就是对的。缩放若已被更新的广播取代，
++    // 那份广播会写下新的 pending，由它落地。
++    useLayoutEffect(() => {
++        const pending = pendingParamSyncViewportRef.current;
++        if (!pending || !s.paramEditorSyncTimeline) return;
++        if (Math.abs(pxPerSec - pending.pxPerSec) > 1e-9) return;
++        if (Math.abs(timelineOffsetPx - timelineOffsetRef.current) > 0.5) return;
++
++        const store = timelineViewportSync.get();
++        // 更新的缩放已在路上：等它自己的 pending（否则会用旧缩放的位置落地）。
++        if (Math.abs(store.pxPerSec - pending.pxPerSec) > 1e-9) return;
++
++        pendingParamSyncViewportRef.current = null;
++        const scroller = scrollerRef.current;
++        if (!scroller) return;
++
++        const offset = timelineOffsetRef.current;
++        const drawingScrollLeft = timelineViewportNativeToState(store.scrollLeft, offset);
++        timelineSyncApplyingRef.current = true;
++        pxPerSecRef.current = pending.pxPerSec;
++        pxPerBeatRef.current = pending.pxPerSec * (60 / Math.max(1e-6, s.bpm));
++        scrollLeftRef.current = drawingScrollLeft;
++        // `store.scrollLeft` 是共享视口的原生值；换算成绘制坐标后走统一载体
++        // （宿主会再加回偏移，落到与共享视口相同的位置），并在**同一任务**里把
++        // DOM / Canvas2D / GL 一起提交（见 `paintNow`）。
++        //
++        // 【这里不能再调 syncScrollLeft】它是「读原生 scroller → 采纳为真值」的
++        // 路径，而此时原生镜像还停留在**上一帧的旧值**（本函数的写入要等内核下一帧才
++        // 回写），于是会把刚提交的目标位置又覆盖回旧值——表现为「同步从 1200 拨回 0
++        // 时参数编辑器不动」。
++        // 缩放与位置一起落进内核再绘制（见 `commitViewportNow`）：否则同帧绘制会用
++        // 内核的旧缩放画新位置，而 DOM 侧标尺/网格已按新缩放排好——一帧内两套缩放。
++        commitViewportNow(drawingScrollLeft, pending.pxPerSec);
++        timelineSyncApplyingRef.current = false;
++        // eslint-disable-next-line react-hooks/exhaustive-deps
++    }, [pxPerSec, scrollLeft, s.paramEditorSyncTimeline, timelineOffsetPx]);
++
++    useLayoutEffect(() => {
++        const pending = horizontalZoomPendingRef.current;
++        if (!pending) return;
++        // 【先消费再判定】请求一旦"过期"就必须丢弃，不能留在 ref 里等未来某次渲染
++        // 的 state 凑巧等于它的缩放——那会用一次**旧缩放的位置**落地（旧快照的
++        // `nextScrollLeft`），并在同步模式下把它推回共享视口：两个面板一起跳到旧位置。
++        // 因此这里无条件清空，只有"当前 state 正是这次请求的缩放"才真正落地。
++        horizontalZoomPendingRef.current = null;
++        if (Math.abs(pending.nextScale - pxPerSec) > 1e-9) return;
++        horizontalZoomChainRef.current = null;
++        const scroller = scrollerRef.current;
++        if (!scroller) return;
++
++        const syncEnabled = s.paramEditorSyncTimeline;
++        const offset = syncEnabled ? timelineOffsetRef.current : 0;
++        const native = pending.nextScrollLeft;
++        const next = timelineViewportNativeToState(native, offset);
++        // 缩放落地：缩放 + 位置一次原子写入内核，再同任务提交各图层（见 `commitViewportNow`）。
++        commitViewportNow(next, pending.nextScale);
++        if (lastScrollLeftRef.current !== next) {
++            lastScrollLeftRef.current = next;
++            scrollLeftRef.current = next;
++        }
++        // 同步模式下手动缩放后必须把新的 pxPerSec 写回共享视口；即使滚动位置
++        // 没有变化（例如光标位于左侧同步空白区时锚定在工程起点，next 仍为 -offset），
++        // 也要广播缩放，否则轨道视图不会跟着缩放。
++        //
++        // 【广播的是"落地值"而不是"请求值"】`applyHorizontalScrollPosition` 已经
++        // 把目标交给内核（内核按当前边界钳制），所以这里回读一次：共享视口里只能是
++        // 两个面板都到得了的位置。广播请求值（可能越界）会让轨道视图先按自己的上限
++        // 钳回来，两个面板在工程结尾处错开一个差量。
++        if (syncEnabled && !timelineSyncApplyingRef.current) {
++            const appliedDrawing = hostRef.current?.getViewport().scrollLeft ?? next;
++            timelineViewportSync.setViewport(
++                {
++                    scrollLeft: timelineViewportStateToNative(appliedDrawing, offset),
++                    pxPerSec,
++                },
++                PIANO_ROLL_SYNC_ORIGIN,
++            );
++        }
++        // 原生滚动位置的钳制校正由宿主的镜像回写负责（它每帧都会把原生位置对齐真值）
++        // ——不要再写原生 scroller，否则会与内核真值打架。
++        setScrollLeft(next);
++        // ⚠️ `scrollLeft` **必须**在依赖里：只有「缩放变了」的请求会改变 pxPerSec，
++        // 而**纯平移**（双指同向拖动 / 拍数栏单指拖动）只改位置、缩放不变 ——
++        // `setPxPerSec(同一个值)` 会被 React 直接 bail out，本 effect 就不再执行，
++        // pending 被下一帧清掉，平移整段丢失。真机/模拟器实测：画布内双指平移与
++        // 拍数栏单指划动**完全无反应**，根因就在这里（缩放方向正常，所以一直没暴露）。
++        // 加上 scrollLeft 后，位置变化也能驱动"消费 pending 并落地"，与上面那条
++        // 同步视口的 effect（依赖里同样带 scrollLeft）保持同一形状。
++    }, [pxPerSec, scrollLeft, s.paramEditorSyncTimeline]);
+ 
+     const zoomTimelineStateRef = useRef({
+         playheadSec: s.playheadSec,
+@@ -2057,11 +2175,16 @@ export const PianoRollPanel: React.FC = () => {
+             }
+             // 手势层行锚定模型 ↔ 参数轴值域模型（pxPerUnit = h/span，center 在中点）。
+             const vh = () => Math.max(1, scroller.clientHeight);
++            // 【值域轴是反向的】`valueToY` 里 `y = (1 - t) * H`，t 随值增大 ⇒ 值越大
++            // 越靠**上**；而手势层的「行」是屏幕行号（向下增大）。两者方向相反，
++            // 因此行模型里的滚动量必须取负：`scrollTop = -center * rowHeight`。
++            // 取正号会让竖直方向整体反向（用户实测：琴键轴上划，内容往下跑；
++            // 双指竖直拖动同理，且因两个模型的口径不同还叠加了幅度错配）。
+             const valueToRow = () => {
+                 const h = vh();
+                 const view = getCurrentViewportForScrollbar(editParamRef.current);
+                 const rowHeight = h / Math.max(1e-6, view.span);
+-                return { rowHeight, scrollTop: view.center * rowHeight - h / 2 };
++                return { rowHeight, scrollTop: -view.center * rowHeight };
+             };
+             const viewport: GestureViewport = {
+                 get() {
+@@ -2087,7 +2210,8 @@ export const PianoRollPanel: React.FC = () => {
+                 setVertical(rowHeight, scrollTop) {
+                     const h = vh();
+                     const span = h / Math.max(1e-6, rowHeight);
+-                    const center = (scrollTop + h / 2) / rowHeight;
++                    // 与 valueToRow 同一约定：center = -scrollTop / rowHeight。
++                    const center = -scrollTop / Math.max(1e-9, rowHeight);
+                     syncVerticalScrollbarForViewport(editParamRef.current, { center, span });
+                 },
+                 reclamp() {
+@@ -2103,6 +2227,29 @@ export const PianoRollPanel: React.FC = () => {
+             paramGestureRef.current = controller;
+             (window as unknown as { __hsParamGestureAttached?: boolean }).__hsParamGestureAttached =
+                 true;
++            // 调试钩子（与时间线的 `__hsViewport` 同款）：CDP / 真机验收脚本据此断言
++            // 「双指平移 Δ 与手指位移一致」「竖直方向不反」等不变量 —— 画布是 GL/Canvas，
++            // 没有 DOM 可观测量，必须由面板自己暴露真值。
++            (
++                window as unknown as { __hsParamViewport?: () => unknown }
++            ).__hsParamViewport = () => {
++                const sc = scrollerRef.current;
++                const h = Math.max(1, sc?.clientHeight ?? 1);
++                const view = getCurrentViewportForScrollbar(editParamRef.current);
++                const r = sc?.getBoundingClientRect();
++                return {
++                    param: editParamRef.current,
++                    pxPerSec: pxPerSecRef.current,
++                    scrollLeft: scrollLeftRef.current,
++                    span: view.span,
++                    center: view.center,
++                    rowHeight: h / Math.max(1e-6, view.span),
++                    viewportHeight: h,
++                    scrollerRect: r
++                        ? { left: r.left, top: r.top, width: r.width, height: r.height }
++                        : null,
++                };
++            };
+         };
+         tryAttach();
+         return () => {
+@@ -2112,151 +2259,132 @@ export const PianoRollPanel: React.FC = () => {
+             paramGestureRef.current = null;
+             delete (window as unknown as { __hsParamGestureAttached?: boolean })
+                 .__hsParamGestureAttached;
++            delete (window as unknown as { __hsParamViewport?: () => unknown })
++                .__hsParamViewport;
+         };
+         // 仅挂载一次；handleHorizontalZoom / sync… 是 function 声明（提升）且只读 ref。
+         // eslint-disable-next-line react-hooks/exhaustive-deps
+     }, []);
+ 
+-    // ── 琴键轴 / 拍数栏手势（用户要求）：单指=平移，双指=该轴缩放 ─────────────
+-    // 琴键轴（axisWrap，纵向）：单指拖 → center 平移；双指捏合 → span 缩放（中点锚定）。
+-    // 拍数栏（rulerContent，横向）：单指拖 → scrollLeft 平移；双指捏合 → pxPerSec。
+-    // 横向都走 handleHorizontalZoom（含同步/钳制），纵向走 syncVerticalScrollbarForViewport。
+-    // 这两块区域无子交互（点击跳播放头 = tap 无位移，不受拖动影响），可整体
+-    // touch-action:none。
++    // ── 琴键轴 / 拍数栏手势（用户要求）：单指=平移，双指=缩放 ─────────────────
++    // 单指：琴键轴 → 纵向平移（center）；拍数栏 → 横向平移（scrollLeft）。
++    // 双指：**不再自建一套**，而是注册成上面那个统一 controller 的「表面」——
++    //   手指常常跨区（一拍数栏 + 一画布 / 一琴键轴 + 一画布），各挂一套监听时
++    //   两边都只看到一个指针，谁都判不出双指，表现就是「双指完全没反应」（用户实测）。
++    //   共用一个状态机后，两指落在哪个表面都进同一次会话，锚点仍以滚动容器为坐标系。
++    // 方向约定统一为「内容跟手」：手指往哪儿走，内容往哪儿走。
++    // 这两块区域没有需要长按的交互，可整体 touch-action:none。
+     const axisGesturesRef = useRef<Array<() => void>>([]);
+ 
+     useEffect(() => {
+         if (!IS_ANDROID) return;
+         let cancelled = false;
++        const offs: Array<() => void> = [];
++        let raf = 0;
+         const tryAttach = () => {
+             if (cancelled) return;
+             const axisEl = axisWrapRef.current;
+-            const rulerEl = rulerContentRef.current;
+-            if (!axisEl || !rulerEl) {
+-                requestAnimationFrame(tryAttach);
++            const rulerContent = rulerContentRef.current;
++            // ⚠️ 拍数栏手势必须挂在**整行根节点**上，不能挂在 `contentRef` 那个
++            // `absolute inset-0` 内容层上：标尺行里除了内容层，还有若干**兄弟**浮层
++            // （tempo map 悬浮标签、hover 气泡、角标按钮…）。手指落在这些兄弟上时，
++            // 事件只冒泡到根节点、永远不经过内容层 ⇒ 绑在内容层上的监听一个都不触发。
++            // 实测：x=284（内容层）能平移，x=188（悬浮标签覆盖处）完全无反应，
++            // 连"两指会话"都建不起来（双指跨区因此整体失效）。
++            // 锚点用的是**滚动容器**的 rect，与挂在哪个表面上无关，故挂根节点不影响坐标。
++            const rulerEl = rulerContent?.parentElement ?? rulerContent;
++            const controller = paramGestureRef.current;
++            if (!axisEl || !rulerEl || !controller) {
++                raf = requestAnimationFrame(tryAttach);
+                 return;
+             }
+-            const vh = () => Math.max(1, scrollerRef.current?.clientHeight ?? 1);
+-            const currentRow = () => {
+-                const h = vh();
++            const currentView = () => {
++                const h = Math.max(1, scrollerRef.current?.clientHeight ?? 1);
+                 const view = getCurrentViewportForScrollbar(editParamRef.current);
+-                const rowHeight = h / Math.max(1e-6, view.span);
+                 return {
+-                    rowHeight,
+-                    scrollTop: view.center * rowHeight - h / 2,
++                    rowHeight: h / Math.max(1e-6, view.span),
+                     span: view.span,
+                     center: view.center,
+                 };
+             };
+-            const attach = (el: HTMLElement, axis: "x" | "y"): (() => void) => {
++            // 双指手势进行中：单指平移必须让位（合成 pointercancel 只在 window 上派发，
++            // 绑在元素上的本处理器收不到，故以手势标志位协同）。
++            const gestureActive = () => Boolean((window as unknown as { __hsGestureActive?: boolean }).__hsGestureActive);
++
++            const attachPan = (el: HTMLElement, axis: "x" | "y"): (() => void) => {
+                 el.style.touchAction = "none";
+-                const pointers = new Map<number, { x: number; y: number }>();
+-                // 单指平移基准
+                 let pan:
+                     | { x0: number; y0: number; sl0: number; center0: number; span0: number; rowH0: number }
+                     | null = null;
+-                // 双指捏合基准
+-                let two:
+-                    | { mid0: number; sp0: number; pps0: number; sec0: number; rowH0: number; rowAtMid0: number }
+-                    | null = null;
++                let moved = false;
+                 const onDown = (e: PointerEvent) => {
+                     if (e.pointerType === "mouse") return;
+-                    pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+-                    try {
+-                        el.setPointerCapture(e.pointerId);
+-                    } catch {
+-                        /* ignore */
+-                    }
+-                    if (pointers.size === 1) {
+-                        if (axis === "x") {
+-                            pan = { x0: e.clientX, y0: e.clientY, sl0: scrollLeftRef.current, center0: 0, span0: 1, rowH0: 1 };
+-                        } else {
+-                            const row = currentRow();
+-                            pan = { x0: e.clientX, y0: e.clientY, sl0: 0, center0: row.center, span0: row.span, rowH0: row.rowHeight };
+-                        }
+-                        two = null;
+-                    } else if (pointers.size === 2) {
+-                        pan = null;
+-                        const pts = [...pointers.values()];
+-                        const sp = (axis === "x" ? Math.abs(pts[0].x - pts[1].x) : Math.abs(pts[0].y - pts[1].y)) || 1;
+-                        const mid = axis === "x" ? (pts[0].x + pts[1].x) / 2 : (pts[0].y + pts[1].y) / 2;
+-                        if (axis === "x") {
+-                            const pps0 = pxPerSecRef.current || 1;
+-                            two = { mid0: mid, sp0: sp, pps0, sec0: (scrollLeftRef.current + mid) / pps0, rowH0: 1, rowAtMid0: 0 };
+-                        } else {
+-                            const row = currentRow();
+-                            two = {
+-                                mid0: mid,
+-                                sp0: sp,
+-                                pps0: 1,
+-                                sec0: 0,
+-                                rowH0: row.rowHeight,
+-                                rowAtMid0: (row.scrollTop + mid) / row.rowHeight,
+-                            };
+-                        }
++                    if (gestureActive()) return;
++                    moved = false;
++                    if (axis === "x") {
++                        pan = { x0: e.clientX, y0: e.clientY, sl0: scrollLeftRef.current, center0: 0, span0: 1, rowH0: 1 };
++                    } else {
++                        const v = currentView();
++                        pan = { x0: e.clientX, y0: e.clientY, sl0: 0, center0: v.center, span0: v.span, rowH0: v.rowHeight };
+                     }
+                 };
+                 const onMove = (e: PointerEvent) => {
+-                    const p = pointers.get(e.pointerId);
+-                    if (!p) return;
+-                    p.x = e.clientX;
+-                    p.y = e.clientY;
+-                    if (pointers.size >= 2 && two) {
+-                        const pts = [...pointers.values()];
+-                        const sp = (axis === "x" ? Math.abs(pts[0].x - pts[1].x) : Math.abs(pts[0].y - pts[1].y)) || 1;
+-                        const mid = axis === "x" ? (pts[0].x + pts[1].x) / 2 : (pts[0].y + pts[1].y) / 2;
+-                        const k = sp / two.sp0;
+-                        if (axis === "x") {
+-                            const pps = Math.min(8000, Math.max(10, two.pps0 * k));
+-                            horizontalZoomRef.current(pps, two.sec0 * pps - mid);
+-                        } else {
+-                            const h = vh();
+-                            const newRowH = Math.min(1e6, Math.max(0.2, two.rowH0 * k));
+-                            const span = h / newRowH;
+-                            const scrollTop = two.rowAtMid0 * newRowH - mid;
+-                            syncVerticalScrollbarForViewport(editParamRef.current, {
+-                                center: (scrollTop + h / 2) / newRowH,
+-                                span,
+-                            });
+-                        }
+-                    } else if (pointers.size === 1 && pan) {
+-                        if (axis === "x") {
+-                            horizontalZoomRef.current(pxPerSecRef.current, pan.sl0 + (e.clientX - pan.x0));
+-                        } else {
+-                            const center = pan.center0 + (pan.y0 - e.clientY) / pan.rowH0;
+-                            syncVerticalScrollbarForViewport(editParamRef.current, {
+-                                center,
+-                                span: pan.span0,
+-                            });
+-                        }
++                    if (!pan) return;
++                    if (gestureActive()) {
++                        pan = null; // 第二指落下：整段交给 controller
++                        return;
+                     }
++                    if (axis === "x") {
++                        const dx = e.clientX - pan.x0;
++                        // 内容跟手：手指左划（dx<0）→ scrollLeft 减小。
++                        // （改前写 sl0 + dx，方向是反的。）
++                        horizontalZoomRef.current(pxPerSecRef.current, pan.sl0 - dx);
++                        if (Math.abs(dx) > 8) moved = true;
++                    } else {
++                        const dy = e.clientY - pan.y0;
++                        // 内容跟手 + 值域轴反向：下划（dy>0）→ center 增大（看到更高的值）。
++                        const center = pan.center0 + dy / Math.max(1e-6, pan.rowH0);
++                        syncVerticalScrollbarForViewport(editParamRef.current, { center, span: pan.span0 });
++                        if (Math.abs(dy) > 8) moved = true;
++                    }
++                };
++                const onUp = () => {
++                    pan = null;
+                 };
+-                const onUp = (e: PointerEvent) => {
+-                    pointers.delete(e.pointerId);
+-                    if (pointers.size < 2) two = null;
+-                    if (pointers.size < 1) pan = null;
++                // 划动结束后浏览器会补一次 compat mousedown → 触发「点标尺跳播放头」。
++                // 位移超过 8px 的划动不该顺带跳播放头，故在捕获阶段吃掉这一次 mousedown
++                // （React 的委托监听挂在根容器，元素上的捕获监听先于它执行）。
++                const onCompatMouseDown = (ev: MouseEvent) => {
++                    if (!moved) return;
++                    moved = false;
++                    ev.preventDefault();
++                    ev.stopPropagation();
+                 };
+                 el.addEventListener("pointerdown", onDown);
+                 el.addEventListener("pointermove", onMove);
+                 el.addEventListener("pointerup", onUp);
+                 el.addEventListener("pointercancel", onUp);
++                el.addEventListener("mousedown", onCompatMouseDown, true);
+                 return () => {
+                     el.removeEventListener("pointerdown", onDown);
+                     el.removeEventListener("pointermove", onMove);
+                     el.removeEventListener("pointerup", onUp);
+                     el.removeEventListener("pointercancel", onUp);
++                    el.removeEventListener("mousedown", onCompatMouseDown, true);
+                 };
+             };
+-            const offY = attach(axisEl, "y");
+-            const offX = attach(rulerEl, "x");
+-            axisGesturesRef.current = [offY, offX];
++            offs.push(attachPan(axisEl, "y"), attachPan(rulerEl, "x"));
++            offs.push(controller.attachSurface(axisEl), controller.attachSurface(rulerEl));
+         };
+         tryAttach();
+         return () => {
+             cancelled = true;
+-            for (const off of axisGesturesRef.current) off();
++            cancelAnimationFrame(raf);
++            for (const off of offs) off();
+             axisGesturesRef.current = [];
+         };
++        // 仅挂载一次；getCurrentViewportForScrollbar / handleHorizontalZoom 等是
++        // function 声明（提升）且内部只读 ref。
+         // eslint-disable-next-line react-hooks/exhaustive-deps
+     }, []);
+ 
+@@ -7206,20 +7334,20 @@ export const PianoRollPanel: React.FC = () => {
+                             用户可见的**唯一**滚动条。 */}
+                         <div
+                             ref={vScrollbarTrackRef}
+-                            className="absolute right-0 top-0 bottom-0 w-2 z-20"
++                            className="hs-sb hs-sb-v absolute right-0 top-0 bottom-0 w-2 z-20"
+                         >
+                             <div
+                                 ref={vScrollbarThumbRef}
+-                                className="absolute left-0 w-full rounded-full bg-[var(--qt-scrollbar-thumb)]"
++                                className="hs-sb-thumb absolute left-0 w-full rounded-full bg-[var(--qt-scrollbar-thumb)]"
+                             />
+                         </div>
+                         <div
+                             ref={hScrollbarTrackRef}
+-                            className="absolute bottom-0 left-0 right-0 h-2 z-20"
++                            className="hs-sb hs-sb-h absolute bottom-0 left-0 right-0 h-2 z-20"
+                         >
+                             <div
+                                 ref={hScrollbarThumbRef}
+-                                className="absolute top-0 h-full rounded-full bg-[var(--qt-scrollbar-thumb)]"
++                                className="hs-sb-thumb absolute top-0 h-full rounded-full bg-[var(--qt-scrollbar-thumb)]"
+                             />
+                         </div>
+                     </div>
+diff --git a/frontend/src/components/layout/timeline/kernel/TimelineKernelView.tsx b/frontend/src/components/layout/timeline/kernel/TimelineKernelView.tsx
+index f6f54ca..3cd22ef 100644
+--- a/frontend/src/components/layout/timeline/kernel/TimelineKernelView.tsx
++++ b/frontend/src/components/layout/timeline/kernel/TimelineKernelView.tsx
+@@ -1041,16 +1041,16 @@ export const TimelineKernelView: React.FC<TimelineKernelViewProps> = (props) =>
+                 滚动条盖掉，且该处无法拖动。
+                 取值与参数编辑器的自绘滚动条一致（那里也是 `z-20`），
+                 两者观感与层级语义保持统一。 */}
+-            <div ref={vTrackRef} className="absolute right-0 top-0 bottom-0 z-20 w-2">
++            <div ref={vTrackRef} className="hs-sb hs-sb-v absolute right-0 top-0 bottom-0 z-20 w-2">
+                 <div
+                     ref={vThumbRef}
+-                    className="absolute left-0 w-full rounded-full bg-[var(--qt-scrollbar-thumb)]"
++                    className="hs-sb-thumb absolute left-0 w-full rounded-full bg-[var(--qt-scrollbar-thumb)]"
+                 />
+             </div>
+-            <div ref={hTrackRef} className="absolute bottom-0 left-0 right-0 z-20 h-2">
++            <div ref={hTrackRef} className="hs-sb hs-sb-h absolute bottom-0 left-0 right-0 z-20 h-2">
+                 <div
+                     ref={hThumbRef}
+-                    className="absolute top-0 h-full rounded-full bg-[var(--qt-scrollbar-thumb)]"
++                    className="hs-sb-thumb absolute top-0 h-full rounded-full bg-[var(--qt-scrollbar-thumb)]"
+                 />
+             </div>
+         </div>
+diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
+index fc50d81..39a225c 100644
+--- a/frontend/src/components/mobile/MobileBottomBar.tsx
++++ b/frontend/src/components/mobile/MobileBottomBar.tsx
+@@ -1,22 +1,34 @@
+ /**
+- * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png，图标化对齐原版）。
++ * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
+  *
+- *   [选择|绘制(仅参数页签,图标)] [∧折叠(仅轨道页签)] [👁(参数页签,占位)]   [⏹][▶][●]
++ *   [选择|绘制(仅参数页签)] [∧ 更多开关] [👁 参数/覆盖层(仅参数页签)]   [⏹][▶][●]
+  *
+- * - 折叠浮层里的开关按钮用**原版同款图标**（自 ActionBar 抄 SVG）+ 小字标签；
+- *   波纹是三态（关/轨/全），状态本身是信息，保留文字。
+- * - 去重（2026-09-19 盘点）：参数页签浮层原本也有「同步轨道」，但面板内工具行
+- *   （`PianoRollPanel.tsx:5848`）已有同款 —— 删浮层份，故参数页签不渲染 ∧。
+- *   底栏「选择/绘制」与面板内工具按钮并存是 PS 稿的设计（底栏常驻），保留。
+- * - 👁：「所有的隐藏/显示」统一入口；覆盖层可见性目前是 PianoRollPanel 组件内
+- *   useState（:1631），暂以占位接入，状态提升后接管。
++ * 分工（2026-09-19 用户口径）：
++ * - **∧ = 低频开关折叠**（原有内容一项不动）：节拍器/网格/…/忽略编组 共 10 项。
++ * - **👁 = 参数与覆盖层**（`prompt.md` 的「所有的隐藏/显示折叠成一个按钮」）：
++ *   覆盖层显示总开关 + 同步轨道 + 音高/共振峰/气声/张力/音量/声像 —— 这一组原本
++ *   被塞进 ∧（0018），用户明确要求搬到 👁，∧ 恢复原样。
++ *
++ * 外观：与桌面原版同源 —— 停止=灰 soft、播放=accent solid（常亮）、录制=red
++ * （待机 soft / 录制中 solid），见 `ActionBar.tsx` 的 Transport 三段。
++ * 尺寸：视觉 28px（ps1.png 实测 ≈30 CSS px）+ 命中区 40px（伪内边距，手指按得住）。
++ *
++ * 绘制按钮右下角有原版同款**小三角**（`PianoRollPanel.tsx` 的 6×6 角标）：
++ * 点三角或长按 = 打开工具子菜单（绘制 / 颤音），点本体 = 切到当前绘制工具。
+  */
+ 
+ import React from "react";
+ import { useAppDispatch, useAppSelector } from "../../app/hooks";
+ import { shallowEqual } from "react-redux";
+-import { CursorArrowIcon, Pencil1Icon, DoubleArrowRightIcon } from "@radix-ui/react-icons";
+-import { IconButton } from "@radix-ui/themes";
++import {
++    CheckIcon,
++    CursorArrowIcon,
++    DoubleArrowRightIcon,
++    PauseIcon,
++    Pencil1Icon,
++    PlayIcon,
++    StopIcon,
++} from "@radix-ui/react-icons";
+ import {
+     cycleRippleMode,
+     persistUiSettings,
+@@ -41,13 +53,99 @@ import {
+ } from "../../features/recording/recordingSlice";
+ import { updateMetronome } from "../../features/session/thunks/transportThunks";
+ 
+-export const MOBILE_BOTTOM_BAR_HEIGHT = 44;
++/** 工具条行高（44 → 40：ps1.png 的"缩小"）。 */
++export const MOBILE_BOTTOM_BAR_HEIGHT = 40;
++/** 命中区（≥40px：用户定的"命中区保持 40px"）。 */
++const BTN_BOX = 40;
++/** 视觉尺寸（用户定的 28px）。 */
++const BTN_VIS = 28;
++
++/* ── 视觉 token（对齐 Radix 主题变量，亮/暗色自适应）────────────────────── */
+ 
+-/* ── 原版同款图标（自 ActionBar 抄录的 SVG）────────────────────────── */
++type VisKind = "ghost" | "solid" | "softGray" | "softRed" | "solidRed";
++
++const VIS_STYLE: Record<VisKind, React.CSSProperties> = {
++    // 原版 ghost IconButton：透明底 + accent 前景
++    ghost: {
++        background: "transparent",
++        color: "var(--accent-11, rgb(177, 169, 255))",
++    },
++    solid: {
++        background: "var(--accent-9, rgb(91, 91, 214))",
++        color: "var(--white-a12, #fff)",
++    },
++    // 原版「停止」：Button variant=soft color=gray
++    softGray: {
++        background: "var(--gray-a3, rgba(127, 127, 127, 0.18))",
++        color: "var(--gray-12, rgb(230, 230, 230))",
++    },
++    // 原版「录制」待机：IconButton variant=soft color=red（语义色常驻，不再等录制中才变红）
++    softRed: {
++        background: "var(--red-a3, rgba(229, 72, 77, 0.22))",
++        color: "var(--red-11, rgb(255, 149, 146))",
++    },
++    solidRed: {
++        background: "var(--red-9, rgb(229, 72, 77))",
++        color: "var(--white-a12, #fff)",
++    },
++};
++
++interface BarButtonProps {
++    label: string;
++    visual: VisKind;
++    onClick: (e: React.MouseEvent<HTMLButtonElement>) => void;
++    active?: boolean;
++    ariaExpanded?: boolean;
++    children: React.ReactNode;
++}
++
++function BarButton({ label, visual, onClick, active, ariaExpanded, children }: BarButtonProps) {
++    return (
++        <button
++            type="button"
++            aria-label={label}
++            aria-pressed={active}
++            aria-expanded={ariaExpanded}
++            onClick={onClick}
++            className="hs-bar-btn"
++            style={{
++                width: BTN_BOX,
++                height: BTN_BOX,
++                minWidth: BTN_BOX,
++                padding: 0,
++                border: 0,
++                background: "transparent",
++                display: "flex",
++                alignItems: "center",
++                justifyContent: "center",
++                cursor: "pointer",
++                position: "relative",
++                WebkitTapHighlightColor: "transparent",
++            }}
++        >
++            <span
++                className="hs-bar-vis"
++                style={{
++                    width: BTN_VIS,
++                    height: BTN_VIS,
++                    borderRadius: 6,
++                    display: "flex",
++                    alignItems: "center",
++                    justifyContent: "center",
++                    ...VIS_STYLE[visual],
++                }}
++            >
++                {children}
++            </span>
++        </button>
++    );
++}
++
++/* ── 原版同款图标（自 ActionBar / PianoRollPanel 抄录）──────────────────── */
+ 
+ function IconCrossfade() {
+     return (
+-        <svg width="18" height="18" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++        <svg width="16" height="16" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+             <path d="M2 12L7.5 3L13 12" stroke="currentColor" strokeWidth="1.2" fill="none" />
+             <path d="M2 3L7.5 12L13 3" stroke="currentColor" strokeWidth="1.2" fill="none" opacity="0.5" />
+         </svg>
+@@ -56,7 +154,7 @@ function IconCrossfade() {
+ 
+ function IconSplit() {
+     return (
+-        <svg width="18" height="18" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++        <svg width="16" height="16" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+             <path d="M7.5 1.5V13.5" stroke="currentColor" strokeWidth="1.2" />
+             <path d="M3.5 3.5L7.5 5.5L3.5 7.5Z" fill="currentColor" opacity="0.85" />
+             <path d="M11.5 7.5L7.5 9.5L11.5 11.5Z" fill="currentColor" opacity="0.45" />
+@@ -66,7 +164,7 @@ function IconSplit() {
+ 
+ function IconSnap() {
+     return (
+-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true">
++        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+             <path
+                 d="m6 15-4-4 6.75-6.77a7.79 7.79 0 0 1 11 11L13 22l-4-4 6.39-6.36a2.14 2.14 0 0 0-3-3L6 15Z"
+                 stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"
+@@ -79,7 +177,7 @@ function IconSnap() {
+ 
+ function IconPlayheadZoom() {
+     return (
+-        <svg width="18" height="18" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++        <svg width="16" height="16" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+             <path d="M7.5 2V13" stroke="currentColor" strokeWidth="1.2" />
+             <path d="M6 3.5L7.5 2L9 3.5" stroke="currentColor" strokeWidth="1" />
+             <path d="M5.5 5.5L4 7.5L5.5 9.5" stroke="currentColor" strokeWidth="1.2" />
+@@ -91,7 +189,7 @@ function IconPlayheadZoom() {
+ 
+ function IconParamSeek() {
+     return (
+-        <svg width="18" height="18" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++        <svg width="16" height="16" viewBox="0 0 15 15" fill="none" aria-hidden="true">
+             <path d="M2 2.5H13" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+             <path d="M2 12.5H13" stroke="currentColor" strokeWidth="0.8" opacity="0.5" />
+             <path d="M7.5 3.5V11.5" stroke="currentColor" strokeWidth="1.2" />
+@@ -107,7 +205,7 @@ function IconParamSeek() {
+ /** 节拍器（简版自绘：梯形机身 + 摆锤）。 */
+ function IconMetronome() {
+     return (
+-        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
++        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+             <path d="M6 2.5 H10 L12.5 13.5 H3.5 Z" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
+             <path d="M5 9.5 H11" stroke="currentColor" strokeWidth="1" opacity="0.5" />
+             <path d="M4.5 11 L11.5 4" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
+@@ -118,7 +216,7 @@ function IconMetronome() {
+ /** 忽略编组（简版自绘：断裂链）。 */
+ function IconUnlink() {
+     return (
+-        <svg width="18" height="18" viewBox="0 0 16 16" fill="none" aria-hidden="true">
++        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+             <path d="M6.5 4 L4.8 4 A2.3 2.3 0 0 0 4.8 8.6 L6.5 8.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+             <path d="M9.5 7.4 L11.2 7.4 A2.3 2.3 0 0 1 11.2 12 L9.5 12" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" transform="translate(0 -2.7)" />
+             <path d="M12.5 2.5 L14 1.2" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" opacity="0.7" />
+@@ -128,12 +226,60 @@ function IconUnlink() {
+ 
+ function SvgWrap({ children }: { children: React.ReactNode }) {
+     return (
+-        <svg width="18" height="18" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
++        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+             {children}
+         </svg>
+     );
+ }
+ 
++/** 颤音绘制工具（原版 `PianoRollPanel.tsx` 的 vibratoToolIcon，15×15）。 */
++function IconVibrato() {
++    return (
++        <svg width="16" height="16" viewBox="0 0 15 15" fill="none" aria-hidden="true">
++            <path
++                d="M1.5 7.5C3 7.5 3 3.5 4.5 3.5C6 3.5 6 11.5 7.5 11.5C9 11.5 9 3.5 10.5 3.5C12 3.5 12 7.5 13.5 7.5"
++                stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" strokeLinejoin="round"
++            />
++        </svg>
++    );
++}
++
++/** 绘制工具图标 + 右下角小三角（原版 6×6 角标，语义=「还有别的绘制工具」）。 */
++function IconPencilWithCorner({ vibrato }: { vibrato?: boolean }) {
++    return (
++        <span style={{ position: "relative", width: 16, height: 16, display: "block" }}>
++            <span
++                style={{
++                    position: "absolute",
++                    inset: 0,
++                    display: "flex",
++                    alignItems: "center",
++                    justifyContent: "center",
++                }}
++            >
++                {vibrato ? <IconVibrato /> : <Pencil1Icon width={16} height={16} />}
++            </span>
++            <span
++                data-hs-draw-corner
++                style={{
++                    position: "absolute",
++                    right: -1,
++                    bottom: -1,
++                    width: 6,
++                    height: 6,
++                    opacity: 0.7,
++                }}
++            >
++                <svg width="6" height="6" viewBox="0 0 6 6" fill="none" aria-hidden="true">
++                    <path d="M0 6L6 0V6Z" fill="currentColor" />
++                </svg>
++            </span>
++        </span>
++    );
++}
++
++/* ── 浮层 ─────────────────────────────────────────────────────────────── */
++
+ interface FoldItem {
+     id: string;
+     label: string;
+@@ -142,10 +288,148 @@ interface FoldItem {
+     act: () => void;
+ }
+ 
++function FoldPanel({
++    title,
++    items,
++    onClose,
++}: {
++    title: string;
++    items: FoldItem[];
++    onClose: () => void;
++}) {
++    return (
++        <>
++            <button
++                type="button"
++                aria-label="关闭浮层"
++                onClick={onClose}
++                className="fixed border-0 cursor-pointer"
++                style={{ inset: 0, background: "transparent", zIndex: 40 }}
++            />
++            <div
++                className="absolute bg-qt-window border border-qt-border"
++                aria-label={title}
++                style={{
++                    bottom: "100%",
++                    left: 4,
++                    right: 4,
++                    zIndex: 41,
++                    borderRadius: 10,
++                    padding: 6,
++                    display: "grid",
++                    gridTemplateColumns: "repeat(3, 1fr)",
++                    gap: 4,
++                }}
++            >
++                {items.map((item) => (
++                    <button
++                        key={item.id}
++                        type="button"
++                        onClick={item.act}
++                        aria-pressed={item.on}
++                        className="hs-icon-btn flex flex-col items-center justify-center bg-transparent border-0 cursor-pointer"
++                        style={{
++                            minHeight: 52,
++                            padding: "4px 2px",
++                            fontSize: 11,
++                            borderRadius: 6,
++                            gap: 2,
++                            fontWeight: item.on ? 600 : 400,
++                            // 对齐原版 ParamToolbarPill：active = accent-9 实底白字，
++                            // 未选中 = 透明底 + accent 前景（图标 currentColor 一并继承）
++                            color: item.on
++                                ? "var(--white-a12, #fff)"
++                                : "var(--accent-11, rgb(177, 169, 255))",
++                            background: item.on ? "var(--accent-9, rgb(91, 91, 214))" : "transparent",
++                            WebkitTapHighlightColor: "transparent",
++                        }}
++                    >
++                        {item.icon ?? null}
++                        <span>{item.label}</span>
++                    </button>
++                ))}
++            </div>
++        </>
++    );
++}
++
++/** 绘制工具子菜单（点铅笔右下角三角 / 长按铅笔打开）。 */
++function DrawToolMenu({
++    current,
++    onPick,
++    onClose,
++}: {
++    current: string;
++    onPick: (mode: "draw" | "vibrato") => void;
++    onClose: () => void;
++}) {
++    const rows: Array<{ mode: "draw" | "vibrato"; label: string; icon: React.ReactNode }> = [
++        { mode: "draw", label: "绘制", icon: <Pencil1Icon width={15} height={15} /> },
++        { mode: "vibrato", label: "颤音", icon: <IconVibrato /> },
++    ];
++    return (
++        <>
++            <button
++                type="button"
++                aria-label="关闭工具菜单"
++                onClick={onClose}
++                className="fixed border-0 cursor-pointer"
++                style={{ inset: 0, background: "transparent", zIndex: 40 }}
++            />
++            <div
++                className="absolute bg-qt-window border border-qt-border"
++                aria-label="绘制工具"
++                style={{
++                    bottom: "100%",
++                    left: 4,
++                    zIndex: 41,
++                    minWidth: 132,
++                    borderRadius: 8,
++                    padding: 4,
++                    display: "flex",
++                    flexDirection: "column",
++                    gap: 2,
++                }}
++            >
++                {rows.map((row) => (
++                    <button
++                        key={row.mode}
++                        type="button"
++                        aria-pressed={current === row.mode}
++                        onClick={() => onPick(row.mode)}
++                        className="flex items-center gap-2 bg-transparent border-0 cursor-pointer"
++                        style={{
++                            minHeight: 40,
++                            padding: "0 10px",
++                            fontSize: 12,
++                            borderRadius: 6,
++                            color:
++                                current === row.mode
++                                    ? "var(--white-a12, #fff)"
++                                    : "var(--accent-11, rgb(177, 169, 255))",
++                            background:
++                                current === row.mode ? "var(--accent-9, rgb(91, 91, 214))" : "transparent",
++                            WebkitTapHighlightColor: "transparent",
++                        }}
++                    >
++                        {row.icon}
++                        <span style={{ flex: "1 1 auto", textAlign: "left" }}>{row.label}</span>
++                        {current === row.mode ? <CheckIcon width={14} height={14} /> : null}
++                    </button>
++                ))}
++            </div>
++        </>
++    );
++}
++
++/* ── 主体 ─────────────────────────────────────────────────────────────── */
++
+ export function MobileBottomBar({ tab }: { tab: string }) {
+     const dispatch = useAppDispatch();
+     const [foldOpen, setFoldOpen] = React.useState(false);
+-    // 参考覆盖层总开关（👁）：只在本组件记 UI 态，实际可见性由 PianoRollPanel
++    const [eyeOpen, setEyeOpen] = React.useState(false);
++    const [drawMenuOpen, setDrawMenuOpen] = React.useState(false);
++    // 参考覆盖层总开关：只在本组件记 UI 态，实际可见性由 PianoRollPanel
+     // 监听 hs-toggle-secondary-overlays 事件后改变。
+     const [overlaysVisible, setOverlaysVisible] = React.useState(true);
+     const isParams = tab === "params";
+@@ -155,6 +439,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+     const s = useAppSelector(
+         (st) => ({
+             toolModeGroup: st.session.toolModeGroup,
++            drawToolMode: st.session.drawToolMode,
+             editParam: st.session.editParam,
+             paramEditorSyncTimeline: st.session.paramEditorSyncTimeline,
+             metronomeEnabled: st.session.metronomeEnabled,
+@@ -178,7 +463,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+ 
+     const rippleLabel = s.rippleMode === "off" ? "波纹:关" : s.rippleMode === "track" ? "波纹:轨" : "波纹:全";
+ 
+-    // 轨道页签浮层：10 个低频开关
++    /** ∧ 浮层：低频开关（10 项，内容与 0018 之前一致，一项不动）。 */
+     const trackFoldItems: FoldItem[] = [
+         {
+             id: "metronome",
+@@ -224,7 +509,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+             id: "autoScroll",
+             label: "自动滚动",
+             on: s.autoScrollEnabled,
+-            icon: <DoubleArrowRightIcon width={18} height={18} />,
++            icon: <DoubleArrowRightIcon width={16} height={16} />,
+             act: flip(toggleAutoScroll),
+         },
+         {
+@@ -243,9 +528,7 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+         { id: "ignoreGrouping", label: "忽略编组", on: s.ignoreGrouping, icon: <IconUnlink />, act: flip(toggleIgnoreGrouping) },
+     ];
+ 
+-    // 参数页签浮层：面板头部工具行已隐藏（ps1.png 布局），把「同步轨道」与
+-    // 「音高~声像参数选择」搬到这里（与面板内同款 id，redux 单一来源）。
+-    // 参考轨道组/导入 MIDI 依赖面板内部 handler，暂留在轨道页签文件流程，后续批次补。
++    /** 👁 浮层：覆盖层总开关 + 同步轨道 + 6 个参数选择（原 ∧ 里的那 7 项）。 */
+     const PARAM_TABS: Array<[string, string]> = [
+         ["pitch", "音高"],
+         ["formant_shift_cents", "共振峰"],
+@@ -254,7 +537,30 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+         ["volume", "音量"],
+         ["pan", "声像"],
+     ];
+-    const paramFoldItems: FoldItem[] = [
++    const eyeItems: FoldItem[] = [
++        {
++            id: "overlayAll",
++            label: overlaysVisible ? "覆盖层显示" : "覆盖层隐藏",
++            on: !overlaysVisible,
++            icon: (
++                <SvgWrap>
++                    <path
++                        d="M1.5 8 C3.5 4.8, 6 3.2, 8 3.2 C10 3.2, 12.5 4.8, 14.5 8 C12.5 11.2, 10 12.8, 8 12.8 C6 12.8, 3.5 11.2, 1.5 8 Z"
++                        fill="none" stroke="currentColor" strokeWidth="1.4"
++                    />
++                    <circle cx="8" cy="8" r="2.2" />
++                </SvgWrap>
++            ),
++            act: () => {
++                const next = !overlaysVisible;
++                setOverlaysVisible(next);
++                // 事件桥到 PianoRollPanel（覆盖层可见性是面板组件内 state，
++                // 见其「👁 总开关」注释；长期应提升 redux）。
++                window.dispatchEvent(
++                    new CustomEvent("hs-toggle-secondary-overlays", { detail: next }),
++                );
++            },
++        },
+         {
+             id: "syncTimeline",
+             label: "同步轨道",
+@@ -274,195 +580,179 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+         })),
+     ];
+ 
+-    const foldItems: FoldItem[] = isParams ? paramFoldItems : trackFoldItems;
+-
+-    // 视觉对齐原版（真机读到的 token）：选中 = Radix solid（accent 实底白字），
+-    // 未选中 = ghost（透明底 + accent 色图标）；直接用 Radix IconButton 继承主题，
+-    // 尺寸保持 ≥44 触摸目标（原版 24px 是桌面密度，手机不够按）。
+-    const iconBtn = (
+-        label: string,
+-        on: boolean,
+-        onClick: () => void,
+-        icon: React.ReactNode,
+-        extra: React.CSSProperties = {},
+-    ) => (
+-        <IconButton
+-            size="3"
+-            variant={on ? "solid" : "ghost"}
+-            aria-label={label}
+-            aria-pressed={on}
+-            onClick={onClick}
+-            className="hs-icon-btn"
+-            style={{ minWidth: 44, minHeight: 44, ...extra }}
+-        >
+-            {icon}
+-        </IconButton>
+-    );
++    /** 铅笔长按/点角标 → 工具子菜单（原版右键菜单的触屏等价物）。 */
++    const drawLongPressRef = React.useRef<number | null>(null);
++    const drawLongFiredRef = React.useRef(false);
++    const clearDrawLongPress = () => {
++        if (drawLongPressRef.current !== null) {
++            window.clearTimeout(drawLongPressRef.current);
++            drawLongPressRef.current = null;
++        }
++    };
++    const currentDrawTool = s.drawToolMode === "line" || s.drawToolMode === "vibrato" ? "vibrato" : "draw";
++
++    const openDrawMenu = () => {
++        clearDrawLongPress();
++        setFoldOpen(false);
++        setEyeOpen(false);
++        setDrawMenuOpen(true);
++    };
++
++    const onPencilPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
++        if (e.pointerType === "mouse") return;
++        clearDrawLongPress();
++        drawLongFiredRef.current = false;
++        drawLongPressRef.current = window.setTimeout(() => {
++            drawLongFiredRef.current = true;
++            openDrawMenu();
++        }, 400);
++    };
++
++    const onPencilClick = (e: React.MouseEvent<HTMLButtonElement>) => {
++        clearDrawLongPress();
++        if (drawLongFiredRef.current) {
++            // 长按已经开过菜单，抬手补发的 click 不再切换工具
++            drawLongFiredRef.current = false;
++            return;
++        }
++        // 点击落在右下角三角命中区（按钮右下 16×16）→ 开子菜单；否则切工具
++        const r = e.currentTarget.getBoundingClientRect();
++        const inCorner = e.clientX >= r.right - 18 && e.clientY >= r.bottom - 18;
++        if (inCorner) {
++            openDrawMenu();
++            return;
++        }
++        dispatch(setToolMode(currentDrawTool));
++    };
+ 
+     return (
+         <div
+-            className="shrink-0 relative flex items-center gap-1 px-1 bg-qt-window border-t border-qt-border"
+-            style={{ minHeight: MOBILE_BOTTOM_BAR_HEIGHT }}
++            className="shrink-0 relative flex items-center bg-qt-window border-t border-qt-border"
++            style={{ minHeight: MOBILE_BOTTOM_BAR_HEIGHT, paddingInline: 2, gap: 2 }}
+             role="toolbar"
+             aria-label="底部工具条"
+         >
+-            {isParams
+-                ? iconBtn("选择", s.toolModeGroup === "select", () => dispatch(setToolMode("select")), <CursorArrowIcon width={18} height={18} />)
+-                : null}
+-            {isParams
+-                ? iconBtn("绘制", s.toolModeGroup === "draw", () => dispatch(setToolMode("draw")), <Pencil1Icon width={18} height={18} />)
+-                : null}
+-
+-            {/* ∧ 折叠：两个页签都有（轨道=低频开关，参数=同步轨道+参数选择） */}
+-            {(
+-                <IconButton
+-                    size="3"
+-                    variant={foldOpen ? "solid" : "ghost"}
+-                    aria-label="更多开关"
+-                    aria-expanded={foldOpen}
+-                    onClick={() => setFoldOpen((v) => !v)}
+-                    className="hs-icon-btn"
+-                    style={{ minWidth: 44, minHeight: 44 }}
++            {isParams ? (
++                <BarButton
++                    label="选择"
++                    visual={s.toolModeGroup === "select" ? "solid" : "ghost"}
++                    active={s.toolModeGroup === "select"}
++                    onClick={() => dispatch(setToolMode("select"))}
+                 >
+-                    <SvgWrap>
+-                        <path d="M3 10 L8 5 L13 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+-                    </SvgWrap>
+-                </IconButton>
+-            )}
++                    <CursorArrowIcon width={16} height={16} />
++                </BarButton>
++            ) : null}
++            {isParams ? (
++                <BarButton
++                    label="绘制"
++                    visual={s.toolModeGroup === "draw" ? "solid" : "ghost"}
++                    active={s.toolModeGroup === "draw"}
++                    onClick={onPencilClick}
++                >
++                    <span
++                        onPointerDown={onPencilPointerDown}
++                        onPointerUp={clearDrawLongPress}
++                        onPointerCancel={clearDrawLongPress}
++                        onPointerLeave={clearDrawLongPress}
++                        style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
++                    >
++                        <IconPencilWithCorner vibrato={currentDrawTool === "vibrato"} />
++                    </span>
++                </BarButton>
++            ) : null}
+ 
++            {/* ∧ 更多开关：两个页签都有，内容 = 原有 10 项低频开关 */}
++            <BarButton
++                label="更多开关"
++                visual={foldOpen ? "solid" : "ghost"}
++                active={foldOpen}
++                ariaExpanded={foldOpen}
++                onClick={() => {
++                    setEyeOpen(false);
++                    setDrawMenuOpen(false);
++                    setFoldOpen((v) => !v);
++                }}
++            >
++                <SvgWrap>
++                    <path d="M3 10 L8 5 L13 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
++                </SvgWrap>
++            </BarButton>
++
++            {/* 👁 参数与覆盖层（仅参数页签）：内容 = 原 ∧ 里的 7 项 + 覆盖层总开关 */}
+             {isParams ? (
+-                <IconButton
+-                    size="3"
+-                    variant={overlaysVisible ? "ghost" : "solid"}
+-                    aria-label={overlaysVisible ? "隐藏所有覆盖层" : "显示所有覆盖层"}
+-                    aria-pressed={!overlaysVisible}
++                <BarButton
++                    label="参数与覆盖层"
++                    visual={eyeOpen ? "solid" : "ghost"}
++                    active={eyeOpen}
++                    ariaExpanded={eyeOpen}
+                     onClick={() => {
+-                        const next = !overlaysVisible;
+-                        setOverlaysVisible(next);
+-                        // 事件桥到 PianoRollPanel（覆盖层可见性是面板组件内 state，
+-                        // 见其「👁 总开关」注释；长期应提升 redux）。
+-                        window.dispatchEvent(
+-                            new CustomEvent("hs-toggle-secondary-overlays", { detail: next }),
+-                        );
++                        setFoldOpen(false);
++                        setDrawMenuOpen(false);
++                        setEyeOpen((v) => !v);
+                     }}
+-                    className="hs-icon-btn"
+-                    style={{ minWidth: 44, minHeight: 44 }}
+                 >
+                     <SvgWrap>
+                         <path d="M1.5 8 C3.5 4.8, 6 3.2, 8 3.2 C10 3.2, 12.5 4.8, 14.5 8 C12.5 11.2, 10 12.8, 8 12.8 C6 12.8, 3.5 11.2, 1.5 8 Z" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                         <circle cx="8" cy="8" r="2.2" />
+                     </SvgWrap>
+-                </IconButton>
++                </BarButton>
+             ) : null}
+ 
+             <span className="flex-1" />
+ 
+-            {/* ── 播放控制（并入本行右侧；录制保持红色语义）────────────── */}
+-            <IconButton
+-                size="3"
+-                variant="ghost"
+-                aria-label="停止"
++            {/* ── 播放控制：配色对齐桌面原版 Transport（停止=灰、播放=solid、录制=红）─ */}
++            <BarButton
++                label="停止"
++                visual="softGray"
+                 onClick={() => dispatch(stopAudioPlayback({ restoreAnchor: true }))}
+-                className="hs-icon-btn"
+-                style={{ minWidth: 48, minHeight: 44 }}
+             >
+-                <SvgWrap>
+-                    <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
+-                </SvgWrap>
+-            </IconButton>
+-            <IconButton
+-                size="3"
+-                variant={isPlaying ? "solid" : "ghost"}
+-                aria-label={isPlaying ? "暂停" : "播放"}
+-                aria-pressed={isPlaying}
++                <StopIcon width={16} height={16} />
++            </BarButton>
++            <BarButton
++                label={isPlaying ? "暂停" : "播放"}
++                // 原版播放键是 **solid 常亮**（不是"播放中才实底"）
++                visual="solid"
++                active={isPlaying}
+                 onClick={() => (isPlaying ? dispatch(stopAudioPlayback()) : dispatch(playOriginal()))}
+-                className="hs-icon-btn"
+-                style={{ minWidth: 48, minHeight: 44 }}
+             >
+-                <SvgWrap>
+-                    {isPlaying ? (
+-                        <>
+-                            <rect x="3.5" y="3" width="3.2" height="10" rx="1" />
+-                            <rect x="9.3" y="3" width="3.2" height="10" rx="1" />
+-                        </>
+-                    ) : (
+-                        <path d="M4.5 2.5 L13 8 L4.5 13.5 Z" />
+-                    )}
+-                </SvgWrap>
+-            </IconButton>
+-            <IconButton
+-                size="3"
+-                variant={recording.active ? "solid" : "ghost"}
+-                color={recording.active ? "red" : undefined}
+-                aria-label={recording.active ? "停止录制" : "录制"}
+-                aria-pressed={recording.active}
++                {isPlaying ? <PauseIcon width={16} height={16} /> : <PlayIcon width={16} height={16} />}
++            </BarButton>
++            <BarButton
++                label={recording.active ? "停止录制" : "录制"}
++                visual={recording.active ? "solidRed" : "softRed"}
++                active={recording.active}
+                 onClick={() => {
+                     if (recording.active) void dispatch(stopRecordingFlow());
+                     else if (recording.countdownRemaining > 0) void dispatch(cancelRecordingCountdown());
+                     else void dispatch(startRecordingFlow());
+                 }}
+-                className="hs-icon-btn"
+-                style={{ minWidth: 48, minHeight: 44 }}
+             >
+-                <SvgWrap>
+-                    <circle cx="8" cy="8" r="5.5" />
+-                </SvgWrap>
+-            </IconButton>
++                {recording.active ? (
++                    <svg width="16" height="16" viewBox="0 0 15 15" fill="currentColor" aria-hidden="true">
++                        <rect x="4" y="4" width="7" height="7" rx="1.2" />
++                    </svg>
++                ) : (
++                    <svg width="16" height="16" viewBox="0 0 15 15" fill="currentColor" aria-hidden="true">
++                        <circle cx="7.5" cy="7.5" r="4.2" />
++                    </svg>
++                )}
++            </BarButton>
+ 
++            {drawMenuOpen ? (
++                <DrawToolMenu
++                    current={currentDrawTool}
++                    onPick={(mode) => {
++                        dispatch(setToolMode(mode));
++                        setDrawMenuOpen(false);
++                    }}
++                    onClose={() => setDrawMenuOpen(false)}
++                />
++            ) : null}
+             {foldOpen ? (
+-                <>
+-                    <button
+-                        type="button"
+-                        aria-label="关闭更多开关"
+-                        onClick={() => setFoldOpen(false)}
+-                        className="fixed border-0 cursor-pointer"
+-                        style={{ inset: 0, background: "transparent", zIndex: 40 }}
+-                    />
+-                    <div
+-                        className="absolute bg-qt-window border border-qt-border"
+-                        style={{
+-                            bottom: "100%",
+-                            left: 4,
+-                            right: 4,
+-                            zIndex: 41,
+-                            borderRadius: 10,
+-                            padding: 6,
+-                            display: "grid",
+-                            gridTemplateColumns: "repeat(3, 1fr)",
+-                            gap: 4,
+-                        }}
+-                    >
+-                        {foldItems.map((item) => (
+-                            <button
+-                                key={item.id}
+-                                type="button"
+-                                onClick={item.act}
+-                                aria-pressed={item.on}
+-                                className="hs-icon-btn flex flex-col items-center justify-center bg-transparent border-0 cursor-pointer"
+-                                style={{
+-                                    minHeight: 52,
+-                                    padding: "4px 2px",
+-                                    fontSize: 11,
+-                                    borderRadius: 6,
+-                                    gap: 2,
+-                                    fontWeight: item.on ? 600 : 400,
+-                                    // 对齐原版 ParamToolbarPill：active = accent-9 实底白字，
+-                                    // 未选中 = 透明底 + accent 前景（图标 currentColor 一并继承）
+-                                    color: item.on
+-                                        ? "var(--white-a12, #fff)"
+-                                        : "var(--accent-11, rgb(177, 169, 255))",
+-                                    background: item.on
+-                                        ? "var(--accent-9, rgb(91, 91, 214))"
+-                                        : "transparent",
+-                                    WebkitTapHighlightColor: "transparent",
+-                                }}
+-                            >
+-                                {item.icon ?? null}
+-                                <span>{item.label}</span>
+-                            </button>
+-                        ))}
+-                    </div>
+-                </>
++                <FoldPanel title="更多开关" items={trackFoldItems} onClose={() => setFoldOpen(false)} />
++            ) : null}
++            {eyeOpen ? (
++                <FoldPanel title="参数与覆盖层" items={eyeItems} onClose={() => setEyeOpen(false)} />
+             ) : null}
+         </div>
+     );
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 2273d9e..295d577 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -486,10 +486,40 @@ textarea {
+     tab-size: 4;
+ }
+ 
++/* ── 自绘滚动条 / 滑条：触屏拖拽的两条硬要求（2026-09-19 用户清单）──────────
++   ① `touch-action: none`：不加的话触屏上手指划几像素就被浏览器接管为翻页/滚动，
++      派发 pointercancel 打断拖拽 —— 表现就是「滑条只能小幅划动」（与轨道头音量
++      旋钮同一根因，那次只修了旋钮）。鼠标不受影响（touch-action 只管触摸输入）。
++   ② 命中区：轨道视觉 8px，手机上加厚到 20px（thumb 仍画 8px 居中），
++      否则手指按不住。桌面维持原样。                                       */
++.hs-sb,
++.hs-sb-thumb {
++    touch-action: none;
++}
++/* 原生 range 滑条（平滑度等）走同一约定：拖 value 时不许被合成滚动打断。 */
++.qt-range {
++    touch-action: none;
++}
++
+ /* ── 手机形态（<600px）排版覆盖（docs/04；全项目第一条响应式规则）──────────
+    轨道头桌面固定 w-64(256px)。360px 宽的手机上它吃掉 71%，时间线画布只剩 104px，
+    根本没法编辑。压窄到 132px，画布拿到 ~227px。桌面（≥600px）不受影响。 */
+ @media (max-width: 599px) {
++    /* 滚动条命中区外扩（视觉不变）：横条向上长 12px 进内容区、竖条向左长 12px。 */
++    .hs-sb-v {
++        width: 20px !important;
++    }
++    .hs-sb-v .hs-sb-thumb {
++        width: 8px !important;
++        left: 6px !important;
++    }
++    .hs-sb-h {
++        height: 20px !important;
++    }
++    .hs-sb-h .hs-sb-thumb {
++        height: 8px !important;
++        top: 6px !important;
++    }
+     .hs-tracklist-head {
+         width: 132px;
+     }
+@@ -561,6 +591,12 @@ textarea {
+     filter: brightness(0.88);
+ }
+ 
++/* 底栏按钮（MobileBottomBar）：命中区 40px、视觉 28px 的「内盒子」，
++   按压效果作用在内盒子上（与原版 IconButton 的按压变暗一致）。 */
++.hs-bar-btn:active .hs-bar-vis {
++    filter: brightness(0.88);
++}
++
+ /* 无键盘设备上，长按/右键菜单里的快捷键列（Ctrl+C 等）是噪音 —— 隐藏。
+    覆盖两种菜单容器：Radix popper 版 与 EditContextMenu 的 fixed z-[9999] 版；
+    只命中各自容器内的 10px 灰字（shortcutClass），不影响其它位置的 10px 文本。 */

@@ -1,0 +1,454 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 4398fc4b..412d444d 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -9,6 +9,9 @@ import { webApi } from "./services/webviewApi";
+ import { settingsApi } from "./services/api/settings";
+ import { fileBrowserApi } from "./services/api/fileBrowser";
+ import { IS_LINUX } from "./utils/platform";
++import { useLayoutMode } from "./utils/layoutMode";
++import { MobileTopBar } from "./components/mobile/MobileTopBar";
++import { BottomTabs, type MobileTab } from "./components/mobile/BottomTabs";
+ import { clipboardErrorKey } from "./utils/clipboardError";
+ import {
+     closeVocalShifterSkippedFilesDialog,
+@@ -476,6 +479,11 @@ function AppInner() {
+     const splitRatioRef = useRef(splitRatio);
+     const [isDragging, setIsDragging] = useState(false);
+     const [quickSearchOpen, setQuickSearchOpen] = useState(false);
++
++    // 三套布局（ADR-006 / docs/04 §2）：phone 下时间线与参数面板互斥，由底部页签切换。
++    const layoutMode = useLayoutMode();
++    const isPhone = layoutMode === "phone";
++    const [mobileTab, setMobileTab] = useState<MobileTab>("timeline");
+     const [autoBackupSettings, setAutoBackupSettings] = useState<AutoBackupSettings>(
+         DEFAULT_AUTO_BACKUP_SETTINGS,
+     );
+@@ -3218,6 +3226,48 @@ function AppInner() {
+         (item) => item.action === "processing",
+     );
+ 
++    // 时间线面板的 props 收成一份：桌面分支与手机分支复用同一份实例，
++    // 避免四十多个 props 在两处各写一遍（上游迭代时最容易漏改的地方）。
++    const timelinePanelProps = {
++        midiClipDialogOpen,
++        midiClipPath,
++        midiClipStartSec,
++        midiClipTrackId,
++        midiClipClipboardGuid,
++        fillGaps,
++        multiTrackMerge,
++        importBpmAsProject,
++        noteBpmMode,
++        specifiedBpm,
++        importPosition,
++        closeLeadingGap,
++        onMidiClipDialogOpenChange: setMidiClipDialogOpen,
++        onMidiClipPathChange: setMidiClipPath,
++        onMidiClipStartSecChange: setMidiClipStartSec,
++        onMidiClipTrackIdChange: setMidiClipTrackId,
++        onFillGapsChange: handleFillGapsChange,
++        onMultiTrackMergeChange: handleMultiTrackMergeChange,
++        onImportBpmAsProjectChange: handleImportBpmAsProjectChange,
++        onNoteBpmModeChange: handleNoteBpmModeChange,
++        onSpecifiedBpmChange: handleSpecifiedBpmChange,
++        onImportPositionChange: handleImportPositionChange,
++        onCloseLeadingGapChange: handleCloseLeadingGapChange,
++        importTempoMapEnabled,
++        onImportTempoMapEnabledChange: handleImportTempoMapEnabledChange,
++        importTempoMapTempo,
++        onImportTempoMapTempoChange: handleImportTempoMapTempoChange,
++        importTempoMapTimeSignature,
++        onImportTempoMapTimeSignatureChange: handleImportTempoMapTimeSignatureChange,
++        importTempoMapKeySignature,
++        onImportTempoMapKeySignatureChange: handleImportTempoMapKeySignatureChange,
++        midiDialogSource,
++        onMidiDialogSourceChange: setMidiDialogSource,
++        importTargetMenu: midiImportTargetMenu,
++        onImportTargetMenuChange: handleImportTargetMenuChange,
++        importTargetDragDrop: midiImportTargetDragDrop,
++        onImportTargetDragDropChange: handleImportTargetDragDropChange,
++    };
++
+     return (
+         <Flex
+             direction="column"
+@@ -3779,25 +3829,37 @@ function AppInner() {
+                 onConfirm={handleImportProjectConfirmed}
+             />
+ 
+-            <MenuBar
+-                onNewProject={handleNewProject}
+-                onOpenProject={handleOpenProject}
+-                onOpenRecentProject={handleOpenRecentProject}
+-                onRecaptureMissingMedia={handleRecaptureMissingMedia}
+-                onImportProject={handleImportProject}
+-                onExit={handleExitApp}
+-                onImportMidiFromMenu={handleImportMidiFromMenu}
+-                autoBackupSettings={autoBackupSettings}
+-                onAutoBackupSettingsSaved={handleAutoBackupSettingsSaved}
+-                autoReloadModifiedMedia={autoReloadModifiedMedia}
+-                onAutoReloadModifiedMediaChange={handleAutoReloadModifiedMediaChange}
+-                loopNewClips={loopNewClips}
+-                onLoopNewClipsChange={handleLoopNewClipsChange}
+-            />
+-            <ActionBar />
++            {isPhone ? (
++                <MobileTopBar onNewProject={handleNewProject} onOpenProject={handleOpenProject} />
++            ) : (
++                <MenuBar
++                    onNewProject={handleNewProject}
++                    onOpenProject={handleOpenProject}
++                    onOpenRecentProject={handleOpenRecentProject}
++                    onRecaptureMissingMedia={handleRecaptureMissingMedia}
++                    onImportProject={handleImportProject}
++                    onExit={handleExitApp}
++                    onImportMidiFromMenu={handleImportMidiFromMenu}
++                    autoBackupSettings={autoBackupSettings}
++                    onAutoBackupSettingsSaved={handleAutoBackupSettingsSaved}
++                    autoReloadModifiedMedia={autoReloadModifiedMedia}
++                    onAutoReloadModifiedMediaChange={handleAutoReloadModifiedMediaChange}
++                    loopNewClips={loopNewClips}
++                    onLoopNewClipsChange={handleLoopNewClipsChange}
++                />
++            )}
++            {isPhone ? null : <ActionBar />}
+ 
+             {/* Main Content Area: Splitter + optional right-side panels */}
+-            <Flex className="flex-1 min-h-0">
++            {isPhone ? (
++                <Box className="flex-1 min-h-0 relative bg-qt-base">
++                    {mobileTab === "timeline" ? <TimelinePanel {...timelinePanelProps} /> : null}
++                    {mobileTab === "params" ? <PianoRollPanel /> : null}
++                    {mobileTab === "files" ? <FileBrowserPanel /> : null}
++                    {mobileTab === "notes" ? <NotebookPanel /> : null}
++                </Box>
++            ) : (
++                <Flex className="flex-1 min-h-0">
+                 {/* Left: Timeline / PianoRoll vertical splitter */}
+                 <div ref={containerRef} className="flex-1 min-w-0 min-h-0 flex flex-col">
+                     {/* Top: Timeline / Tracks */}
+@@ -3805,49 +3867,7 @@ function AppInner() {
+                         className="min-h-[200px] border-b border-qt-border relative bg-qt-base"
+                         style={{ flexGrow: splitRatio, flexBasis: 0 }}
+                     >
+-                        <TimelinePanel
+-                            midiClipDialogOpen={midiClipDialogOpen}
+-                            midiClipPath={midiClipPath}
+-                            midiClipStartSec={midiClipStartSec}
+-                            midiClipTrackId={midiClipTrackId}
+-                            midiClipClipboardGuid={midiClipClipboardGuid}
+-                            fillGaps={fillGaps}
+-                            multiTrackMerge={multiTrackMerge}
+-                            importBpmAsProject={importBpmAsProject}
+-                            noteBpmMode={noteBpmMode}
+-                            specifiedBpm={specifiedBpm}
+-                            importPosition={importPosition}
+-                            closeLeadingGap={closeLeadingGap}
+-                            onMidiClipDialogOpenChange={setMidiClipDialogOpen}
+-                            onMidiClipPathChange={setMidiClipPath}
+-                            onMidiClipStartSecChange={setMidiClipStartSec}
+-                            onMidiClipTrackIdChange={setMidiClipTrackId}
+-                            onFillGapsChange={handleFillGapsChange}
+-                            onMultiTrackMergeChange={handleMultiTrackMergeChange}
+-                            onImportBpmAsProjectChange={handleImportBpmAsProjectChange}
+-                            onNoteBpmModeChange={handleNoteBpmModeChange}
+-                            onSpecifiedBpmChange={handleSpecifiedBpmChange}
+-                            onImportPositionChange={handleImportPositionChange}
+-                            onCloseLeadingGapChange={handleCloseLeadingGapChange}
+-                            importTempoMapEnabled={importTempoMapEnabled}
+-                            onImportTempoMapEnabledChange={handleImportTempoMapEnabledChange}
+-                            importTempoMapTempo={importTempoMapTempo}
+-                            onImportTempoMapTempoChange={handleImportTempoMapTempoChange}
+-                            importTempoMapTimeSignature={importTempoMapTimeSignature}
+-                            onImportTempoMapTimeSignatureChange={
+-                                handleImportTempoMapTimeSignatureChange
+-                            }
+-                            importTempoMapKeySignature={importTempoMapKeySignature}
+-                            onImportTempoMapKeySignatureChange={
+-                                handleImportTempoMapKeySignatureChange
+-                            }
+-                            midiDialogSource={midiDialogSource}
+-                            onMidiDialogSourceChange={setMidiDialogSource}
+-                            importTargetMenu={midiImportTargetMenu}
+-                            onImportTargetMenuChange={handleImportTargetMenuChange}
+-                            importTargetDragDrop={midiImportTargetDragDrop}
+-                            onImportTargetDragDropChange={handleImportTargetDragDropChange}
+-                        />
++                        <TimelinePanel {...timelinePanelProps} />
+                     </Box>
+ 
+                     {/* Splitter */}
+@@ -3883,6 +3903,9 @@ function AppInner() {
+                     </Flex>
+                 )}
+             </Flex>
++            )}
++
++            {isPhone ? <BottomTabs active={mobileTab} onChange={setMobileTab} /> : null}
+ 
+             {/* Quick Search Popup */}
+             <QuickSearchPopup open={quickSearchOpen} onClose={() => setQuickSearchOpen(false)} />
+diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
+index 2b3e50e6..fad8adeb 100644
+--- a/frontend/src/components/layout/timeline/TrackList.tsx
++++ b/frontend/src/components/layout/timeline/TrackList.tsx
+@@ -1343,7 +1343,7 @@ const TrackListInner: React.FC<TrackListProps> = ({
+         // closest 就近解析优先命中，见 focusSurface.ts / data-hs-surface）。
+         <Flex
+             direction="column"
+-            className="w-64 border-r border-qt-border bg-qt-window shrink-0"
++            className="w-64 hs-tracklist-head border-r border-qt-border bg-qt-window shrink-0"
+             data-hs-surface="trackHeader"
+         >
+             <Box
+diff --git a/frontend/src/components/mobile/BottomTabs.tsx b/frontend/src/components/mobile/BottomTabs.tsx
+new file mode 100644
+index 00000000..86c0e804
+--- /dev/null
++++ b/frontend/src/components/mobile/BottomTabs.tsx
+@@ -0,0 +1,58 @@
++/**
++ * BottomTabs — 手机形态的底部页签（`docs/04` §3.2）。
++ *
++ * 手机上时间线（~250px 有效高）与参数面板（~300px）在竖屏放不下，因此二者**互斥**，
++ * 由底部页签切换，而不是像桌面那样上下并排。
++ *
++ * 触摸目标 ≥ 56px（Material 要求 48dp，这里留出富余）；字号 16px 起。
++ * 颜色一律继承主题（用 `currentColor`），不硬编码，自动适配明暗主题。
++ */
++
++export type MobileTab = "timeline" | "params" | "files" | "notes";
++
++interface BottomTabsProps {
++    active: MobileTab;
++    onChange: (tab: MobileTab) => void;
++}
++
++const TABS: ReadonlyArray<{ id: MobileTab; label: string }> = [
++    { id: "timeline", label: "轨道" },
++    { id: "params", label: "参数" },
++    { id: "files", label: "文件" },
++    { id: "notes", label: "笔记" },
++];
++
++export const MOBILE_TAB_HEIGHT = 56;
++
++export function BottomTabs({ active, onChange }: BottomTabsProps) {
++    return (
++        <nav
++            className="shrink-0 flex bg-qt-window border-t border-qt-border"
++            style={{ paddingBottom: "env(safe-area-inset-bottom, 0px)" }}
++            aria-label="主面板切换"
++        >
++            {TABS.map((tab) => {
++                const selected = tab.id === active;
++                return (
++                    <button
++                        key={tab.id}
++                        type="button"
++                        onClick={() => onChange(tab.id)}
++                        aria-current={selected ? "page" : undefined}
++                        className="flex-1 flex items-center justify-center bg-transparent border-0 cursor-pointer"
++                        style={{
++                            minHeight: MOBILE_TAB_HEIGHT,
++                            fontSize: 16,
++                            fontWeight: selected ? 600 : 400,
++                            opacity: selected ? 1 : 0.6,
++                            borderTop: selected ? "2px solid currentColor" : "2px solid transparent",
++                            WebkitTapHighlightColor: "transparent",
++                        }}
++                    >
++                        {tab.label}
++                    </button>
++                );
++            })}
++        </nav>
++    );
++}
+diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
+new file mode 100644
+index 00000000..1c5fac80
+--- /dev/null
++++ b/frontend/src/components/mobile/MobileTopBar.tsx
+@@ -0,0 +1,104 @@
++/**
++ * MobileTopBar — 手机形态的顶部栏（替代桌面 MenuBar，`docs/04` §9）。
++ *
++ * 手机上没有顶部菜单栏的使用习惯，桌面 `MenuBar` 的菜单语义改为汉堡入口。
++ * 现阶段只把最关键的「新建 / 打开工程」放进来（否则手机上一启动就没有任何工程入口），
++ * 其余菜单项在触控交互阶段（`docs/03`）补齐。
++ *
++ * 顶部预留 `env(safe-area-inset-top)`：inset 修复后状态栏仍会压住最顶端的内容。
++ */
++
++import React from "react";
++
++interface MobileTopBarProps {
++    onNewProject?: () => void;
++    onOpenProject?: () => void;
++}
++
++export const MOBILE_TOP_BAR_HEIGHT = 48;
++
++export function MobileTopBar({ onNewProject, onOpenProject }: MobileTopBarProps) {
++    const [menuOpen, setMenuOpen] = React.useState(false);
++
++    const run = (action?: () => void) => () => {
++        setMenuOpen(false);
++        action?.();
++    };
++
++    const items: ReadonlyArray<{ label: string; action?: () => void }> = [
++        { label: "新建工程", action: onNewProject },
++        { label: "打开工程", action: onOpenProject },
++    ];
++
++    return (
++        <header
++            className="shrink-0 relative flex items-center gap-2 px-3 bg-qt-window border-b border-qt-border"
++            style={{
++                minHeight: MOBILE_TOP_BAR_HEIGHT,
++                paddingTop: "env(safe-area-inset-top, 0px)",
++            }}
++        >
++            <button
++                type="button"
++                onClick={() => setMenuOpen((v) => !v)}
++                aria-label="主菜单"
++                aria-expanded={menuOpen}
++                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
++                style={{
++                    minWidth: 44,
++                    minHeight: 44,
++                    fontSize: 18,
++                    WebkitTapHighlightColor: "transparent",
++                }}
++            >
++                <span aria-hidden="true">≡</span>
++            </button>
++
++            <span className="flex-1 truncate" style={{ fontSize: 16, fontWeight: 500 }}>
++                HiFiShifter
++            </span>
++
++            {menuOpen ? (
++                <>
++                    <button
++                        type="button"
++                        aria-label="关闭菜单"
++                        onClick={() => setMenuOpen(false)}
++                        className="fixed border-0 cursor-pointer"
++                        style={{ inset: 0, background: "transparent", zIndex: 40 }}
++                    />
++                    <div
++                        role="menu"
++                        className="absolute bg-qt-window border border-qt-border"
++                        style={{
++                            top: "100%",
++                            left: 8,
++                            minWidth: 180,
++                            zIndex: 41,
++                            borderRadius: 8,
++                            overflow: "hidden",
++                        }}
++                    >
++                        {items.map((item) => (
++                            <button
++                                key={item.label}
++                                type="button"
++                                role="menuitem"
++                                onClick={run(item.action)}
++                                className="flex w-full items-center bg-transparent border-0 cursor-pointer"
++                                style={{
++                                    minHeight: 48,
++                                    padding: "0 16px",
++                                    fontSize: 16,
++                                    textAlign: "left",
++                                }}
++                            >
++                                {item.label}
++                            </button>
++                        ))}
++                    </div>
++                </>
++            ) : null}
++        </header>
++    );
++}
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index 3c6faa33..29f737e2 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -485,3 +485,12 @@ textarea {
+     max-width: 400px;
+     tab-size: 4;
+ }
++
++/* ── 手机形态（<600px）排版覆盖（docs/04；全项目第一条响应式规则）──────────
++   轨道头桌面固定 w-64(256px)。360px 宽的手机上它吃掉 71%，时间线画布只剩 104px，
++   根本没法编辑。压窄到 132px，画布拿到 ~227px。桌面（≥600px）不受影响。 */
++@media (max-width: 599px) {
++    .hs-tracklist-head {
++        width: 132px;
++    }
++}
+diff --git a/frontend/src/utils/layoutMode.ts b/frontend/src/utils/layoutMode.ts
+new file mode 100644
+index 00000000..2e00f306
+--- /dev/null
++++ b/frontend/src/utils/layoutMode.ts
+@@ -0,0 +1,53 @@
++/**
++ * layoutMode.ts — 三套布局的形态判定（ADR-006 / ADR-007；`docs/04` §2）。
++ *
++ * - `phone`   宽 < 600 —— 单面板 + 底部页签，时间线与参数面板**互斥**
++ * - `tablet`  宽 ≥ 600 且高 ≥ 500 —— 可停靠多面板（不是手机布局的放大）
++ * - `desktop` 宽 ≥ 1280 —— 上游现有布局，一行不改
++ *
++ * 判据同时看宽和高：横屏手机宽度够但高度只有 360，塞不下双面板，仍归 phone。
++ * 支持 `?layout=phone|tablet|desktop` 强制切换，便于在一台设备上对照三套布局。
++ */
++
++import { useEffect, useState } from "react";
++
++export type LayoutMode = "phone" | "tablet" | "desktop";
++
++export function resolveLayoutMode(w: number, h: number, forced?: string | null): LayoutMode {
++    if (forced === "phone" || forced === "tablet" || forced === "desktop") return forced;
++    if (w >= 1280) return "desktop";
++    if (w >= 600 && h >= 500) return "tablet";
++    return "phone";
++}
++
++/** 读取 URL 上的强制布局参数（?layout=phone）。 */
++export function readForcedLayoutMode(): string | null {
++    if (typeof window === "undefined") return null;
++    try {
++        return new URLSearchParams(window.location.search).get("layout");
++    } catch {
++        return null;
++    }
++}
++
++function currentMode(): LayoutMode {
++    if (typeof window === "undefined") return "desktop";
++    return resolveLayoutMode(window.innerWidth, window.innerHeight, readForcedLayoutMode());
++}
++
++/** 订阅视口尺寸变化，返回当前形态。 */
++export function useLayoutMode(): LayoutMode {
++    const [mode, setMode] = useState<LayoutMode>(currentMode);
++
++    useEffect(() => {
++        const update = () => setMode(currentMode());
++        window.addEventListener("resize", update);
++        window.addEventListener("orientationchange", update);
++        return () => {
++            window.removeEventListener("resize", update);
++            window.removeEventListener("orientationchange", update);
++        };
++    }, []);
++
++    return mode;
++}

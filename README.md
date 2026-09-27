@@ -1,309 +1,225 @@
-# HiFiShifter
+# HiFiShifter Mobile（安卓移植）
 
-[简体中文](README.md) | [繁體中文](docs/i18n/README_zh-TW.md) | [English](docs/i18n/README_en.md) | [日本語](docs/i18n/README_ja.md) | [한국어](docs/i18n/README_ko.md)
+把 [ARounder-183/HiFiShifter](https://github.com/ARounder-183/HiFiShifter)（Tauri 2 + React 的图形化人声编辑 / 人力 Vocaloid 调参工具）移植到 Android。
 
-HiFiShifter 是一个图形化人声编辑与合成工具。它支持多轨道音频块处理，并以轨道组为单位，使用多种声码器完成人声修音、人力调参功能，实现人力VOCALOID制作的拼调一体化。
+**当前阶段（2026-09-18）：上游本体已在 Android 上跑起来。**
 
-**当前项目仍在开发迭代中，未对全链路进行测试，可能存在诸多 BUG 或不稳定问题。**
+| 里程碑 | 状态 |
+| :--- | :--- |
+| 方案与决策（`docs/00`–`docs/08`） | ✅ 完成 |
+| **M0 探针**（真机 + 模拟器双端） | ✅ 全绿，四条卡点全部有了实测结论（见 [10 文档](docs/10-M0探针实测结果.md)） |
+| **M1 打通**（改上游代码让它编得过 Android） | ✅ `cargo check --target aarch64-linux-android` **0 错误**（含 WORLD / SoundTouch / Signalsmith 的完整 native 交叉编译）；产出 **4 个可重放补丁**（全部通过 `git apply --reverse --check`） |
+| **首次 APK 构建** | ✅ arm64（256.5 MB）与 x86_64（269.0 MB）双向打通，APK 审计零孤儿条目 |
+| **M2 首次冒烟** | ✅ **应用跑起来了**：`MainActivity` 存活、PSS 150 MB、无 Rust panic、`tauri.localhost` 前端加载、**WebGL2 渲染内核在跑**、中文渲染正常（截图见 `docs/screenshots/`） |
+| M2 正式内容（模型路径收口 / SAF / 裁命令 / 体积或手势与布局） | ⏳ 下一步 |
 
-![预览图](docs/preview.png)
+> 冒烟截图同时**实测印证了 [04 文档](docs/04-小屏排版适配.md) 对小屏排版的全部预判**：
+> 菜单栏仍是桌面尺寸、参数面板页签文字互相重叠、时间线区被压成很窄一条。
+> 也就是说「桌面 UI 直接搬上手机」确实不可用 —— 三套布局是必需的，不是过度设计。
 
-## 安装
+---
 
-请直接在仓库侧边选择适合自己系统的Release版本下载安装
+## 一、先看结论（7 条）
 
-## 基本原理
+1. **路线确定**：走 **Tauri 2 官方 Android 通道**，保留全部 Rust 后端（7.1 万行）与 React 前端（10.4 万行），只做「平台裁剪 + 交互层适配 + 多形态排版」三件事。不需要重写音频引擎，不需要把算法搬去 Kotlin。
+2. **上限很高、但有四个硬卡点**——**2026-09-18 已实测（见 [10 文档](docs/10-M0探针实测结果.md)）**：
+   - ✅ `ort 加载 ONNX Runtime`：已通。`onnxruntime-android:1.28.0` + `load-dynamic` + **裸 soname** 即可。
+   - ✅ `cpal/Oboe 出声`：已通（回调 276828 样本／3 秒）。**但真正的阻塞和原预判完全不同**——
+     不是 `libc++_shared.so`（Tauri 已自动处理），而是 **`ndk_context` 从未被 Tauri 栈初始化，
+     而 cpal 强依赖它、未初始化时直接 panic**。已用 `JNI_OnLoad` + `ActivityThread.currentApplication()` 修复。
+   - ✅ `184 MB 模型怎么进包与怎么被读到`：路线确认（`resource_dir()` 实测返回 `asset://localhost/`，
+     Tauri resources 落在 `assets/<原名>` 无前缀），拷贝吞吐 47–175 MB/s → **外推 184 MB 只需 1–4 秒**。
+   - ⏳ `content://` 文件访问（SAF）：**探针尚未覆盖**，仍是未验证项。
+3. **没有捷径**：上游 18 个分支、11 个 fork，**没有任何移动端代码**。但核实后发现**也不需要从任何分支摘代码**——见第 6 条。
+4. **主要工作量在 UI，不在算法**：触控适配（45 处右键 + 61 处鼠标键判断 + 124 处滚轮 + 115 处键盘依赖）与多形态排版（**全前端 0 处 `@media`**、98 处硬编码 px 字号、49 处文字截断 + 91 处失效的 hover tooltip）合计是本项目最大的成本。
+5. **好消息之一**：上游已全面使用 **Pointer Events**（`pointerdown/move/up` 共 258 处，`touchstart` 0 处）。
+6. **好消息之二（已核实，推翻了初版两处结论）**：
+   - `develop` **已自带完整 WebGL2 渲染内核**（`renderKernel/gl/*` + `waveform/surfaceRenderer` + 字形图集管线）与**离线性能基准**（`npm run bench`），且已有针对「10 轨 / 400 clip / 全览缩放」卡顿的性能设计文档。→ **渲染性能不需要我们做**。
+   - **双指纵横缩放/平移所需的内核 API 已经全部存在**：`scrollKernel` 的 `setViewport`（水平「缩放+位置」原子提交）与 `setRowHeightAndScrollTop`（竖直原子提交）就是为此写的，且 `setZoom` 的锚点**明确允许落在视口之外**——"缩放中心为两指中点"天然成立。→ **这部分是接线工作，不是从零实现**。
+7. **一个容易踩的坑**：判断上游分支价值必须用**最新活跃分支（`develop`）**做基准。用陈旧的 `main` 会得出完全误导的数字（详见 [00](docs/00-上游调研与分支盘点.md) §2）。
 
-HiFiShifter 使用类似 UTAU 的离线渲染方式，对时间线中的每个音频块进行处理、渲染、缓存，最后再输入到播放系统中，因此其对短音频块有着更快的处理效率。
+---
 
-HiFiShifter 提供了一个统一的渲染接口，以便未来增添更多的算法支持。
+## 二、已确定的决策（2026-09-18）
 
-## 工作流推荐
+| 项 | 决定 |
+| :--- | :--- |
+| **屏幕形态（Q1）** | **手机必须好用**；**平板不复用手机布局**，参照 FL Studio Mobile 走「可停靠多面板 + 可拖分隔条」。→ 三套并存：`phone` / `tablet` / `desktop` |
+| **模型分发（Q2）** | 内置 `nsf_hifigan`(54 MB)；`hnsep`(88 MB) / `fcpe`(41 MB) 为可选包，**应用内下载 + 本地文件导入双通道，且离线可用**（下载后永久离线，不做联网校验，不做联网阻断） |
+| **后台播放（Q3）** | 第一版不做（退后台即暂停，不加前台服务与通知） |
+| **ABI（Q4）** | **仅 `arm64-v8a`**；AVD 也必须用 arm64 镜像 |
+| **minSdk（Q5）** | **26（Android 8.0）** |
+| **GitHub fork（Q6）** | 建真 fork；**凭据相关操作（创建 fork / `git push` / 改可见性）由你执行**，我到该步会提醒 |
+| **上游分支摘取（Q7）** | **不摘任何分支**。`develop` 已经比那些分支都新 |
 
-我们推荐的工作流是：
+完整 ADR 见 [06 文档](docs/06-风险登记与决策记录.md)，落地细节见 [07 文档](docs/07-决策落地与FLM式自适应布局.md)。
 
-1. 通过其他 DAW 或切片软件准备好人力所需的短切片音源
-2. 在 HiFiShifter 中完成音频的拼贴和调音
+---
 
-当然，HiFiShifter 也支持以下操作方便从其他软件的工程迁移：
+## 三、文档索引
 
-1. 直接打开 VocalShifter 工程
-2. 直接打开 Reaper 工程
-3. 解析 VocalShifter 剪贴板内容，支持将 VocalShifter 中的参数粘贴到 HiFiShifter 参数区中。
-4. 解析 Reaper 剪贴板内容，支持直接将 Reaper 的 Items 粘贴到 HiFiShifter 中
+| 文档 | 内容 | 什么时候看 |
+| :--- | :--- | :--- |
+| [00 · 上游调研与分支盘点](docs/00-上游调研与分支盘点.md) | 仓库概况、18 个分支逐条价值评估（已按 `develop` 为基准更正）、11 个 fork 盘点、代码平台耦合量化 | 想了解"为什么选这个基线" |
+| [01 · 移植方案总览](docs/01-移植方案总览.md) | 三条技术路线对比与选型、**功能裁剪表**、里程碑 M0–M5、仓库结构、四个技术卡点的方案对比、工作量估算 | **先看这份** |
+| [02 · 后端改造清单](docs/02-后端改造清单.md) | 依赖逐条判定、逐文件裁剪清单、`build.rs` 改造、模型加载重做、7 项 M0 探针 | 开始改 Rust 代码时 |
+| [03 · 触控交互适配](docs/03-触控交互适配.md) | 桌面→触控完整映射表、4 个交互决策、手势层结构、长按/模式化设计 | 做交互时 |
+| [04 · 小屏排版适配](docs/04-小屏排版适配.md) | 三类问题（显示不全/被遮挡/按钮太小）的量化定位与专项治理、**三套布局骨架**、逐界面清单 | 做 UI 时 |
+| [05 · 测试环境与验收](docs/05-测试环境与验收.md) | **四层测试环境**、CDP 调试、排版审计与手势回归脚本、性能基准、设备矩阵、验收流程 | **动手前先搭环境** |
+| [06 · 风险登记与决策记录](docs/06-风险登记与决策记录.md) | 13 条风险表、**ADR-001 ~ ADR-013**、Q1–Q7 闭环记录、本地环境坑 | 决策与排期时 |
+| [07 · 决策落地与 FLM 式自适应布局](docs/07-决策落地与FLM式自适应布局.md) | Q1–Q7 落地细则、**FLM 事实核对表 + 三套布局规范**、模型分包与离线保证、**GitHub 操作步骤与登录时刻清单**、两处结论更正 | 想确认"为什么这么做" |
+| [08 · 双指手势与视口内核对接规范](docs/08-双指手势与视口内核对接规范.md) | **内核 API 1:1 映射**、统一的「中点锚定」公式、轴向保护（死区/轴锁定/三指）、手势状态机、提交时序、验证方案 | **做双指手势时必读** |
+| [09 · 环境盘点与 M0 探针](docs/09-环境盘点与M0探针.md) | 本机工具链逐项实测（Rust / NDK / emulator / JDK17 / 镜像源）、M0 探针工程说明、环境坑 | 复现环境时 |
+| [10 · M0 探针实测结果](docs/10-M0探针实测结果.md) | **逐探针实测输出**、头号发现 `ndk_context`（含解法与证据链）、`load-dynamic` 静态符号陷阱、APK 体积虚胖、对 01–06 的修正 | **想知道实测结论时** |
+| [11 · SAF 文件访问设计](docs/11-SAF文件访问设计.md) | **`content://` 在边界物化成真实路径**的核心决策、Kotlin↔Rust 双向 JNI 桥、三个 SAF 动作、另存为的状态问题、**不靠点界面就能验证的方法** | **做文件导入时** |
 
-## 功能介绍
+### M2 进展（2026-09-18）
 
-### 布局介绍
+| 项 | 状态 |
+| :--- | :--- |
+| ① 模型/资源路径收口 | ✅ **已完成并实测**：`src/platform/resources.rs` 把 `assets/models/**` 物化到 `app_data_dir`（184 MB **逐字节**与 APK 内声明一致），上游三个声码器模块**零改动**；随后 PSS 150 → 361 MB，证明模型真被加载 |
+| ①′ 新发现：Android 日志后端 | ✅ **已完成**：上游 `logging::init_logging()` 只在 `main.rs` 调用，移动端**一个 logger 都没有**；已补 `src/platform/logging.rs`（logcat + 落盘双通道） |
+| ② SAF 文件访问 | 📐 **设计定稿**（[docs/11](docs/11-SAF文件访问设计.md)），待实现 |
+| ③ 被裁命令返回 `unsupported` | ✅ **验证完毕：上游已做对**（剪贴板 / loopback / vslib 都有降级分支）。剩余缺口是前端漏了 1 个错误码 → 转布局阶段隐藏入口 |
+| ④ ADR-012 把模型移出 APK | ⏸ **配方已确认但暂缓**：`bundle.resources` 是**并集**，唯一减法要改 base conf；删了会立刻丢两个功能，**必须先有 SAF 导入通道** |
 
-HiFiShifter 可以大致的分为两个功能区，分别是上部的轨道面板和下部的参数面板。轨道面板主要负责音频块的编辑与编排，参数面板则负责对音频进行调参处理。
 
-### 轨道面板
+---
 
-HiFiShifter 提供了一个基本完备的轨道面板与音频块编辑功能。该功能与大多数现代 DAW 类似。
+## 四、⚠️ 需要你登录 GitHub 的三个时刻（Q6）
 
-#### 媒体导入（音频 / 视频）
+你已明确：提交与公开由你操作。我会在这些点提醒你。
 
-HiFiShifter 支持三种方式导入媒体文件。视频文件会自动读取其中的音频轨：
+| # | 时刻 | 操作 |
+| :--- | :--- | :--- |
+| 1 | 创建 fork | 网页端打开上游仓库 → 点 **Fork**（建议仓库名 `HiFiShifter-mobile`） |
+| 2 | 首次 `git push` | 终端会要求凭据。建议先配 SSH key 或 PAT，之后就不用每次输 |
+| 3 | 修改仓库可见性 / 发 Release | 网页端。注意 fork 默认继承上游的公开属性 |
 
-1. 直接从系统文件管理器中拖拽音频或视频文件到轨道上
-2. 点击工具栏的文件夹图标，打开内置文件管理器并拖拽媒体文件到轨道上
-3. 按下 `Ctrl + F` 打开快捷搜索，选择媒体文件导入到轨道上（快捷搜索的文件路径与内置文件管理器的当前路径一致）
+命令序列见 [07 文档 §5](docs/07-决策落地与FLM式自适应布局.md)。
 
-#### 音频编辑
+---
 
-- **吸附网格**：音频块移动/裁剪默认吸附网格；按住 `Shift` 可临时关闭吸附。
-- **裁剪/伸缩范围**：拖动音频块左右边界进行裁剪或延长
-- **伸缩（Time Stretch）**：按住 `Alt` + 鼠标左键拖动音频块左右边界，可伸缩音频。
-- **内部偏移（Slip-Edit）**：按住 `Alt` + 鼠标左键拖动音频块主体，可左右滑移音频块的内部内容。
-- **淡入淡出**：拖动音频块左上角/右上角调整淡入/淡出时长。
-- **增益（dB）**：拖动音频块左上角的旋钮（上下拖动）调整增益，音频块右上角会显示当前 dB。
-- **音频块静音（M）**：音频块左上角 `M` 按钮可对该音频块静音，静音后音频块整体变灰。
-- **框选多选**：在时间线空白处按住鼠标右键拖拽可框选多个音频块。
-- **复制拖动**：按住 `Ctrl` 后拖拽音频块，会在目标位置创建副本并保持原音频块不动（复制完成在松手时生效）。
-- **胶合**：右键音频块打开菜单，选择"胶合"（要求同一轨道且至少 2 个音频块）。
-- **切分**：选中音频块后按 `S` 可在播放头位置切分。
-- **复制粘贴**：选中音频块后按 `Ctrl + C` 将选中音频块复制到应用内剪贴板。`Ctrl + V` 会把“所选音频块中最靠左的起点”对齐到播放头位置，其余音频块保持相对间距。复制时剪贴板会同时写入 REAPERMedia 格式，可直接在 REAPER 中粘贴。
+## 五、目录现状
 
-需要特别注意的，轨道支持嵌套，可以将轨道拖动到另一个轨道下成为该轨道的子轨道，形成一个轨道组。在接下来的调参过程中，轨道组将十分有用。
-
-### 参数面板
-
-HiFiShifter 的参数面板提供了类似 VocalShifter 的操作支持以方便用户调整参数。
-
-需要注意的是，HiFiShifter 的轨道上有一个特殊的 `C` 按钮，只有按下这个按钮，该轨道上的音频才能被后续调参处理。
-
-在调参中，HiFiShifter 以轨道组为单位，通过根轨道开启 `C` 来决定，一个轨道组共用一个算法和一套参数线。参数线会按位置作用到每一个音频块上。
-
-HiFiShifter 中的每个算法都有不同的参数可供调整，其中通用参数为音高。
-
-在首次打开时，HiFiShifter 需要一些时间对音频块的音高进行分析。分析完成后，面板中的实线表示该轨道组的整体当前音高，虚线表示整体原始音高，彩线表示每个音频块自己的原始音高。
-
-其他面板与音高面板类似，只是不会显示音频块自己的原始音高。
-
-面板旁边的小眼睛可以开启该面板在未选中下的可见性。
-
-### 算法
-
-目前 HiFiShifter 支持三种算法进行处理。
-
-#### World 算法
-
-老牌声码器  
-仅支持`音高`编辑
-
-#### PC-NSF-HIFIGAN
-
-OpenVPI 开源的为歌声特化的 hifigan 声码器  
-支持 `音高`、`气声`、`张力`、`共振峰`、`音量` 参数的编辑  
-需要注意的是，气声的编辑需要额外开启，将会使用 hnsep 的 UVR 模型对音频块进行气声分离，首次需要较长的时间处理。如果需要编辑张力请务必开启气声。
-
-#### Vslib
-
-VocalShifter 提供的算法库。
-支持 `音高`、`声像`、`共振峰`、`音量`、`气声` 参数的编辑  
-由于官方提供的 dll 仅支持文件IO，因此相对 VocalShifter 本体需要更多的时间处理。
-
-## 常用快捷键速查
-
-| 操作                           | 快捷键 / 鼠标                     |
-| :----------------------------- | :-------------------------------- |
-| 平移视图（时间轴）             | 鼠标中键拖动                      |
-| 横向缩放（时间轴）             | 鼠标滚轮（以光标为中心）          |
-| 纵向缩放（轨道高度，时间轴）   | Ctrl + 鼠标滚轮                   |
-| 纵向缩放（参数轴，参数面板）   | Ctrl + 鼠标滚轮（参数面板内）     |
-| 播放/暂停                      | Space（空格）                     |
-| 播放/停止                      | Enter                             |
-| 撤销/重做                      | Ctrl + Z / Ctrl + Y               |
-| 新建工程                       | Ctrl + N                          |
-| 打开工程                       | Ctrl + Shift + O                  |
-| 保存                           | Ctrl + S                          |
-| 另存为                         | Ctrl + Shift + S                  |
-| 导出音频                       | Ctrl + E                          |
-| 模式切换（选择/绘制）          | Tab                               |
-| 删除选中音频块                 | Delete                            |
-| 复制选中音频块（应用内剪贴板） | Ctrl + C                          |
-| 粘贴到播放头位置               | Ctrl + V                          |
-| 编组 / 解组                    | G / U                             |
-| 循环切换 Take                  | T（`Shift + T` 切换上一个）       |
-| 参数面板复制选区曲线           | Ctrl + C（Select 模式）           |
-| 参数面板粘贴到选区起点         | Ctrl + V（Select 模式）           |
-| 分割音频块                     | S（在播放头位置分割选中的音频块） |
-| 新建轨道                       | Ctrl + T                          |
-| 快速搜索                       | Ctrl + F                          |
-
-## 开发环境配置
-
-该部分内容为开发者提供，普通用户可以跳过。
-
-### 1. 克隆仓库
-
-```bash
-git clone https://github.com/ARounder-183/HiFiShifter.git
-cd HiFiShifter
+```
+HiFiShifter-mobile/
+├── README.md                ← 本文件
+├── prompt.md                ← 原始需求
+├── docs/                    ← 方案文档集（11 份，00–10）
+│   └── screenshots/         ← 实测截图（首次冒烟）
+├── android/                 ← 适配层：patches/（4 个补丁）+ shim/（fdk-aac 的 log/log.h）
+├── probes/m0-probe/         ← M0 探针工程（与 upstream-src 完全隔离）
+├── third_party/onnxruntime/ ← libonnxruntime.so（arm64-v8a / x86_64，带 SOURCE.txt）
+├── dist/                    ← 构建产物（已 gitignore）
+├── scripts/
+│   ├── android-env.sh/.ps1    环境变量与自检（含 JDK 17 的 major 版本校验选择器）
+│   ├── make-avd.ps1           建 AVD（含分辨率/密度覆盖）
+│   ├── build-android.sh       ★ Rust 侧构建/检查（cmake + fdk-aac shim + ANDROID_*）
+│   ├── setup-gen-android.sh   ★ tauri android init 之后必跑（minSdk/ABI/jniLibs/gradlew shim/BuildTask）
+│   ├── build-apk.sh           ★ 完整 APK（含前端构建与 jniLibs 同步）
+│   ├── sync-native-libs.sh    third_party → gen/android jniLibs
+│   ├── run-app.sh             ★ 装**上游本体** + 启动 + 收日志 + 分时截图
+│   ├── run-probe.sh           装**隔离的探针工程** + 跑全量探针
+│   ├── audit-apk.sh           APK 体积审计（查孤儿条目虚胖 / ABI 混入）
+│   ├── measure-inset.py       ★ 量「系统栏有没有压住内容」（截图像素量测）
+│   ├── layout-audit.mjs       ★ 排版审计：越界 / 被祖先裁掉 / 被遮挡 / 触摸目标 <44px
+│   ├── touch-drive.mjs        ★ 模拟点击/划动/**双指**（走 CDP）+ 前后状态摘要
+│   ├── lib/cdp.mjs            零依赖 CDP 客户端（Node 22 自带 fetch + WebSocket）
+│   └── apply-patches.sh / export-patches.sh
+├── .cargo/config.toml       ← crates.io 镜像 + NDK 工具链 env + linker
+└── upstream-src/            ← 上游完整克隆（当前已检出 develop，280daae4）
+    ├── remote "upstream" → https://github.com/ARounder-183/HiFiShifter.git
+    ├── backend/             Rust 71,453 行，含 184 MB ONNX 模型
+    └── frontend/            React 104,354 行
 ```
 
-### 2. 安装依赖
-
-#### Windows
-
-请确保已安装以下工具：
-
-- **Node.js**（建议 18+）及 npm
-- **Rust 工具链**（参见 `rust-toolchain.toml`）
-- **Tauri 2 CLI**：`cargo install tauri-cli --version "^2"`
-- **CMake**（用于编译 SoundTouch 库）
-
-ONNX Runtime (DirectML) 由 ort crate 在编译时自动下载，无需额外配置。
-
-安装前端依赖：
+**构建流程（从干净克隆开始）**：
 
 ```bash
-npm --prefix frontend install
+source scripts/android-env.sh                      # 自检
+bash scripts/apply-patches.sh                      # 打 5 个补丁
+cd upstream-src/backend/src-tauri && npx tauri android init   # 生成 gen/android
+cd - && bash scripts/setup-gen-android.sh arm64-v8a            # 必须：改生成物（含 inset 修复）
+bash scripts/build-apk.sh arm64-v8a                             # 出 APK
+bash scripts/run-app.sh real                                    # 装机 + 启动
 ```
 
-#### macOS
-
-```bash
-chmod +x ./scripts/install_deps_macos.sh
-SKIP_FRONTEND=0 bash ./scripts/install_deps_macos.sh
-```
-
-#### Linux
-
-请确保已安装以下工具：
-
-- **Node.js**（建议 20+）及 npm
-- **Rust 工具链**（参见 `rust-toolchain.toml`，项目会自动选择对应平台的 stable 工具链）
-- **Tauri 2 CLI**：`cargo install tauri-cli --version "^2"`
-- **CMake**、**pkg-config** 及系统构建工具
-- **GTK3、WebKit2GTK、ALSA** 等 Tauri 运行时开发库（详见安装脚本）
-
-运行一键安装脚本：
-
-```bash
-chmod +x ./scripts/install_deps_linux.sh
-bash ./scripts/install_deps_linux.sh
-```
-
-脚本会自动安装系统依赖、Node.js（如未安装）、appimagetool 及前端 npm 依赖。
-
-安装前端依赖（如未使用脚本）：
-
-```bash
-npm --prefix frontend ci
-```
-
-#### Linux AppImage 构建
-
-由于 `vslib` 算法仅限 Windows，Linux 构建需要禁用默认 feature：
-
-```bash
-# 进入 backend 目录运行（tauri.conf.json 中路径相对于此目录）
-cd backend
-cargo tauri build --bundles appimage -- --no-default-features --features onnx
-```
-
-或使用提供的辅助脚本：
-
-```bash
-bash scripts/build-linux-appimage.sh
-```
-
-> **注意：** WSL2 环境下因缺少 FUSE 支持，Tauri bundler 的 linuxdeploy 步骤可能失败（错误：`failed to run linuxdeploy`）。这是 WSL2 已知限制，不影响实际 AppImage 产出——AppDir 已正确组装在 `target/release/bundle/appimage/` 中。可设置 `APPIMAGE_EXTRACT_AND_RUN=1` 后手动运行 `appimagetool` 打包。在真实 Linux 机器和 CI 中不存在此问题。
-
-### 3. SoundTouch 源码
-
-SoundTouch 音频时间拉伸库在编译时从源码构建。首次构建时会**自动克隆**，无需手动操作。
-
-如需离线构建，可提前手动克隆：
-
-```bash
-cd backend/src-tauri/third_party/soundtouch-static
-git clone --depth 1 --branch 2.3.3 https://codeberg.org/soundtouch/soundtouch.git soundtouch
-```
-
-### 4. GPU 加速
-
-HiFiShifter 在支持的平台上自动启用 GPU 推理加速。你可以在菜单栏中的 **推理设备（Inference Device）** 里选择 Auto / CPU / GPU，并通过 **运行基准测试（Run Benchmark）** 比较各设备的推理延迟。
-
-| 平台                        | GPU 技术                     | 说明                                                      |
-| --------------------------- | ---------------------------- | --------------------------------------------------------- |
-| Windows x86_64 / ARM64      | DirectML (DirectX 12)        | 成熟稳定的 GPU 路径，支持 NVIDIA / AMD / Intel Arc        |
-| macOS ARM64 (Apple Silicon) | CoreML + WebGPU (Dawn/Metal) | CoreML 利用 Apple Neural Engine；WebGPU 作为补充 GPU 后端 |
-| macOS x86_64 (Intel)        | —                            | CPU only（使用 ort-tract 替代后端）                       |
-| Linux x86_64                | WebGPU (Dawn/Vulkan)         | Dawn 通过 Vulkan API 使用 GPU；无 GPU 时自动回退到 CPU    |
-| Linux ARM64                 | —                            | CPU only（暂无预编译 WebGPU ONNX Runtime 二进制文件）     |
-
-> **注意**：Windows 平台暂不启用 WebGPU。其 Dawn/D3D12 后端在部分 GPU/驱动组合上存在原生崩溃风险。DirectML 是 Windows 上成熟稳定的 GPU 路径。
->
-> **WSL2 用户**：WSL2 不向 Linux 子环境暴露硬件 Vulkan。WebGPU/Dawn 只能使用 Lavapipe（CPU 软件渲染），性能极差。如需 GPU 加速，请使用 Windows 原生版本（DirectML）。
-
-#### 所有平台
-
-ONNX Runtime 二进制文件由 ort crate 在编译时通过 `download-binaries` 特性自动下载，无需手动安装。GPU 提供程序（DirectML / WebGPU / CoreML）的代码在编译时根据目标平台自动启用，无需额外的 `--features` 标志。
-
-```bash
-# 开发模式（热更新）
-cd backend
-cargo tauri dev
-
-# 构建 Release
-# Windows / macOS（默认 features：onnx + vslib）
-cargo tauri build
-
-# Linux（vslib 仅限 Windows，需排除默认 feature）
-cargo tauri build --bundles appimage -- --no-default-features --features onnx
-
-# Windows 便携版 ZIP
-.\scripts\pack-portable.ps1 -SkipBuild
-```
-
-## 快速开始
-
-### 运行开发模式
-
-```bash
-cd backend/src-tauri
-cargo tauri dev
-```
-
-前端启动模式可通过环境变量 `TAURI_UI_MODE` 切换：
-
-- `dev`：开发模式（默认，使用 Vite dev server，支持热更新）
-- `build`：构建模式（先构建前端静态资源，再启动）
-
-Linux/macOS（bash/zsh）：
-
-```bash
-cd backend/src-tauri
-TAURI_UI_MODE=build cargo tauri dev
-```
-
-Windows PowerShell：
+**没有 bash 的环境（例如 DSH）用 PowerShell 版**（逐条复刻上面的链路，两条路径等价）：
 
 ```powershell
-cd backend/src-tauri
-$env:TAURI_UI_MODE='build'; cargo tauri dev
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-apk.ps1 x86_64    # 模拟器
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build-apk.ps1 arm64-v8a # 真机
 ```
 
-**注意：** 首次编译需要很长的时间，请耐心等待
+> ⚠️ 两个环境坑（都实测踩过）：
+> ① `.ps1` 若含中文必须存成 **UTF-8 with BOM** —— PS 5.1 默认按 ANSI 读脚本，中文会把引号吃掉，报一堆 `Unexpected token`；
+> ② **陈旧的 Gradle daemon 会缓存启动时的环境**（曾导致 `rustBuild` 去找 WorkBuddy 的 node shim 而失败）——
+> 症状是 `A problem occurred starting process 'command '…node.exe.bat''`，杀掉所有 `java.exe` 再构建即可。
 
-## 文档
 
-- [使用手册](docs/i18n/USERMANUAL.md)
+**触屏验收（不需要真机，模拟器即可）**：
 
-## 致谢
+```bash
+# 1. 打开 CDP 通道（debug 包自带 WebView 调试；wry 在 debug 下会开）
+PID=$(adb -s emulator-5554 shell pidof com.arounder.hifishifter | tr -d '\r')
+adb -s emulator-5554 forward tcp:9222 localabstract:webview_devtools_remote_$PID
 
-本项目使用了以下开源库的代码或模型结构：
+# 2. 排版审计（「看得到」）与触摸驱动（「点得到」）
+node scripts/layout-audit.mjs --json report.json
+node scripts/touch-drive.mjs find 帮助            # 按文字定位控件
+node scripts/touch-drive.mjs tap  235 16          # 真点下去 + 前后状态摘要
+node scripts/touch-drive.mjs pinch 180 500 40 140 # 双指缩放
+```
 
-- [WORLD](https://github.com/mmorise/World) - 高质量语音分析与合成系统
-- [SoundTouch](https://www.surina.net/soundtouch/) - 音频时间拉伸与变调库（LGPL）
-- [Signalsmith Stretch](https://github.com/Signalsmith-Audio/signalsmith-stretch) - 高质量音频时间拉伸库（MIT）
-- [VocalShifter Library (vslib)](https://ackiesound.ifdef.jp/) - 音声解析与合成库
-- [SingingVocoders](https://github.com/openvpi/SingingVocoders) - 歌声合成声码器（OpenVPI）
-- [HiFi-GAN](https://github.com/jik876/hifi-gan) - 高保真生成对抗网络声码器
+> ⚠️ 坐标是 **CSS px、相对 WebView 视口**，不是截图的设备像素。详见 `docs/13`。
+
+
+### 关于「fork」
+
+本机没有 `gh` CLI 也没有 GitHub 凭据，因此**尚未在 GitHub 上创建真 fork**（已决定要建，但按你的要求留给凭据持有人操作）。当前是用 `upstream-src/` 的完整克隆做分析。
+
+**步骤 1 — 你在网页端创建 fork**（需登录）
+打开上游仓库 → 右上角 **Fork** → 建议仓库名 `HiFiShifter-mobile`。
+
+**步骤 2 — 我配置 remote**
+```bash
+cd upstream-src
+git remote add origin git@github.com:<你的账号>/HiFiShifter-mobile.git   # 建议用 SSH，免重复登录
+git push -u origin develop:develop                                        # ← 这一步会要求凭据
+```
+
+**步骤 3 — 追加移植层并提交**
+```bash
+git add android docs scripts README.md
+git commit -m "chore: android port plan and adaptation layer skeleton"
+```
+
+> 同时按 [01 文档 §4.3](docs/01-移植方案总览.md) 建立 `android/patches/`，用「可重放补丁」而不是直接改上游——上游 `develop` 一个多星期就有 500 文件变化，直接改会陷入永久冲突。
+
+---
+
+## 六、⚠️ 本仓库的操作坑（已踩过两次）
+
+| 坑 | 现象 | 处理 |
+| :--- | :--- | :--- |
+| **不要用 `git checkout <分支>` / `git switch <分支>`** | 命令会被中断，工作树残留 250–330 个已删除文件 + `.git/index.lock` | 恢复：`rm -f .git/index.lock && git checkout -- .`（此命令可用，切分支不可用）；看别的分支内容用 `git show <branch>:<path>` |
+| **全树 git 操作要给足超时** | 184 MB 模型恢复需 1 分钟以上，默认 120 s 超时会被中断成"半删"状态 | 任何全树操作显式给 ≥ 10 分钟超时 |
+| **`git remote rename` 后跟踪引用可能丢失** | `refs/remotes/*` 为空 | 用已知 SHA 重建：`git branch <name> <sha>` |
+| **git 直连 GitHub 曾代理故障** | `Failed to connect to github.com:443 over proxy 127.0.0.1`，但 `curl` 正常 | 网络异常时先用 `curl -sI https://api.github.com` 区分是 git 配置还是网络 |
+
+---
+
+## 七、建议的下一步
+
+1. **搭 P0 测试环境**（真机 CDP 调试 + 一个 360 CSS px 宽的 **arm64** AVD），见 [05 文档 §10](docs/05-测试环境与验收.md)。
+2. **跑 M0 探针**：cpal 出声 / ort 加载模型 / assets 拷贝计时 / SoundTouch 与 WORLD 交叉编译；同时实测 [08 文档 §6](docs/08-双指手势与视口内核对接规范.md) 的 WebView 行为问号。这决定路线是否需要调整。
+3. **在 GitHub 上建 fork**（需要你登录）→ 建立 `android/patches/` 骨架。
+4. **第一批后端补丁**（[02 文档](docs/02-后端改造清单.md)）→ 让 `cargo check --target aarch64-linux-android --no-default-features --features onnx` 通过。
+5. **再动 UI 层**：先做双指手势（[08 文档](docs/08-双指手势与视口内核对接规范.md)）→ 再做 Phone / Tablet 两套外壳（[04 文档](docs/04-小屏排版适配.md) §3）→ 最后做三类专项治理（[04 文档](docs/04-小屏排版适配.md) §6–§8）。
+
+---
 
 ## License
 
-本项目基于 [MIT License](LICENSE) 发布。
+上游基于 **MIT License**。移植版需保留原始版权声明，并在 README / 关于页注明「基于 ARounder-183/HiFiShifter」。注意上游动态链接了 **LGPL** 的 SoundTouch，需保留其许可证声明。

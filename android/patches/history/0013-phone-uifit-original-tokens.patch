@@ -1,0 +1,225 @@
+diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
+index ca2637ce..a6ae16ec 100644
+--- a/frontend/src/components/mobile/MobileBottomBar.tsx
++++ b/frontend/src/components/mobile/MobileBottomBar.tsx
+@@ -16,6 +16,7 @@ import React from "react";
+ import { useAppDispatch, useAppSelector } from "../../app/hooks";
+ import { shallowEqual } from "react-redux";
+ import { CursorArrowIcon, Pencil1Icon, DoubleArrowRightIcon } from "@radix-ui/react-icons";
++import { IconButton } from "@radix-ui/themes";
+ import {
+     cycleRippleMode,
+     persistUiSettings,
+@@ -234,6 +235,9 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+         { id: "ignoreGrouping", label: "忽略编组", on: s.ignoreGrouping, icon: <IconUnlink />, act: flip(toggleIgnoreGrouping) },
+     ];
+ 
++    // 视觉对齐原版（真机读到的 token）：选中 = Radix solid（accent 实底白字），
++    // 未选中 = ghost（透明底 + accent 色图标）；直接用 Radix IconButton 继承主题，
++    // 尺寸保持 ≥44 触摸目标（原版 24px 是桌面密度，手机不够按）。
+     const iconBtn = (
+         label: string,
+         on: boolean,
+@@ -241,24 +245,17 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+         icon: React.ReactNode,
+         extra: React.CSSProperties = {},
+     ) => (
+-        <button
+-            type="button"
+-            onClick={onClick}
++        <IconButton
++            size="3"
++            variant={on ? "solid" : "ghost"}
+             aria-label={label}
+             aria-pressed={on}
+-            className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+-            style={{
+-                minWidth: 44,
+-                minHeight: 40,
+-                borderRadius: 8,
+-                opacity: on ? 1 : 0.65,
+-                background: on ? "rgba(127,119,221,0.18)" : "transparent",
+-                WebkitTapHighlightColor: "transparent",
+-                ...extra,
+-            }}
++            onClick={onClick}
++            className="hs-icon-btn"
++            style={{ minWidth: 44, minHeight: 44, ...extra }}
+         >
+             {icon}
+-        </button>
++        </IconButton>
+     );
+ 
+     return (
+@@ -276,63 +273,60 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                 : null}
+ 
+             {!isParams ? (
+-                <button
+-                    type="button"
+-                    onClick={() => setFoldOpen((v) => !v)}
++                <IconButton
++                    size="3"
++                    variant={foldOpen ? "solid" : "ghost"}
+                     aria-label="更多开关"
+                     aria-expanded={foldOpen}
+-                    className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+-                    style={{
+-                        minWidth: 44,
+-                        minHeight: 40,
+-                        borderRadius: 8,
+-                        opacity: foldOpen ? 1 : 0.7,
+-                        background: foldOpen ? "rgba(127,119,221,0.18)" : "transparent",
+-                        WebkitTapHighlightColor: "transparent",
+-                    }}
++                    onClick={() => setFoldOpen((v) => !v)}
++                    className="hs-icon-btn"
++                    style={{ minWidth: 44, minHeight: 44 }}
+                 >
+                     <SvgWrap>
+                         <path d="M3 10 L8 5 L13 10" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                     </SvgWrap>
+-                </button>
++                </IconButton>
+             ) : null}
+ 
+             {isParams ? (
+-                <button
+-                    type="button"
++                <IconButton
++                    size="3"
++                    variant="ghost"
+                     aria-label="显示/隐藏（待接参数覆盖层）"
+                     disabled
+-                    className="flex items-center justify-center border-0"
+-                    style={{ minWidth: 44, minHeight: 40, borderRadius: 8, opacity: 0.35, background: "transparent" }}
++                    className="hs-icon-btn"
++                    style={{ minWidth: 44, minHeight: 44, opacity: 0.35 }}
+                 >
+                     <SvgWrap>
+                         <path d="M1.5 8 C3.5 4.8, 6 3.2, 8 3.2 C10 3.2, 12.5 4.8, 14.5 8 C12.5 11.2, 10 12.8, 8 12.8 C6 12.8, 3.5 11.2, 1.5 8 Z" fill="none" stroke="currentColor" strokeWidth="1.4" />
+                         <circle cx="8" cy="8" r="2.2" />
+                     </SvgWrap>
+-                </button>
++                </IconButton>
+             ) : null}
+ 
+             <span className="flex-1" />
+ 
+-            {/* ── 播放控制（并入本行右侧）────────────────────────────── */}
+-            <button
+-                type="button"
+-                onClick={() => dispatch(stopAudioPlayback({ restoreAnchor: true }))}
++            {/* ── 播放控制（并入本行右侧；录制保持红色语义）────────────── */}
++            <IconButton
++                size="3"
++                variant="ghost"
+                 aria-label="停止"
+-                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+-                style={{ minWidth: 48, minHeight: 40, borderRadius: 8, WebkitTapHighlightColor: "transparent" }}
++                onClick={() => dispatch(stopAudioPlayback({ restoreAnchor: true }))}
++                className="hs-icon-btn"
++                style={{ minWidth: 48, minHeight: 44 }}
+             >
+                 <SvgWrap>
+                     <rect x="3.5" y="3.5" width="9" height="9" rx="1.5" />
+                 </SvgWrap>
+-            </button>
+-            <button
+-                type="button"
+-                onClick={() => (isPlaying ? dispatch(stopAudioPlayback()) : dispatch(playOriginal()))}
++            </IconButton>
++            <IconButton
++                size="3"
++                variant={isPlaying ? "solid" : "ghost"}
+                 aria-label={isPlaying ? "暂停" : "播放"}
+                 aria-pressed={isPlaying}
+-                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+-                style={{ minWidth: 48, minHeight: 40, borderRadius: 8, WebkitTapHighlightColor: "transparent" }}
++                onClick={() => (isPlaying ? dispatch(stopAudioPlayback()) : dispatch(playOriginal()))}
++                className="hs-icon-btn"
++                style={{ minWidth: 48, minHeight: 44 }}
+             >
+                 <SvgWrap>
+                     {isPlaying ? (
+@@ -344,29 +338,25 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                         <path d="M4.5 2.5 L13 8 L4.5 13.5 Z" />
+                     )}
+                 </SvgWrap>
+-            </button>
+-            <button
+-                type="button"
++            </IconButton>
++            <IconButton
++                size="3"
++                variant={recording.active ? "solid" : "ghost"}
++                color={recording.active ? "red" : undefined}
++                aria-label={recording.active ? "停止录制" : "录制"}
++                aria-pressed={recording.active}
+                 onClick={() => {
+                     if (recording.active) void dispatch(stopRecordingFlow());
+                     else if (recording.countdownRemaining > 0) void dispatch(cancelRecordingCountdown());
+                     else void dispatch(startRecordingFlow());
+                 }}
+-                aria-label={recording.active ? "停止录制" : "录制"}
+-                aria-pressed={recording.active}
+-                className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
+-                style={{
+-                    minWidth: 48,
+-                    minHeight: 40,
+-                    borderRadius: 8,
+-                    color: recording.active ? "#e5484d" : undefined,
+-                    WebkitTapHighlightColor: "transparent",
+-                }}
++                className="hs-icon-btn"
++                style={{ minWidth: 48, minHeight: 44 }}
+             >
+                 <SvgWrap>
+                     <circle cx="8" cy="8" r="5.5" />
+                 </SvgWrap>
+-            </button>
++            </IconButton>
+ 
+             {foldOpen ? (
+                 <>
+@@ -397,16 +387,22 @@ export function MobileBottomBar({ tab }: { tab: string }) {
+                                 type="button"
+                                 onClick={item.act}
+                                 aria-pressed={item.on}
+-                                className="flex flex-col items-center justify-center bg-transparent border-0 cursor-pointer"
++                                className="hs-icon-btn flex flex-col items-center justify-center bg-transparent border-0 cursor-pointer"
+                                 style={{
+                                     minHeight: 52,
+                                     padding: "4px 2px",
+                                     fontSize: 11,
+-                                    borderRadius: 8,
++                                    borderRadius: 6,
+                                     gap: 2,
+                                     fontWeight: item.on ? 600 : 400,
+-                                    opacity: item.on ? 1 : 0.6,
+-                                    background: item.on ? "rgba(127,119,221,0.18)" : "transparent",
++                                    // 对齐原版 ParamToolbarPill：active = accent-9 实底白字，
++                                    // 未选中 = 透明底 + accent 前景（图标 currentColor 一并继承）
++                                    color: item.on
++                                        ? "var(--white-a12, #fff)"
++                                        : "var(--accent-11, rgb(177, 169, 255))",
++                                    background: item.on
++                                        ? "var(--accent-9, rgb(91, 91, 214))"
++                                        : "transparent",
+                                     WebkitTapHighlightColor: "transparent",
+                                 }}
+                             >
+diff --git a/frontend/src/index.css b/frontend/src/index.css
+index be7c1dfb..796a16b8 100644
+--- a/frontend/src/index.css
++++ b/frontend/src/index.css
+@@ -527,3 +527,8 @@ textarea {
+         display: none;
+     }
+ }
++
++/* 手机按钮按压反馈（对齐原版 Radix 按钮的按压语义：按下整体变暗一档） */
++.hs-icon-btn:active {
++    filter: brightness(0.88);
++}

@@ -1,0 +1,91 @@
+### device=221deeb abi=arm64-v8a target=aarch64  2026-09-18 12:55:44
+### 通道 A：run-as 读 app_data_dir/probe.log（真机上唯一可靠）
+M0 探针启动。日志三通道：logcat(tag PROBE) / 落盘 / 界面。
+真机上取全文：adb exec-out run-as com.hifishifter.m0probe cat files/probe.log
+
+═══ 自动执行：全量探针 ═══
+
+══ 探针 0 · 环境与路径 ══
+target_os      = android
+target_arch    = aarch64
+编译目标        = aarch64-linux-android
+当前工作目录    = Ok("/")
+current_exe    = Ok("/system/bin/app_process64")
+resource_dir        = asset://localhost/
+  ↑ 注意：含 '://'，不是文件系统路径
+app_data_dir        = /data/user/0/com.hifishifter.m0probe
+app_local_data_dir  = /data/user/0/com.hifishifter.m0probe
+app_cache_dir       = /data/user/0/com.hifishifter.m0probe/cache
+app_config_dir      = /data/user/0/com.hifishifter.m0probe
+temp_dir            = /data/user/0/com.hifishifter.m0probe/cache
+
+══ 探针 1 · NDK 上下文（ndk_context 全局） ══
+背景：Tauri/tao/wry **都不初始化 ndk_context**，而 cpal 的 Oboe 后端强依赖它；
+      它的 android_context() 在未初始化时会 panic，所以这是硬阻塞项。
+初始化前可用性 = false
+✅ ndk_context 已初始化（通过 ActivityThread.currentApplication() 初始化成功）
+   vm()      = 0xb400007124f65540
+   context() = 0x4b4a
+
+══ 探针 4 · APK assets → app_data_dir 拷贝 ══
+目标目录 = /data/user/0/com.hifishifter.m0probe
+✅ assets/probe.bin 存在，声明长度 8388608 字节
+✅ 拷贝完成：8.0 MB，耗时 17 ms，吞吐 461.5 MB/s
+   来源 assets/probe.bin（声明 8388608 字节）→ /data/user/0/com.hifishifter.m0probe/probe.bin
+   按此吞吐推算 184 MB 模型拷贝约需 0.4 秒
+   落盘校验：8388608 字节 ✓
+
+══ 探针 3a · ort 运行时初始化（load-dynamic） ══
+nativeLibraryDir = /data/app/~~Wfyww88JBXkj3DD2uvMzgg==/com.hifishifter.m0probe-sTjOfAEuNmifCLkGSw4gLw==/lib/arm64
+候选路径 2 条：
+  · libonnxruntime.so
+  · /data/app/~~Wfyww88JBXkj3DD2uvMzgg==/com.hifishifter.m0probe-sTjOfAEuNmifCLkGSw4gLw==/lib/arm64/libonnxruntime.so
+ONNX Runtime build info：
+   ORT Build Info: git-branch=HEAD, git-commit-id=da9b5e364c, fp8-kv-cache=1, build type=Release
+✅ ort::init_from("libonnxruntime.so") + commit() 成功
+
+══ 探针 3b · ort 模型加载与推理 ══
+模型 = /data/local/tmp/pc_nsf_hifigan.onnx（53 MB）
+✅ Session 就绪，耗时 125 ms
+输入：
+  · mel  (Tensor { ty: Float32, shape: [-1, 128, -1], dimension_symbols: SymbolicDimensions(["batch", "", "time"]) })
+  · f0  (Tensor { ty: Float32, shape: [-1, -1], dimension_symbols: SymbolicDimensions(["batch", "time"]) })
+输出：
+  · audio  (Tensor { ty: Float32, shape: [-1, 1, -1], dimension_symbols: SymbolicDimensions(["batch", "", "time"]) })
+执行提供者 = 默认（CPU）
+   → 要上 NNAPI 得在 SessionBuilder 上调 with_execution_providers(...)，
+     且需接受它的算子支持范围与精度差异；是否启用等 CPU 基线出来再定。
+   造零输入 mel 原 [-1, 128, -1] → 填动态维后 [1, 128, 64]（8192 元素）
+   造零输入 f0 原 [-1, -1] → 填动态维后 [1, 64]（64 元素）
+开始推理（2 个输入，共 8256 个 f32 元素 ≈ 0 MB）
+✅ 推理成功，耗时 321 ms
+   输出 audio: [1, 1, 32768]
+内存：加载后 390 MB → 推理后 400 MB
+   → 这两个数就是 docs/06 风险 R3（OOM）的第一手基线。
+
+══ 探针 2 · cpal / Oboe 输出 ══
+
+═══ 自动探针已全部触发；cpal 正在放音 3 秒 ═══
+host.id = Oboe
+default_output_device 的名称 = Ok("default")
+default_output_config = 44100 Hz / 2 声道 / F32
+  支持: 1 声道 / I16 / 5512..5512 Hz
+  支持: 1 声道 / I16 / 8000..8000 Hz
+  支持: 1 声道 / I16 / 11025..11025 Hz
+  支持: 1 声道 / I16 / 16000..16000 Hz
+  支持: 1 声道 / I16 / 22050..22050 Hz
+  支持: 1 声道 / I16 / 32000..32000 Hz
+  支持: 1 声道 / I16 / 44100..44100 Hz
+  支持: 1 声道 / I16 / 48000..48000 Hz
+  支持: 1 声道 / I16 / 64000..64000 Hz
+  支持: 1 声道 / I16 / 88200..88200 Hz
+  支持: 1 声道 / I16 / 96000..96000 Hz
+  支持: 1 声道 / I16 / 176400..176400 Hz
+  ...（截断）
+supported_output_configs 共 12 项（最多显示 12）
+nativeLibraryDir = /data/app/~~Wfyww88JBXkj3DD2uvMzgg==/com.hifishifter.m0probe-sTjOfAEuNmifCLkGSw4gLw==/lib/arm64
+开始生成 132300 帧 / 2 声道 / 3 秒的双音（440→660 Hz 交替）
+✅ 流建立并播放 3 秒；回调共输出 262256 个样本（期望约 264600）
+👉 请确认真机扬声器/耳机里**听到了交替的高低音**
+
+### 通道 B：logcat tag=PROBE

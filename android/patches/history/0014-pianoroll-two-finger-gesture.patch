@@ -1,0 +1,145 @@
+diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
+index e3102f86..962de818 100644
+--- a/frontend/src/components/layout/PianoRollPanel.tsx
++++ b/frontend/src/components/layout/PianoRollPanel.tsx
+@@ -72,6 +72,8 @@ import {
+ } from "../../utils/timelineViewportSync";
+ import { isModifierActive, isNoneBinding } from "../../features/keybindings/keybindingsSlice";
+ import { useNonPassiveWheel } from "../../utils/useNonPassiveWheel";
++import { IS_ANDROID } from "../../utils/platform";
++import { TwoFingerGestureController, type GestureViewport } from "./touchGesture";
+ import { getActiveSurface, setActiveSurfaceExplicit } from "../../features/uiFocus/focusSurface";
+ import { findFirstExternalPathAction } from "./timeline/dnd";
+ import { shiftPitchValue } from "./timeline/clipPitchDrag";
+@@ -2115,6 +2117,81 @@ export const PianoRollPanel: React.FC = () => {
+     const contentWidth = contentWidthAt(pxPerSec);
+ 
+     const scrollerRef = useRef<HTMLDivElement | null>(null);
++
++    // ── 双指视口手势（参数面板版，docs/08；用户定的 q2 交互）───────────────
++    // 画笔模式：单指 = 绘制（面板既有 pointer 路径，手势层不拦截单指），
++    // 双指 = 视口缩放/平移；第二指落下时手势层会 pointercancel 正在进行的单指绘制。
++    // 水平写入复用 handleHorizontalZoom（内含 paramEditorSyncTimeline 的共享/自持
++    // 换算与公共范围钳制，q1）；纵向缩放入口（valueDomain.span）尚未落地（q2），
++    // 传 verticalZoom:false —— 双指纵向退化为纯平移。
++    // handleHorizontalZoom 依赖随设置/视口尺寸变化，用渲染期 ref 镜像避免重建
++    // controller（同容器重复 attach 会双重监听）。
++    const horizontalZoomRef = useRef(handleHorizontalZoom);
++    horizontalZoomRef.current = handleHorizontalZoom;
++    const paramGestureRef = useRef<TwoFingerGestureController | null>(null);
++
++    useEffect(() => {
++        if (!IS_ANDROID) return;
++        let cancelled = false;
++        let raf = 0;
++        const tryAttach = () => {
++            if (cancelled) return;
++            const scroller = scrollerRef.current;
++            if (!scroller) {
++                raf = requestAnimationFrame(tryAttach);
++                return;
++            }
++            const viewport: GestureViewport = {
++                get() {
++                    return {
++                        scrollLeft: scrollLeftRef.current,
++                        scrollTop: scroller.scrollTop,
++                        pxPerSec: pxPerSecRef.current,
++                        // 参数面板没有行高概念；verticalZoom=false 时手势层不用它。
++                        rowHeight: 1,
++                    };
++                },
++                getPxPerSecBounds() {
++                    // 真正的钳制在 handleHorizontalZoom 内（两面板公共可滚范围）。
++                    return { min: 10, max: 8000 };
++                },
++                getRowHeightBounds() {
++                    return { min: 1, max: 1 };
++                },
++                setHorizontal(pxPerSec, scrollLeft) {
++                    horizontalZoomRef.current(pxPerSec, scrollLeft);
++                },
++                setVertical(_rowHeight, scrollTop) {
++                    scroller.scrollTop = scrollTop;
++                },
++                reclamp() {
++                    /* 参数面板无行高重钳需求 */
++                },
++            };
++            const controller = new TwoFingerGestureController(scroller, viewport, {
++                deadZonePx: 16,
++                axisLockPx: 24,
++                cooldownMs: 150,
++                verticalZoom: false,
++            });
++            controller.attach();
++            paramGestureRef.current = controller;
++            (window as unknown as { __hsParamGestureAttached?: boolean }).__hsParamGestureAttached =
++                true;
++        };
++        tryAttach();
++        return () => {
++            cancelled = true;
++            cancelAnimationFrame(raf);
++            paramGestureRef.current?.detach();
++            paramGestureRef.current = null;
++            delete (window as unknown as { __hsParamGestureAttached?: boolean })
++                .__hsParamGestureAttached;
++        };
++        // 仅挂载一次；handleHorizontalZoom 走渲染期 ref 镜像。
++        // eslint-disable-next-line react-hooks/exhaustive-deps
++    }, []);
++
+     const canvasRef = useRef<HTMLCanvasElement | null>(null);
+     const axisCanvasRef = useRef<HTMLCanvasElement | null>(null);
+     const axisWrapRef = useRef<HTMLDivElement | null>(null);
+diff --git a/frontend/src/components/layout/touchGesture.ts b/frontend/src/components/layout/touchGesture.ts
+index 553f4840..e15e98c7 100644
+--- a/frontend/src/components/layout/touchGesture.ts
++++ b/frontend/src/components/layout/touchGesture.ts
+@@ -58,6 +58,12 @@ export interface TwoFingerGestureOptions {
+     axisLockPx?: number;
+     /** 2→1 指冷却期（ms）：期间忽略单指事件（§4.2）。缺省 150。 */
+     cooldownMs?: number;
++    /**
++     * 是否启用纵向捏合缩放（行高）。缺省 true。
++     * 参数编辑器（PianoRoll）的纵向缩放入口（valueDomain.span）尚未落地（docs/06 q2），
++     * 传 false 时纵向捏合退化为纯平移（行高恒定），避免对无意义的 rowHeight 做 NaN 运算。
++     */
++    verticalZoom?: boolean;
+ }
+ 
+ interface ActivePointer {
+@@ -101,6 +107,7 @@ export class TwoFingerGestureController {
+     private readonly deadZonePx: number;
+     private readonly axisLockPx: number;
+     private readonly cooldownMs: number;
++    private readonly verticalZoom: boolean;
+ 
+     private readonly pointers = new Map<number, ActivePointer>();
+     private session: Session | null = null;
+@@ -124,6 +131,7 @@ export class TwoFingerGestureController {
+         this.deadZonePx = options.deadZonePx ?? 16;
+         this.axisLockPx = options.axisLockPx ?? 24;
+         this.cooldownMs = options.cooldownMs ?? 150;
++        this.verticalZoom = options.verticalZoom ?? true;
+     }
+ 
+     attach(): void {
+@@ -312,10 +320,14 @@ export class TwoFingerGestureController {
+         const newScrollLeft = secAtMid0 * targetPxPerSec - mid.x;
+         this.viewport.setHorizontal(targetPxPerSec, newScrollLeft);
+ 
+-        // 竖直：行锚定（docs/08 §2.3）。
++        // 竖直：行锚定（docs/08 §2.3）。verticalZoom=false 的内核（参数编辑器：纵向
++        // 缩放入口 valueDomain.span 尚未落地，docs/06 q2）纵向捏合退化为纯平移——
++        // 行高恒定时 newScrollTop = scrollTop0 - dy，与行数换算自然退化，无 NaN。
+         const rhBounds = this.viewport.getRowHeightBounds();
++        const targetRowH = this.verticalZoom
++            ? clamp(s.rowHeight0 * ky, rhBounds.min, rhBounds.max)
++            : s.rowHeight0;
+         const rowAtMid0 = (s.scrollTop0 + s.mid0.y) / s.rowHeight0;
+-        const targetRowH = clamp(s.rowHeight0 * ky, rhBounds.min, rhBounds.max);
+         const newScrollTop = rowAtMid0 * targetRowH - mid.y;
+         this.viewport.setVertical(targetRowH, newScrollTop);
+     }

@@ -1,0 +1,308 @@
+diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
+index 412d444d..f9848411 100644
+--- a/frontend/src/App.tsx
++++ b/frontend/src/App.tsx
+@@ -12,6 +12,8 @@ import { IS_LINUX } from "./utils/platform";
+ import { useLayoutMode } from "./utils/layoutMode";
+ import { MobileTopBar } from "./components/mobile/MobileTopBar";
+ import { BottomTabs, type MobileTab } from "./components/mobile/BottomTabs";
++import { PlaybackBar } from "./components/mobile/PlaybackBar";
++import { MobileToolbar } from "./components/mobile/MobileToolbar";
+ import { clipboardErrorKey } from "./utils/clipboardError";
+ import {
+     closeVocalShifterSkippedFilesDialog,
+@@ -3905,6 +3907,8 @@ function AppInner() {
+             </Flex>
+             )}
+ 
++            {isPhone ? <MobileToolbar /> : null}
++            {isPhone ? <PlaybackBar /> : null}
+             {isPhone ? <BottomTabs active={mobileTab} onChange={setMobileTab} /> : null}
+ 
+             {/* Quick Search Popup */}
+diff --git a/frontend/src/components/mobile/MobileToolbar.tsx b/frontend/src/components/mobile/MobileToolbar.tsx
+new file mode 100644
+index 00000000..332c5ca9
+--- /dev/null
++++ b/frontend/src/components/mobile/MobileToolbar.tsx
+@@ -0,0 +1,146 @@
++/**
++ * MobileToolbar — 手机形态的「第二档」外显开关条（`docs/04` 外显优先级）。
++ *
++ * 排序依据（你给的轨道界面优先级）：
++ *   ① 停止/播放/录制 → `PlaybackBar`，常驻
++ *   ② 节拍器 / 网格 / 自动交叉…忽略编组 → 本组件，横向滚动外显
++ *   ③ 文件管理 / 记事本 → 已由底部页签承担，不再占工具栏
++ *   bpm / 拍号 / 基准音阶 → 移进「工程设置」（后续）
++ *
++ * 用文字按钮而非图标：一排 10 个自定义图标在 360px 下会挤成一团且难以辨认，
++ * 文字更直观（`docs/04` §8 的降级顺序里，图标化是最后一级，不是首选）。
++ * 横向滚动保证 10 个都可达，不牺牲任何一项。
++ */
++
++import { useAppDispatch, useAppSelector } from "../../app/hooks";
++import { shallowEqual } from "react-redux";
++import {
++    cycleRippleMode,
++    persistUiSettings,
++    toggleAutoCrossfade,
++    toggleAutoScroll,
++    toggleIgnoreGrouping,
++    toggleParamEditorSeekPlayhead,
++    toggleParamEditorTimelineClickSelectTrack,
++    togglePlayheadZoom,
++    toggleSnap,
++    toggleSplitTransition,
++} from "../../features/session/sessionSlice";
++import { updateMetronome } from "../../features/session/thunks/transportThunks";
++
++interface ToggleItem {
++    id: string;
++    label: string;
++    on: boolean;
++    act: () => void;
++}
++
++export function MobileToolbar() {
++    const dispatch = useAppDispatch();
++    const s = useAppSelector(
++        (st) => ({
++            metronomeEnabled: st.session.metronomeEnabled,
++            autoCrossfadeEnabled: st.session.autoCrossfadeEnabled,
++            splitTransitionEnabled: st.session.splitTransitionEnabled,
++            snapEnabled: st.session.snapEnabled,
++            rippleMode: st.session.rippleMode,
++            playheadZoomEnabled: st.session.playheadZoomEnabled,
++            autoScrollEnabled: st.session.autoScrollEnabled,
++            paramEditorSeekPlayheadEnabled: st.session.paramEditorSeekPlayheadEnabled,
++            paramEditorTimelineClickSelectTrackEnabled: st.session.paramEditorTimelineClickSelectTrackEnabled,
++            ignoreGrouping: st.session.ignoreGrouping,
++        }),
++        shallowEqual,
++    );
++
++    const flip = (toggle: () => { type: string }) => () => {
++        dispatch(toggle());
++        void dispatch(persistUiSettings());
++    };
++
++    const rippleLabel = s.rippleMode === "off" ? "波纹:关" : s.rippleMode === "track" ? "波纹:轨" : "波纹:全";
++
++    const items: ToggleItem[] = [
++        {
++            id: "metronome",
++            label: "节拍器",
++            on: s.metronomeEnabled,
++            act: () => {
++                void dispatch(updateMetronome({ metronomeEnabled: !s.metronomeEnabled }));
++            },
++        },
++        { id: "snap", label: "网格", on: s.snapEnabled, act: flip(toggleSnap) },
++        {
++            id: "autoCrossfade",
++            label: "自动交叉",
++            on: s.autoCrossfadeEnabled,
++            act: flip(toggleAutoCrossfade),
++        },
++        {
++            id: "splitTransition",
++            label: "分割过渡",
++            on: s.splitTransitionEnabled,
++            act: flip(toggleSplitTransition),
++        },
++        {
++            id: "ripple",
++            label: rippleLabel,
++            on: s.rippleMode !== "off",
++            act: () => {
++                dispatch(cycleRippleMode());
++                void dispatch(persistUiSettings());
++            },
++        },
++        {
++            id: "playheadZoom",
++            label: "播放头缩放",
++            on: s.playheadZoomEnabled,
++            act: flip(togglePlayheadZoom),
++        },
++        { id: "autoScroll", label: "自动滚动", on: s.autoScrollEnabled, act: flip(toggleAutoScroll) },
++        {
++            id: "paramSeek",
++            label: "参数跟随",
++            on: s.paramEditorSeekPlayheadEnabled,
++            act: flip(toggleParamEditorSeekPlayhead),
++        },
++        {
++            id: "clickSelectTrack",
++            label: "点击选轨",
++            on: s.paramEditorTimelineClickSelectTrackEnabled,
++            act: flip(toggleParamEditorTimelineClickSelectTrack),
++        },
++        { id: "ignoreGrouping", label: "忽略编组", on: s.ignoreGrouping, act: flip(toggleIgnoreGrouping) },
++    ];
++
++    return (
++        <div
++            className="shrink-0 flex items-center gap-1 px-2 bg-qt-window border-t border-qt-border"
++            style={{ minHeight: 48, overflowX: "auto", WebkitOverflowScrolling: "touch" }}
++            role="toolbar"
++            aria-label="编辑开关"
++        >
++            {items.map((item) => (
++                <button
++                    key={item.id}
++                    type="button"
++                    onClick={item.act}
++                    aria-pressed={item.on}
++                    className="shrink-0 bg-transparent border-0 cursor-pointer whitespace-nowrap"
++                    style={{
++                        minHeight: 44,
++                        padding: "0 12px",
++                        fontSize: 14,
++                        borderRadius: 8,
++                        fontWeight: item.on ? 600 : 400,
++                        opacity: item.on ? 1 : 0.65,
++                        background: item.on ? "rgba(127,119,221,0.18)" : "transparent",
++                        WebkitTapHighlightColor: "transparent",
++                    }}
++                >
++                    {item.label}
++                </button>
++            ))}
++        </div>
++    );
++}
+diff --git a/frontend/src/components/mobile/PlaybackBar.tsx b/frontend/src/components/mobile/PlaybackBar.tsx
+new file mode 100644
+index 00000000..ec7fd62a
+--- /dev/null
++++ b/frontend/src/components/mobile/PlaybackBar.tsx
+@@ -0,0 +1,128 @@
++/**
++ * PlaybackBar — 手机常驻播放条（`docs/03` §2.2：播放条必须常驻，不能藏进菜单）。
++ *
++ * 按你给的「轨道界面外显优先级」排序，这一组（停止 / 播放 / 录制）是**第一档**，
++ * 因此常驻显示在底部页签之上；手机上此前没有任何播放入口，这是补上的第一块。
++ *
++ * 语义与桌面 Transport 完全一致：
++ * - 停止：`stopAudioPlayback({ restoreAnchor: true })`
++ * - 播放/暂停：`isPlaying ? stopAudioPlayback() : playOriginal()`
++ * - 录制：`active ? stop : countdown>0 ? cancel : start`
++ */
++
++import React from "react";
++import { useAppDispatch, useAppSelector } from "../../app/hooks";
++import { shallowEqual } from "react-redux";
++import { playOriginal, stopAudioPlayback } from "../../features/session/sessionSlice";
++import {
++    cancelRecordingCountdown,
++    startRecordingFlow,
++    stopRecordingFlow,
++} from "../../features/recording/recordingSlice";
++
++export const PLAYBACK_BAR_HEIGHT = 56;
++
++function Svg({ children }: { children: React.ReactNode }) {
++    return (
++        <svg width="20" height="20" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
++            {children}
++        </svg>
++    );
++}
++
++interface BtnProps {
++    label: string;
++    active: boolean;
++    danger?: boolean;
++    onClick: () => void;
++    children: React.ReactNode;
++}
++
++function TransportButton({ label, active, danger, onClick, children }: BtnProps) {
++    return (
++        <button
++            type="button"
++            onClick={onClick}
++            aria-label={label}
++            aria-pressed={active}
++            className="flex items-center justify-center bg-transparent border-0 cursor-pointer"
++            style={{
++                minWidth: 56,
++                minHeight: 48,
++                borderRadius: 8,
++                color: danger ? "#e5484d" : undefined,
++                background: active ? "rgba(127,119,221,0.18)" : "transparent",
++                WebkitTapHighlightColor: "transparent",
++            }}
++        >
++            {children}
++        </button>
++    );
++}
++
++export function PlaybackBar() {
++    const dispatch = useAppDispatch();
++    const isPlaying = useAppSelector((s) => s.session.runtime.isPlaying);
++    const recording = useAppSelector((s) => s.recording, shallowEqual);
++
++    const handleStop = () => {
++        dispatch(stopAudioPlayback({ restoreAnchor: true }));
++    };
++
++    const handlePlayToggle = () => {
++        if (isPlaying) {
++            dispatch(stopAudioPlayback());
++        } else {
++            dispatch(playOriginal());
++        }
++    };
++
++    const handleRecordToggle = () => {
++        if (recording.active) {
++            void dispatch(stopRecordingFlow());
++        } else if (recording.countdownRemaining > 0) {
++            void dispatch(cancelRecordingCountdown());
++        } else {
++            void dispatch(startRecordingFlow());
++        }
++    };
++
++    return (
++        <div
++            className="shrink-0 flex items-center gap-1 px-2 bg-qt-window border-t border-qt-border"
++            style={{ minHeight: PLAYBACK_BAR_HEIGHT }}
++            role="toolbar"
++            aria-label="播放控制"
++        >
++            <TransportButton label="停止" active={false} onClick={handleStop}>
++                <Svg>
++                    <rect x="3" y="3" width="10" height="10" rx="1.5" />
++                </Svg>
++            </TransportButton>
++
++            <TransportButton label={isPlaying ? "暂停" : "播放"} active={isPlaying} onClick={handlePlayToggle}>
++                <Svg>
++                    {isPlaying ? (
++                        <>
++                            <rect x="3" y="2.5" width="3.5" height="11" rx="1" />
++                            <rect x="9.5" y="2.5" width="3.5" height="11" rx="1" />
++                        </>
++                    ) : (
++                        <path d="M4 2.5 L13 8 L4 13.5 Z" />
++                    )}
++                </Svg>
++            </TransportButton>
++
++            <TransportButton
++                label={recording.active ? "停止录制" : "录制"}
++                active={recording.active}
++                danger={recording.active}
++                onClick={handleRecordToggle}
++            >
++                <Svg>
++                    <circle cx="8" cy="8" r="5.5" />
++                </Svg>
++            </TransportButton>
++        </div>
++    );
++}
