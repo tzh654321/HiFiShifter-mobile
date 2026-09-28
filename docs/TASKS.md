@@ -1969,3 +1969,40 @@ git rm -r --cached 'scripts/_*.py' 'scripts/_*.log' 'scripts/_*.ps1' 'scripts/_*
 给的是带斜杠的形式 ⇒ `list_directory` 的 SAF 分支**永远匹配不上**（"授权成功了、列表却还是老路"）。
 `storage_access_state` 与 `list_directory` 现在都按"补齐斜杠后再比前缀"处理，
 且传给 SAF 的 base 仍用**原形态**（不改变返回 path 的约定）。
+---
+
+## 🟡 N2-S（Shizuku）真机进展（2026-09-28 傍晚，真机 221deeb）
+
+### 已实现（三处，全部走项目既有「追加段」纪律）
+
+| 层 | 内容 |
+| :--- | :--- |
+| 生成脚本 | `setup-gen-android.sh` 新增 **§14 HS-SHIZUKU**：往 `app/build.gradle.kts` 追加 `dev.rikka.shizuku:api/provider:13.1.5`，并往清单注入 `ShizukuProvider` |
+| Kotlin | `HifishifterFs`：`shizukuAvailable` / `shizukuPermissionGranted` / `requestShizukuPermission` / `grantAllFilesViaShizuku`（跑 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`）；`attach()` 里注册授权结果监听（try/catch 兜住「没装 Shizuku」的设备，不能带崩 SAF 初始化）|
+| Rust / 前端 | 三条命令 `shizuku_state` / `request_shizuku_permission` / `grant_all_files_via_shizuku` + 提示条按状态显示「授权 Shizuku」/「用 Shizuku 开启全盘访问」（`[data-hs-shizuku]` 钩子）|
+
+### 真机实测结果
+
+| 用例 | 结果 |
+| :--- | :--- |
+| Shizuku 被检测到（真机 13.5.4，adb 已 `start.sh` 起服务）| ✅ `shizuku_state = need-permission` |
+| 提示条出现 Shizuku 入口 | ✅ 按钮「授权 Shizuku」（`data-hs-shizuku=need-permission`）|
+| `request_shizuku_permission` 调用 | ✅ 返回 `{ok:true}` |
+| **系统授权对话框弹出** | 🔴 **没弹** —— `mCurrentFocus` 始终是 `com.android.systemui`（应用虽是 `mFocusedApp`，焦点窗口被 systemui 占着）⇒ Shizuku 的授权 Activity 起不来（Android 后台启动限制）|
+| 授权后 `allFiles=true` / 提示条消失 | 🔴 未达成（上一步没过）|
+
+### 🕳️ 顺手发现一处不完善
+
+`storage_access_state('/sdcard/Download')` 返回 `isSharedStorage:false` —— 共享存储根是
+`/storage/emulated/0`，而 `/sdcard` 只是它的符号链接 ⇒ 判定没覆盖这种写法。
+**修法**：判定前把 `/sdcard` 归一成 `/storage/emulated/0`。
+
+### 下一步（很小）
+
+1. 把应用**真正拉到前台**（现在被 systemui 挡着）后点一次「授权 Shizuku」；
+   或把请求挪到**主线程** `Handler(Looper.getMainLooper()).post { Shizuku.requestPermission(...) }` 再试（部分 ROM 要求）。
+2. 授权成功后点「用 Shizuku 开启全盘访问」⇒ 期望 `allFiles=true`、提示条消失、
+   `get_audio_file_info('/sdcard/Download/test-rr.wav')` 直接成功（不走 SAF、不物化）。
+3. 顺手补 `/sdcard` 归一。
+
+> 📱 真机当前装的是含 **全部改动** 的 arm64 包（N2/D8/N2-S + D1/D2/D4/D5/D6/D7），可直接手测。
