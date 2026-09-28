@@ -59328,10 +59328,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..114ac10c 100644
+index c0db2221..72bbb7bb 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2656 @@
+@@ -1,2297 +1,2676 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -61931,16 +61931,36 @@ index c0db2221..114ac10c 100644
 +            >
 +                0
 +            </Text>
-+            <SlotTimeText
-+                text={formatted.combined}
-+                digitWidthPx={digitWidth}
-+                selectable
-+                className="tabular-nums text-qt-text text-right leading-none whitespace-nowrap shrink-0"
-+                style={
-+                    boxWidth != null ? { minWidth: boxWidth, display: "inline-block" } : undefined
-+                }
-+                tooltip={formatted.combined}
-+            />
++            /* E2：**秒数用小一号字体**（用户口径：「轨道界面左上角 拍数/秒数 的秒数调小字体」）。
++               原来是 `formatted.combined` 一整个字符串（"8.3.2 / 12.345"）⇒ 两段同字号。
++               现在拆成两段：主读数原字号、次级读数 **0.72em** 且淡一档。
++               盒宽仍由 `boxWidth`（按 `maxLabel` 实测）撑着 ⇒ 数字跳动/布局不会变。 */
++            <span
++                className="flex items-baseline gap-0.5 shrink-0 tabular-nums text-right leading-none"
++                style={boxWidth != null ? { minWidth: boxWidth, justifyContent: "flex-end" } : undefined}
++            >
++                <SlotTimeText
++                    text={formatted.primaryLabel}
++                    digitWidthPx={digitWidth}
++                    selectable
++                    className="tabular-nums text-qt-text leading-none whitespace-nowrap"
++                    tooltip={formatted.combined}
++                />
++                {formatted.secondaryLabel ? (
++                    <span
++                        className="tabular-nums whitespace-nowrap opacity-70"
++                        style={{ fontSize: "0.72em" }}
++                        data-hs-tracklist-readout-secondary
++                    >
++                        <SlotTimeText
++                            text={`/ ${formatted.secondaryLabel}`}
++                            digitWidthPx={digitWidth != null ? Math.round(digitWidth * 0.72) : null}
++                            selectable
++                            className="tabular-nums leading-none whitespace-nowrap"
++                        />
++                    </span>
++                ) : null}
++            </span>
 +        </div>
 +    );
 +});
@@ -78269,10 +78289,10 @@ index 00000000..c51ea7f9
 +}
 diff --git a/frontend/src/components/mobile/ClipQuickActions.tsx b/frontend/src/components/mobile/ClipQuickActions.tsx
 new file mode 100644
-index 00000000..f40f46fe
+index 00000000..e750b7c0
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipQuickActions.tsx
-@@ -0,0 +1,308 @@
+@@ -0,0 +1,320 @@
 +/**
 + * 音频块「常用操作」浮动条 —— 规格 `docs/15` 音频块·单击：
 + * 「选中并显示常用操作与左右控制点（参考 flm1.png）」。
@@ -78405,7 +78425,19 @@ index 00000000..f40f46fe
 +        const onDown = (e: PointerEvent) => {
 +            const t = e.target as HTMLElement | null;
 +            if (!t || typeof t.closest !== "function") return;
-+            if (t.closest("[data-hs-clip-actions]")) return;
++            if (t.closest("[data-hs-clip-actions]")) {
++                /* E6（用户口径，**覆盖 B2 的旧行为**）：「**点击临时菜单中的选项后也要隐藏菜单**」。
++                   旧注释的理由是"点按钮不能把浮条收掉"——那是为了让**多步操作**（例如先点
++                   「更多」再点里面的项）不被自己的第一次点击打断。现在按用户要求改为：
++                   **点到真正的选项就收起浮条**（一次操作 = 一个动作 = 浮条退场）。
++                   ⚠️ 只对"命中可点项"生效：点在浮条容器/空白上不收，免得误触即消失；
++                   容器本身保留（多选态下浮条不显示，见上面的门控）。 */
++                if (t.closest("button, [role='button'], [role='menuitem'], [data-hs-clip-action]")) {
++                    const id = selectedClipIdRef.current;
++                    if (id !== null) setHiddenForClipId(id);
++                }
++                return;
++            }
 +            if (t.closest('[data-hs-timeline-kernel="1"]')) {
 +                // 回到时间线 = 用户又去操作块了 ⇒ 清掉"已收起"，让选中逻辑重新决定。
 +                setHiddenForClipId(null);
