@@ -12873,10 +12873,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..b714849f 100644
+index 3ebf39a9..c25c1785 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1277 @@
+@@ -1,1026 +1,1282 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14916,40 +14916,44 @@ index 3ebf39a9..b714849f 100644
 +                        但内容被截断 ⇒ 进不了下面的错误态 ⇒ 授权按钮永远不出现。
 +                        所以这里**不看有没有错误**，只看后端给的 `needsAuth`。 */}
 +                    {needsAuth && !fb.loading && !fb.error ? (
++                        /* ⚠️ 真机（360px 宽）实测：原先是「文字 flex-1 + 三个按钮」的**横排**，
++                           结果文字被压没、按钮挤在右侧两行 —— 用户报「请求授权的排版有问题」。
++                           改成**竖排**：提示独占一行（可换行），按钮在下面各自成行/自动换行。 */
 +                        <Flex
-+                            align="center"
-+                            gap="2"
++                            direction="column"
++                            gap="1"
 +                            className="mx-2 mb-1 px-2 py-1.5 rounded"
 +                            style={{ background: "var(--amber-a3, rgba(255,193,7,0.12))" }}
 +                            data-hs-needs-auth="1"
 +                        >
-+                            <Text size="1" className="flex-1">
++                            <Text size="1" style={{ display: "block" }}>
 +                                {(t as (key: string) => string)("fb_needs_auth_hint")}
 +                            </Text>
-+                            {/* N2-S：非 root 机拿「全盘真路径直读」的打法。
-+                                ① 系统设置里的「所有文件访问」——本按钮直接跳过去，点一下即可；
-+                                ② Shizuku 自助 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`
-+                                   ——效果相同但省去手动步骤（见 docs/18 §4，需装 Shizuku）。
-+                                开了之后 `allFiles=true` ⇒ 本提示条自动消失、导入也不再需要物化。 */}
-+                            <Button
-+                                size="1"
-+                                variant="soft"
-+                                onClick={() => {
-+                                    void fileBrowserApi.openAllFilesAccessSettings();
-+                                }}
-+                            >
-+                                {(t as (key: string) => string)("fb_all_files_access")}
-+                            </Button>
-+                            {/* N2-S：装了 Shizuku 时再给一条"一键"的路（省去去设置里点）。
-+                                `ready` ⇒ 直接执行 appops；`need-permission` ⇒ 先请求授权。
-+                                没装（unavailable）就不显示，避免噪音。 */}
-+                            {shizuku === 'unavailable' ? null : (
++                            <Flex gap="2" wrap="wrap">
++                                {/* N2-S：非 root 机拿「全盘真路径直读」的打法。
++                                    ① 系统设置里的「所有文件访问」——点一下即可；
++                                    ② Shizuku 自助 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`
++                                       ——效果相同但省去手动步骤（见 docs/18 §4，需装 Shizuku）。
++                                    开了之后 `allFiles=true` ⇒ 本提示条自动消失、导入也不再需要物化。 */}
 +                                <Button
 +                                    size="1"
 +                                    variant="soft"
-+                                    data-hs-shizuku={shizuku}
-+                                    onClick={grantAllFiles}
++                                    onClick={() => {
++                                        void fileBrowserApi.openAllFilesAccessSettings();
++                                    }}
 +                                >
++                                    {(t as (key: string) => string)("fb_all_files_access")}
++                                </Button>
++                                {/* N2-S：装了 Shizuku 时再给一条"一键"的路（省去去设置里点）。
++                                    `ready` ⇒ 直接执行 appops；`need-permission` ⇒ 先请求授权。
++                                    没装（unavailable）就不显示，避免噪音。 */}
++                                {shizuku === 'unavailable' ? null : (
++                                    <Button
++                                        size="1"
++                                        variant="soft"
++                                        data-hs-shizuku={shizuku}
++                                        onClick={grantAllFiles}
++                                    >
 +                                    {(t as (key: string) => string)(
 +                                        shizuku === 'ready'
 +                                            ? 'fb_shizuku_grant'
@@ -14960,6 +14964,7 @@ index 3ebf39a9..b714849f 100644
 +                            <Button size="1" variant="soft" onClick={grantDirAccess}>
 +                                {(t as (key: string) => string)("fb_grant_dir_access")}
 +                            </Button>
++                            </Flex>
 +                        </Flex>
 +                    ) : null}
 +                    {fb.loading ? (

@@ -2006,3 +2006,34 @@ git rm -r --cached 'scripts/_*.py' 'scripts/_*.log' 'scripts/_*.ps1' 'scripts/_*
 3. 顺手补 `/sdcard` 归一。
 
 > 📱 真机当前装的是含 **全部改动** 的 arm64 包（N2/D8/N2-S + D1/D2/D4/D5/D6/D7），可直接手测。
+
+---
+
+## ✅ SAF 真机联调（2026-09-28 18:3x–18:4x）：用户报的三件事全部定位/修复
+
+用户在真机上授权了一个文件夹后反馈：① 授权提示**排版有问题**（截图）；② **音频预览**失败；
+③ **拖动到轨道窗**不成功。逐条定位与结果：
+
+| # | 现象 | 根因 | 修法 | 真机复验 |
+| :--- | :--- | :--- | :--- | :--- |
+| ① | 提示条排版崩坏：文字被压没、按钮挤在右侧两行 | 提示条是**横排**：`Text flex-1` + **三个**按钮，360px 宽放不下（我给文字设 `flex-1`，按钮又不换行）| 改成**竖排**：提示独占一行，按钮放进 `Flex wrap="wrap"` 自动换行 | ✅ 截图 + 量测：文字独占一行可读、三按钮换两行、`overflowRight=false` |
+| ② | 音频**预览**失败 | `read_audio_preview` **没接物化** ⇒ SAF 授权目录按路径读被 FUSE 拦：`Permission denied (os error 13)` | 与 `get_audio_file_info` 同法接 `localize_saf_path`；`list_media_audio_streams` 一并接上 | ✅ `read_audio_preview` 返回 PCM（44100/2ch）|
+| ③ | 拖动到轨道窗失败 | **不是 bug**：手机是单面板，文件浏览器**全屏**时没有落点。需先**下拉进分屏**（C5）再拖 | —— | ✅ `_probe-d8-file-drag.mjs` 真机 **4/4**（放手后生成块 `1790592109291_3段z5.mp3`）|
+
+### 真机（221deeb）实测记录
+
+```
+list_directory(用户授权目录)      → 24 个文件（含 .mp3）        ✓ 文件可见
+storage_access_state(同目录)      → coveredByTree:true          ✓ 授权已生效
+get_audio_file_info(<mp3>)       → 44100 / 2ch / 53.6s         ✓
+read_audio_preview(<mp3>)        → PCM 数据（修复前 Permission denied）✓
+拖拽（分屏下）                    → start→10×move→drop + 块数 0→1  ✓
+```
+
+> ⚠️ 联调时**往用户工程里导入了一个测试块**（`1790592109291_3段z5.mp3`），用户可自行删除。
+
+### 仍未做（同类，留给下一轮）
+
+1. **`search_files_recursive` 走 SAF 目录**：它仍用 `fs::read_dir` 递归 ⇒ 在授权目录里搜索会**静默漏掉文件**（与 `list_directory` 修前同一根因）。
+2. **`/sdcard` 未归一**：`storage_access_state('/sdcard/...')` 会判成 `isSharedStorage:false`（`/sdcard` 是指向 `/storage/emulated/0` 的符号链接）。
+3. N2-S 的 Shizuku 授权对话框（需应用真前台点一次；见上一节）。
