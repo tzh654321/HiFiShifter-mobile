@@ -245,6 +245,61 @@ object HifishifterFs {
         ""
     }
 
+    /**
+     * 应用**自有**外部目录（`/storage/emulated/0/Android/data/<pkg>/files`）。
+     *
+     * 为什么单列出来：这个目录**不需要任何授权就能按路径读写**（实测 44100/1ch/2s 读成功），
+     * 所以它虽然物理上位于共享存储之内，却**不该**被判成"列表不可信"——
+     * 否则用户浏览自己的导出目录时会看到一条误导性的"未授权"提示。
+     */
+    @JvmStatic
+    fun ownExternalRoot(): String = try {
+        activity?.getExternalFilesDir(null)?.absolutePath ?: ""
+    } catch (t: Throwable) {
+        Log.w(TAG, "ownExternalRoot 查询失败", t)
+        ""
+    }
+
+    /**
+     * N2-S：跳到系统设置里的「**所有文件访问**」页面（非 root 机获得全盘真路径直读的第二条路）。
+     *
+     * 与 SAF 的关系：SAF 是按目录逐个授权、且只给 `content://`（读前要物化）；
+     * 打开这个开关后 `Environment.isExternalStorageManager()` 为真，
+     * **普通路径读写全部可用**，导入/导出/另存为等路径驱动逻辑一并顺畅。
+     *
+     * 另一条等效路径是 Shizuku 自助执行
+     * `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`（见 docs/18 §4）——
+     * 效果相同，只是省去用户去设置里点的这几步。两条路都让本函数返回后
+     * `isExternalStorageManager()` 为真。
+     *
+     * @return 是否成功拉起设置页（失败时调用方给文案提示）。
+     */
+    @JvmStatic
+    fun openAllFilesAccessSettings(): Boolean {
+        val act = activity ?: return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return false
+        return try {
+            val appIntent = Intent(
+                "android.settings.MANAGE_APP_ALL_FILES_ACCESS_PERMISSION",
+                Uri.parse("package:${act.packageName}"),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            act.startActivity(appIntent)
+            true
+        } catch (t: Throwable) {
+            // 部分 ROM 没有应用级页面 ⇒ 退回"所有文件访问"总列表
+            try {
+                act.startActivity(
+                    Intent("android.settings.MANAGE_ALL_FILES_ACCESS_PERMISSION")
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                )
+                true
+            } catch (t2: Throwable) {
+                Log.w(TAG, "打开「所有文件访问」设置页失败", t2)
+                false
+            }
+        }
+    }
+
     /** 当前应用是否已被授予某个**持久化**的 tree 权限（供 UI 判断"授权是否还在"）。 */
     @JvmStatic
     fun hasPersistedTreePermission(): Boolean {

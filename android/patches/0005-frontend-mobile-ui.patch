@@ -12873,10 +12873,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..632e64e6 100644
+index 3ebf39a9..2672f443 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1195 @@
+@@ -1,1026 +1,1209 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14875,6 +14875,20 @@ index 3ebf39a9..632e64e6 100644
 +                            <Text size="1" className="flex-1">
 +                                {(t as (key: string) => string)("fb_needs_auth_hint")}
 +                            </Text>
++                            {/* N2-S：非 root 机拿「全盘真路径直读」的打法。
++                                ① 系统设置里的「所有文件访问」——本按钮直接跳过去，点一下即可；
++                                ② Shizuku 自助 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`
++                                   ——效果相同但省去手动步骤（见 docs/18 §4，需装 Shizuku）。
++                                开了之后 `allFiles=true` ⇒ 本提示条自动消失、导入也不再需要物化。 */}
++                            <Button
++                                size="1"
++                                variant="soft"
++                                onClick={() => {
++                                    void fileBrowserApi.openAllFilesAccessSettings();
++                                }}
++                            >
++                                {(t as (key: string) => string)("fb_all_files_access")}
++                            </Button>
 +                            <Button size="1" variant="soft" onClick={grantDirAccess}>
 +                                {(t as (key: string) => string)("fb_grant_dir_access")}
 +                            </Button>
@@ -95047,7 +95061,7 @@ index ad269869..6039e410 100644
 +    },
 +);
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..d6d477e5 100644
+index 858bca55..279ef4b0 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
 @@ -2,6 +2,8 @@ export const enUS = {
@@ -95067,7 +95081,7 @@ index 858bca55..d6d477e5 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1482,64 @@ export const enUS = {
+@@ -1479,4 +1482,65 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -95130,10 +95144,11 @@ index 858bca55..d6d477e5 100644
 +
 +    fb_grant_dir_access: "Grant folder access",
 +    fb_needs_auth_hint: "This folder isn't authorized, so the list may be incomplete (files without permission are hidden by the system).",
++    fb_all_files_access: "Allow all files (Settings)",
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..8894d58d 100644
+index ef08ef81..2869fd19 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
 @@ -2,6 +2,8 @@ export const jaJP = {
@@ -95153,7 +95168,7 @@ index ef08ef81..8894d58d 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1495,56 @@ export const jaJP = {
+@@ -1492,4 +1495,57 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -95208,10 +95223,11 @@ index ef08ef81..8894d58d 100644
 +
 +    fb_grant_dir_access: "フォルダへのアクセスを許可",
 +    fb_needs_auth_hint: "このフォルダは未許可のため、一覧が不完全な可能性があります（権限のないファイルは非表示になります）",
++    fb_all_files_access: "すべてのファイルへのアクセス（設定）",
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..51c2ce97 100644
+index 508fcb25..be6679d8 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
 @@ -2,6 +2,8 @@ export const koKR = {
@@ -95231,7 +95247,7 @@ index 508fcb25..51c2ce97 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1472,56 @@ export const koKR = {
+@@ -1469,4 +1472,57 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -95286,10 +95302,11 @@ index 508fcb25..51c2ce97 100644
 +
 +    fb_grant_dir_access: "폴더 접근 권한 부여",
 +    fb_needs_auth_hint: "이 폴더는 권한이 없어 목록이 불완전할 수 있습니다(권한 없는 파일은 시스템이 숨깁니다).",
++    fb_all_files_access: "모든 파일 접근 허용(설정)",
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..e2b86dfc 100644
+index 8bcc3071..884be1bc 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
 @@ -2,6 +2,8 @@ export const zhCN = {
@@ -95309,7 +95326,7 @@ index 8bcc3071..e2b86dfc 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1447,64 @@ export const zhCN = {
+@@ -1444,4 +1447,65 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -95372,10 +95389,11 @@ index 8bcc3071..e2b86dfc 100644
 +
 +    fb_grant_dir_access: "授权访问目录",
 +    fb_needs_auth_hint: "此文件夹未授权，列表可能不完整（系统会隐藏无权限的文件）",
++    fb_all_files_access: "开启全盘访问（设置）",
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..b1081f62 100644
+index 176638e2..093357f4 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
 @@ -3,6 +3,8 @@ export const zhTW = {
@@ -95395,7 +95413,7 @@ index 176638e2..b1081f62 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1449,56 @@ export const zhTW = {
+@@ -1446,4 +1449,57 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -95450,6 +95468,7 @@ index 176638e2..b1081f62 100644
 +
 +    fb_grant_dir_access: "授權存取目錄",
 +    fb_needs_auth_hint: "此資料夾未授權，清單可能不完整（系統會隱藏無權限的檔案）",
++    fb_all_files_access: "開啟全盤存取（設定）",
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
@@ -97170,10 +97189,10 @@ index cf451bd3..f8f4233b 100644
      startBackgroundRender: () =>
          invoke<{ ok: boolean; skipped?: boolean; rendering?: number }>("start_background_render"),
 diff --git a/frontend/src/services/api/fileBrowser.ts b/frontend/src/services/api/fileBrowser.ts
-index fc05dcd6..bce59d81 100644
+index fc05dcd6..5d708dec 100644
 --- a/frontend/src/services/api/fileBrowser.ts
 +++ b/frontend/src/services/api/fileBrowser.ts
-@@ -32,9 +32,32 @@ export interface MediaAudioStream {
+@@ -32,9 +32,38 @@ export interface MediaAudioStream {
      durationSec: number;
  }
  
@@ -97202,6 +97221,12 @@ index fc05dcd6..bce59d81 100644
 +    /** N2：查询这份目录列表是否可信（是否需要引导用户去授权）。 */
 +    storageAccessState: (dirPath: string) =>
 +        invoke<StorageAccessState>("storage_access_state", dirPath),
++
++    /**
++     * N2-S：跳到系统设置的「所有文件访问」页面（全盘真路径直读）。
++     * Shizuku 自助 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow` 是等效的另一条路（docs/18 §4）。
++     */
++    openAllFilesAccessSettings: () => invoke<{ ok: boolean }>("open_all_files_access_settings"),
 +
      searchFilesRecursive: (dirPath: string, query: string) =>
          invoke<FileEntry[]>("search_files_recursive", dirPath, query),
@@ -97830,7 +97855,7 @@ index f0ab3991..bd6ef3b1 100644
 +        invoke<{ ok: boolean }>("save_ui_settings", { settings }),
 +};
 diff --git a/frontend/src/services/invoke.ts b/frontend/src/services/invoke.ts
-index 4da31e42..a427556c 100644
+index 4da31e42..c45b07bf 100644
 --- a/frontend/src/services/invoke.ts
 +++ b/frontend/src/services/invoke.ts
 @@ -127,6 +127,13 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
@@ -97847,13 +97872,17 @@ index 4da31e42..a427556c 100644
          case "import_audio_item":
              return {
                  audioPath: args[0],
-@@ -601,6 +608,10 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
+@@ -601,6 +608,14 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
          case "list_directory":
              return { dirPath: args[0] };
  
 +        // N2：查询「这份目录列表是否可信」（未授权 ⇒ 分区存储会静默隐藏文件）。
 +        case "storage_access_state":
 +            return { dirPath: args[0] };
++
++        // N2-S：跳系统设置「所有文件访问」页（无参）
++        case "open_all_files_access_settings":
++            return {};
 +
          case "get_audio_file_info":
              return { filePath: args[0] };

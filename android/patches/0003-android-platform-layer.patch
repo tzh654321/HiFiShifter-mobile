@@ -1,8 +1,8 @@
 diff --git a/backend/src-tauri/src/commands.rs b/backend/src-tauri/src/commands.rs
-index 74a47f0b..994b994d 100644
+index 74a47f0b..5a9541a2 100644
 --- a/backend/src-tauri/src/commands.rs
 +++ b/backend/src-tauri/src/commands.rs
-@@ -1,1902 +1,1999 @@
+@@ -1,1902 +1,2013 @@
 -// 命令门面（Facade）
 -//
 -// 约束：
@@ -3643,6 +3643,20 @@ index 74a47f0b..994b994d 100644
 +    file_browser::storage_access_state(dir_path)
 +}
 +
++/// N2-S：跳到系统设置的「所有文件访问」页面（全盘真路径直读）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn open_all_files_access_settings() -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        let ok = crate::platform::saf::open_all_files_access_settings();
++        return serde_json::json!({ "ok": ok });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        serde_json::json!({ "ok": false, "error": "desktop" })
++    }
++}
++
 +#[tauri::command(rename_all = "camelCase")]
 +pub fn get_audio_file_info(file_path: String) -> Result<file_browser::AudioFileInfo, String> {
 +    file_browser::get_audio_file_info(file_path)
@@ -4096,10 +4110,10 @@ index 98531493..ba27bdb2 100644
          .pick_file();
  
 diff --git a/backend/src-tauri/src/lib.rs b/backend/src-tauri/src/lib.rs
-index 3eff8813..e3b6eac2 100644
+index 3eff8813..42a8dfe2 100644
 --- a/backend/src-tauri/src/lib.rs
 +++ b/backend/src-tauri/src/lib.rs
-@@ -1,732 +1,787 @@
+@@ -1,732 +1,788 @@
 -/// 热路径调试日志：经 `log::debug!` 走统一日志管线，release 默认 Info 级别下
 -/// 不产生格式化开销；需要诊断时用 `HIFISHIFTER_LOG=debug` 临时打开。
 -/// 定义在 crate 根，供所有子模块（引擎 worker、snapshot、pitch 等）使用。
@@ -5579,6 +5593,7 @@ index 3eff8813..e3b6eac2 100644
 +            commands::get_pitch_cache_stats,
 +            commands::list_directory,
 +            commands::storage_access_state,
++            commands::open_all_files_access_settings,
 +            commands::get_audio_file_info,
 +            commands::read_audio_preview,
 +            commands::search_files_recursive,
@@ -6932,10 +6947,10 @@ index 00000000..c0f15e17
 +}
 diff --git a/backend/src-tauri/src/platform/saf.rs b/backend/src-tauri/src/platform/saf.rs
 new file mode 100644
-index 00000000..0b02f8ef
+index 00000000..92fe1765
 --- /dev/null
 +++ b/backend/src-tauri/src/platform/saf.rs
-@@ -0,0 +1,729 @@
+@@ -0,0 +1,770 @@
 +//! SAF（Storage Access Framework）桥接 —— Android 上的文件选择。
 +//!
 +//! *设计见 `docs/11-SAF文件访问设计.md`。*
@@ -7218,6 +7233,47 @@ index 00000000..0b02f8ef
 +            Ok(s)
 +        })
 +        .unwrap_or_default()
++    }
++
++    /// 应用自有外部目录（`/storage/emulated/0/Android/data/<pkg>/files`）。
++    /// 该目录无需授权即可按路径读写 ⇒ 判定"列表是否可信"时要排除掉（见 file_browser）。
++    pub fn own_external_root() -> String {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "ownExternalRoot", "()Ljava/lang/String;", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 ownExternalRoot 失败: {e}")
++                })?;
++            let obj = ret.l().map_err(|e| format!("取返回值失败: {e}"))?;
++            if obj.is_null() {
++                return Ok(String::new());
++            }
++            env.get_string(&JString::from(obj))
++                .map(|v| String::from(v))
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("读字符串失败: {e}")
++                })
++        })
++        .unwrap_or_default()
++    }
++
++    /// N2-S：跳到系统设置的「所有文件访问」页面（非 root 机拿全盘真路径直读的第二条路）。
++    /// 返回是否成功拉起。Shizuku 自助 `appops` 是等效的另一条路（见 docs/18 §4）。
++    pub fn open_all_files_access_settings() -> bool {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "openAllFilesAccessSettings", "()Z", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 openAllFilesAccessSettings 失败: {e}")
++                })?;
++            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
++        })
++        .unwrap_or(false)
 +    }
 +
 +    /// N2/D8：把**已授权 tree 内**的真实路径物化成 cacheDir 里的本地文件，返回本地路径。

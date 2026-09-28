@@ -147,3 +147,45 @@ N2（文件浏览器列不出文件）
 
 > 📌 下一轮第一步：先做 §3.1 + §3.2（最小改动、可在模拟器上验收：
 > "未授权时必须出现授权入口而不是空列表"），再按 §4 接 Shizuku（需真机验收）。
+
+---
+
+## 6. 进展（2026-09-28 下午）：SAF 全链路已通；"全盘访问"系统入口已做；Shizuku 待真机
+
+### 6.1 已实测通过
+
+| 环节 | 证据 |
+| :--- | :--- |
+| 未授权 ⇒ 面板提示 + 双入口 | `_probe-n2-saf-auth.mjs` 4/4 |
+| 授权（adb 驱动系统选择器：使用此文件夹 → 允许）| `coveredByTree:true`、提示条自动消失 |
+| SAF 列举 | `["123"]` → `["hs_test_tone.wav","123","hs-tone.wav"]` |
+| **按路径读（物化后）** | `get_audio_file_info(<授权目录>/hs-tone.wav)` ⇒ `44100/1ch/2s` |
+| D8 长按拖到轨道 | `_probe-d8-file-drag.mjs` 4/4（落点生成块）|
+| 「开启全盘访问」入口 | `_probe-n2s-allfiles.mjs` 3/3（点后前台 = `com.android.settings/…SpaActivity`）|
+
+### 6.2 本轮新增的两个实现要点
+
+1. **读/导入必须先物化**：SAF 只给 `content://`；实测"自有目录能读、授权目录读不了"。
+   `HifishifterFs.materializeTreePath(realPath)` + `saf::materialize_tree_path`
+   + `file_browser::localize_saf_path`（接在 `import_audio_item` 入口与 `get_audio_file_info`）。
+2. **自有外部目录要排除**：`Android/data/<pkg>/files` 无需授权即可读写，
+   不该判成"未授权"（否则浏览自己的导出目录会看到误导提示）。已加 `ownExternalRoot()` 并在判定里排除。
+
+### 6.3 Shizuku（N2-S）现状与下一步（已勘明，可直接动手）
+
+* **Maven Central 可达** ✓：`https://repo1.maven.org/maven2/dev/rikka/shizuku/api/maven-metadata.xml`
+  可用版本：`11.0.2 … 13.1.5`（建议 `13.1.5`）。
+* ⚠️ **依赖不能只手改 gen 工程**：`gen/` 会被 `tauri android init` 抹掉，
+  依赖与清单都必须由 **`scripts/setup-gen-android.sh` 的追加段**写入
+  （参照既有的 `HS-NATIVE-LIB-FIX` / SAF 段落写法）。
+* 清单要加：
+  ```xml
+  <provider android:name="rikka.shizuku.ShizukuProvider"
+            android:authorities="${applicationId}.shizuku"
+            android:enabled="true" android:exported="true" android:multiprocess="false" />
+  ```
+* 授权动作：`Shizuku.newProcess(arrayOf("sh","-c","appops set <pkg> MANAGE_EXTERNAL_STORAGE allow"), null, null)`
+  → 之后 `Environment.isExternalStorageManager()` 为真（本仓库已有该查询与 `allFiles` 字段 ✓，
+  UI 侧"提示条自动消失"的逻辑无需再改）。
+* **验收必须真机**（模拟器没有 Shizuku 服务）：已装/未装两种分支、授权成功/被拒两种结果。
+* 用户可见文案里要写明：需自行安装 Shizuku 并用"无线调试"启动一次（每次重启手机需重跑）。
