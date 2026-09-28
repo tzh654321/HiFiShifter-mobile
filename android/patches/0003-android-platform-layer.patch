@@ -6932,10 +6932,10 @@ index 00000000..c0f15e17
 +}
 diff --git a/backend/src-tauri/src/platform/saf.rs b/backend/src-tauri/src/platform/saf.rs
 new file mode 100644
-index 00000000..502b1ea3
+index 00000000..0b02f8ef
 --- /dev/null
 +++ b/backend/src-tauri/src/platform/saf.rs
-@@ -0,0 +1,687 @@
+@@ -0,0 +1,729 @@
 +//! SAF（Storage Access Framework）桥接 —— Android 上的文件选择。
 +//!
 +//! *设计见 `docs/11-SAF文件访问设计.md`。*
@@ -7218,6 +7218,48 @@ index 00000000..502b1ea3
 +            Ok(s)
 +        })
 +        .unwrap_or_default()
++    }
++
++    /// N2/D8：把**已授权 tree 内**的真实路径物化成 cacheDir 里的本地文件，返回本地路径。
++    ///
++    /// SAF 授权只给 `content://`，按路径读会被分区存储的 FUSE 拦住
++    /// （实测：自有目录能读、授权目录读不了）。所以"能看到文件"之后，
++    /// 读/导入前必须先物化。空串 = 不适用或失败 ⇒ 调用方回退原路径逻辑。
++    pub fn materialize_tree_path(path: &str) -> Option<String> {
++        let p = path.to_string();
++        let out = with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let jpath = env
++                .new_string(&p)
++                .map_err(|e| format!("构造字符串失败: {e}"))?;
++            let ret = env
++                .call_static_method(
++                    &cls,
++                    "materializeTreePath",
++                    "(Ljava/lang/String;)Ljava/lang/String;",
++                    &[JValue::Object(&jpath)],
++                )
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 materializeTreePath 失败: {e}")
++                })?;
++            let obj = ret.l().map_err(|e| format!("取返回值失败: {e}"))?;
++            if obj.is_null() {
++                return Ok(String::new());
++            }
++            env.get_string(&JString::from(obj))
++                .map(|v| String::from(v))
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("读字符串失败: {e}")
++                })
++        })
++        .unwrap_or_default();
++        if out.is_empty() {
++            None
++        } else {
++            Some(out)
++        }
 +    }
 +
 +    /// 弹系统「选择目录」，返回授权的 tree URI（用户取消返回 `None`）。

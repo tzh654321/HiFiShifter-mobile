@@ -1888,9 +1888,9 @@ git rm -r --cached 'scripts/_*.py' 'scripts/_*.log' 'scripts/_*.ps1' 'scripts/_*
 | 编号 | 项 | 状态 |
 | :--- | :--- | :--- |
 | **N2** | 根因：FUSE 静默隐藏无权限文件（实测 `list_directory` 只回 1 个目录、两 wav 消失且不报错）| ✅ 已定位 |
-| **N2-A** | 修法 A 收口：后端加 `storage_access_state` + 前端把「授权访问目录」做成**常驻入口**并提示 | ✅ DONE（2026-09-28 实测 4/4，见下）|
+| **N2-A** | 修法 A 收口：后端加 `storage_access_state` + 前端把「授权访问目录」做成**常驻入口**并提示 | ✅ DONE（2026-09-28 实测 4/4）|
 | **N2-S** | Shizuku 自助 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow` ⇒ 真路径直读全盘，回落 SAF | ⬜ TODO（§4，**需真机验收**）|
-| **D8** | 长按音频拖到轨道窗 | ⬜ 阻塞于 N2-A / N2-S |
+| **D8** | 长按音频拖到轨道窗 | ✅ DONE（2026-09-28 实测 4/4，见下）|
 ---
 
 ## ✅ N2-A 收口（2026-09-28 实测 4/4）：未授权必须**说出来**，不能静默给残列表
@@ -1931,3 +1931,41 @@ git rm -r --cached 'scripts/_*.py' 'scripts/_*.log' 'scripts/_*.ps1' 'scripts/_*
 - **N2-S（Shizuku）**：见 `docs/18` §4；授权成功后 `allFiles=true`、提示条自动消失
   （`needsAuth` 为假的三个条件之一），需真机验收。
 - **D8**：N2-A 或 N2-S 走通后即可验长按拖拽。
+---
+
+## ✅ N2 完整闭环 + D8 完成（2026-09-28，模拟器实测）
+
+### 端到端链路（全部实测，不再是"设计上应该"）
+
+| 步骤 | 证据 |
+| :--- | :--- |
+| ① 未授权 ⇒ 面板提示 + 授权入口 | `_probe-n2-saf-auth.mjs` 4/4（提示条 +「授权访问目录」按钮）|
+| ② 点授权 ⇒ 系统选择器 | 用 adb 驱动：`使用此文件夹` → `允许`（选择器里**能看到**两个 wav）|
+| ③ 授权落地 | `storage_access_state` ⇒ `coveredByTree:true, needsAuth:false`（提示条自动消失）|
+| ④ **SAF 列举生效** | `list_directory` 从 `["123"]` 变成 `["hs_test_tone.wav","123","hs-tone.wav"]` —— `fs::read_dir` 看不见的文件全出来了 |
+| ⑤ **按路径读也通了** | `get_audio_file_info(<授权目录>/hs-tone.wav)` ⇒ `44100 / 1ch / 2s`（改前：`Failed to read audio info`）|
+| ⑥ **D8 拖拽导入** | `_probe-d8-file-drag.mjs` **4/4**：拖拽链 `start→10×move→drop`，放手后轨道上多出一个块 `1790581752201_hs_test_tone.wav` |
+
+### 🔴 本轮新定位的一个缺口（D8 的真拦路虎）
+
+**SAF 授权给的是 `content://` 访问权，不是文件系统权限** —— 实测对照：
+
+| 读哪个 | 结果 |
+| :--- | :--- |
+| 应用自有目录 `Android/data/<pkg>/files/priv-tone.wav` | ✅ `44100 / 1ch / 2s` |
+| 已 SAF 授权的共享存储目录 `…/HiFiShifter/hs-tone.wav` | ❌ `Failed to read audio info`（两种路径写法都失败）|
+
+⇒ 就是"**列表能看到文件、拖到轨道却导不进来**"。补丁 `0003` 的注释里本来就写了这条设计
+（"落在 tree 内时由 SAF 物化"），但**从未接到读取路径上**。
+
+**修法**：新增"按真实路径物化"——
+* Kotlin `HifishifterFs.materializeTreePath(realPath)`：由 tree URI 求真实前缀 → `findChildByName` 逐段下钻 → 复用既有 `materialize()` 拷进 cacheDir；
+* Rust 桥 `saf::materialize_tree_path()`；
+* Rust `file_browser::localize_saf_path()`，在**导入命令入口**（`import_audio_item`）与 `get_audio_file_info` 各接一次 ⇒ 下游照旧按普通路径处理。
+
+### 🕳️ 又一个"缺前导斜杠"的坑（同一个根因、第二处）
+
+前端持久化下来的路径形如 `storage/emulated/0/HiFiShifter`（缺前导 `/`），而 `tree_real_prefix`
+给的是带斜杠的形式 ⇒ `list_directory` 的 SAF 分支**永远匹配不上**（"授权成功了、列表却还是老路"）。
+`storage_access_state` 与 `list_directory` 现在都按"补齐斜杠后再比前缀"处理，
+且传给 SAF 的 base 仍用**原形态**（不改变返回 path 的约定）。

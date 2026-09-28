@@ -449,6 +449,54 @@ object HifishifterFs {
             }
         }
 
+    /**
+     * N2/D8：把**已授权 tree 内**的真实路径物化成 cacheDir 里的本地文件，返回本地路径。
+     *
+     * 【为什么必须这么做】2026-09-28 实测：
+     * * 应用**自有**目录（`Android/data/<pkg>/files/…`）⇒ 按路径读**成功**；
+     * * 已 SAF 授权的共享存储目录 ⇒ 按路径读**失败**（`Failed to read audio info`），
+     *   因为 SAF 授权给的是 `content://` 访问权，**不是**文件系统权限，
+     *   分区存储的 FUSE 依旧拦着 `open()`。
+     * ⇒ 浏览可以走 SAF（`listTreeChildren`），但**读/导入**必须先物化到本地再读。
+     * 补丁 `0003` 的注释里本来就写了这条设计（"落在 tree 内时由 SAF 物化"），
+     * 只是从未接到读取路径上 —— 于是表现为"能看到文件、拖到轨道却导不进来"。
+     *
+     * 返回空串表示"不适用/失败"，调用方应回退到原路径逻辑。
+     */
+    @JvmStatic
+    fun materializeTreePath(realPath: String): String {
+        val act = activity ?: return ""
+        val treeUri = savedTreeUri()
+        if (treeUri.isEmpty()) return ""
+        return try {
+            val tree = Uri.parse(treeUri)
+            val treeDocId = DocumentsContract.getTreeDocumentId(tree) // 形如 "primary:HiFiShifter"
+            val vol = treeDocId.substringBefore(':', "")
+            val rel0 = treeDocId.substringAfter(':', "")
+            val base = when {
+                vol == "primary" -> "/storage/emulated/0"
+                vol.length >= 4 && vol.contains('-') -> "/storage/$vol"
+                else -> return ""
+            }
+            val prefix = if (rel0.isEmpty()) base else "$base/$rel0"
+            val norm = if (realPath.startsWith("/")) realPath else "/$realPath"
+            if (!(norm == prefix || norm.startsWith("$prefix/"))) return ""
+            val rel = norm.removePrefix(prefix).trimStart('/')
+            if (rel.isEmpty()) return ""
+
+            // 从 tree 根逐段下钻到目标文档
+            var docUri: Uri = DocumentsContract.buildDocumentUriUsingTree(tree, treeDocId)
+            for (seg in rel.split("/")) {
+                if (seg.isEmpty()) continue
+                docUri = findChildByName(act, tree, docUri, seg) ?: return ""
+            }
+            materialize(act, docUri, rel.substringAfterLast('/'))
+        } catch (t: Throwable) {
+            Log.w(TAG, "materializeTreePath 失败: $realPath", t)
+            ""
+        }
+    }
+
     /** 把 `content://` 的流拷到 cacheDir，返回真实路径。 */
     private fun materialize(act: Activity, uri: Uri, displayName: String?): String {
         val raw = displayName?.takeIf { it.isNotBlank() } ?: "import_${System.currentTimeMillis()}"
