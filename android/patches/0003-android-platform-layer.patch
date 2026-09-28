@@ -1,8 +1,8 @@
 diff --git a/backend/src-tauri/src/commands.rs b/backend/src-tauri/src/commands.rs
-index 74a47f0b..d59c92ff 100644
+index 74a47f0b..89ae308b 100644
 --- a/backend/src-tauri/src/commands.rs
 +++ b/backend/src-tauri/src/commands.rs
-@@ -1,1902 +1,2078 @@
+@@ -1,1902 +1,2147 @@
 -// 命令门面（Facade）
 -//
 -// 约束：
@@ -3643,6 +3643,75 @@ index 74a47f0b..d59c92ff 100644
 +    file_browser::storage_access_state(dir_path)
 +}
 +
++/// N2-S：绑定 Shizuku user service（以 shell 身份干活；读 Android/data 的唯一途径）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn shizuku_bind_shell_service() -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        return serde_json::json!({ "ok": crate::platform::saf::bind_shell_service() });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        serde_json::json!({ "ok": false })
++    }
++}
++
++/// N2-S：shell 服务是否已就绪（绑定异步，前端轮询）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn shizuku_shell_ready() -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        return serde_json::json!({ "ok": true, "ready": crate::platform::saf::shell_service_ready() });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        serde_json::json!({ "ok": true, "ready": false })
++    }
++}
++
++/// N2-S：以 shell 身份执行命令（诊断用）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn shizuku_shell_exec(command: String) -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        return serde_json::json!({ "ok": true, "output": crate::platform::saf::shell_exec(&command) });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        let _ = command;
++        serde_json::json!({ "ok": false, "output": "desktop" })
++    }
++}
++
++/// N2-S：以 shell 身份列举目录（返回 JSON；`{"error":...}` 表示失败）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn shizuku_shell_list_dir(path: String) -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        return serde_json::json!({ "ok": true, "json": crate::platform::saf::shell_list_dir(&path) });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        let _ = path;
++        serde_json::json!({ "ok": false, "json": "desktop" })
++    }
++}
++
++/// N2-S：以 shell 身份把文件复制进应用中转目录，返回本地可读路径。
++#[tauri::command(rename_all = "camelCase")]
++pub fn shizuku_shell_copy_to_cache(path: String) -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        let local = crate::platform::saf::shell_copy_to_cache(&path);
++        return serde_json::json!({ "ok": !local.is_empty(), "path": local });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        let _ = path;
++        serde_json::json!({ "ok": false, "path": "" })
++    }
++}
++
 +/// N2-S：跳到系统设置的「所有文件访问」页面（全盘真路径直读）。
 +#[tauri::command(rename_all = "camelCase")]
 +pub fn open_all_files_access_settings() -> serde_json::Value {
@@ -4175,10 +4244,10 @@ index 98531493..ba27bdb2 100644
          .pick_file();
  
 diff --git a/backend/src-tauri/src/lib.rs b/backend/src-tauri/src/lib.rs
-index 3eff8813..aae54ca2 100644
+index 3eff8813..d5ed82c3 100644
 --- a/backend/src-tauri/src/lib.rs
 +++ b/backend/src-tauri/src/lib.rs
-@@ -1,732 +1,792 @@
+@@ -1,732 +1,797 @@
 -/// 热路径调试日志：经 `log::debug!` 走统一日志管线，release 默认 Info 级别下
 -/// 不产生格式化开销；需要诊断时用 `HIFISHIFTER_LOG=debug` 临时打开。
 -/// 定义在 crate 根，供所有子模块（引擎 worker、snapshot、pitch 等）使用。
@@ -5663,6 +5732,11 @@ index 3eff8813..aae54ca2 100644
 +            commands::request_shizuku_permission,
 +            commands::grant_all_files_via_shizuku,
 +            commands::shizuku_grant_result,
++            commands::shizuku_bind_shell_service,
++            commands::shizuku_shell_ready,
++            commands::shizuku_shell_exec,
++            commands::shizuku_shell_list_dir,
++            commands::shizuku_shell_copy_to_cache,
 +            commands::get_audio_file_info,
 +            commands::read_audio_preview,
 +            commands::search_files_recursive,
@@ -7016,10 +7090,10 @@ index 00000000..c0f15e17
 +}
 diff --git a/backend/src-tauri/src/platform/saf.rs b/backend/src-tauri/src/platform/saf.rs
 new file mode 100644
-index 00000000..1c4bfeeb
+index 00000000..4c3eb51e
 --- /dev/null
 +++ b/backend/src-tauri/src/platform/saf.rs
-@@ -0,0 +1,868 @@
+@@ -0,0 +1,968 @@
 +//! SAF（Storage Access Framework）桥接 —— Android 上的文件选择。
 +//!
 +//! *设计见 `docs/11-SAF文件访问设计.md`。*
@@ -7427,6 +7501,106 @@ index 00000000..1c4bfeeb
 +        .unwrap_or_else(|e| format!("jni-failed:{e}"))
 +    }
 +
++    // ── Shizuku user service（v13：以 shell 身份干活，读 Android/data 的唯一途径）──
++
++    /// 绑定 shell 服务（幂等；绑定是异步的，用 `shell_service_ready` 轮询）。
++    pub fn bind_shell_service() -> bool {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "bindShellService", "()Z", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 bindShellService 失败: {e}")
++                })?;
++            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
++        })
++        .unwrap_or(false)
++    }
++
++    /// shell 服务是否已就绪。
++    pub fn shell_service_ready() -> bool {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "shellServiceReady", "()Z", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 shellServiceReady 失败: {e}")
++                })?;
++            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
++        })
++        .unwrap_or(false)
++    }
++
++    /* shell 三连的统一实现：**所有 JNI 动作必须在同一个 `with_env` 里完成**。
++       （`JString`/`JObject` 借用 `env` 的生命周期，跨闭包返回会报
++        `lifetime may not live long enough` —— 第一版就是这么编译失败的。） */
++    fn call_string_arg(method: &str, sig: &str, arg: &str) -> String {
++        let m = method.to_string();
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let js = env
++                .new_string(arg)
++                .map_err(|e| format!("构造字符串失败: {e}"))?;
++            let ret = env
++                .call_static_method(&cls, &m, &sig, &[JValue::Object(&js)])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 {m} 失败: {e}")
++                })?;
++            let obj = ret.l().map_err(|e| format!("取返回值失败: {e}"))?;
++            if obj.is_null() {
++                return Ok(String::new());
++            }
++            env.get_string(&JString::from(obj))
++                .map(|v| String::from(v))
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("读字符串失败: {e}")
++                })
++        })
++        .unwrap_or_default()
++    }
++
++    /// 以 shell 身份执行命令（返回 `exit=<code>` + 输出）。
++    pub fn shell_exec(command: &str) -> String {
++        call_string_arg("shellExec", "(Ljava/lang/String;)Ljava/lang/String;", command)
++    }
++
++    /// 以 shell 身份列举目录（返回 JSON）。
++    pub fn shell_list_dir(path: &str) -> String {
++        call_string_arg("shellListDir", "(Ljava/lang/String;)Ljava/lang/String;", path)
++    }
++
++    /// 以 shell 身份把文件复制进应用中转目录，返回本地可读路径。
++    pub fn shell_copy_to_cache(path: &str) -> String {
++        call_string_arg("shellCopyToCache", "(Ljava/lang/String;)Ljava/lang/String;", path)
++    }
++
++    /// 以 shell 身份判断可读性。
++    pub fn shell_can_read(path: &str) -> bool {
++        let p = path.to_string();
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let js = env
++                .new_string(&p)
++                .map_err(|e| format!("构造字符串失败: {e}"))?;
++            let ret = env
++                .call_static_method(
++                    &cls,
++                    "shellCanRead",
++                    "(Ljava/lang/String;)Z",
++                    &[JValue::Object(&js)],
++                )
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 shellCanRead 失败: {e}")
++                })?;
++            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
++        })
++        .unwrap_or(false)
++    }
 +    /// N2-S：跳到系统设置的「所有文件访问」页面（非 root 机拿全盘真路径直读的第二条路）。
 +    /// 返回是否成功拉起。Shizuku 自助 `appops` 是等效的另一条路（见 docs/18 §4）。
 +    pub fn open_all_files_access_settings() -> bool {

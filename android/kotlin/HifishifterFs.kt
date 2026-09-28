@@ -8,10 +8,14 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.os.Handler
+import android.os.IBinder
+import android.os.Parcel
 import android.os.Looper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import android.content.ComponentName
 import android.content.Intent
+import android.content.ServiceConnection
 import android.provider.DocumentsContract
 import org.json.JSONArray
 import org.json.JSONObject
@@ -113,16 +117,136 @@ private const val RC_BASE = 0x5AF0
     @Volatile
     private var shizukuListenerAttached = false
 
+    /** 把文本放进系统剪贴板（供"复制 Shizuku 命令"用）。 */
+    @JvmStatic
+    fun copyToClipboard(text: String): Boolean {
+        return try {
+            val act = activity ?: return false
+            val cm =
+                act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    ?: return false
+            cm.setPrimaryClip(ClipData.newPlainText("HiFiShifter", text))
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "copyToClipboard 失败", t)
+            false
+        }
+    }
+
+    // ── Shizuku user service（v13 唯一受支持的"以 shell 身份干活"入口）─────────
+    //
+    // 为什么走这条路：Android 11+ 把 `Android/data`/`Android/obb` 排除在
+    // MANAGE_EXTERNAL_STORAGE 之外、SAF 也拒绝选它们 ⇒ 只有 shell 身份能读；
+    // 而 v13 的 `Shizuku` 类没有 `newProcess`（javap 实证），必须用 bindUserService。
+    // 服务实现见 `HsShellService.kt`（跑在 `:shizuku` 独立进程、由 Shizuku 以 shell 身份启动）。
+
+    private var shellService: IBinder? = null
+
+    private val shellConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            shellService = service
+            Log.i(TAG, "Shizuku user service 已连接")
+        }
+
+        override fun onServiceDisconnected(name: ComponentName?) {
+            shellService = null
+            Log.w(TAG, "Shizuku user service 断开")
+        }
+    }
+
     /**
-     * 用 Shizuku 的 shell 身份起一个进程（`Shizuku.newProcess`）。
-     *
+     * 手工 Binder 事务（**刻意不用 AIDL**，见 `HsShellService` 的说明）：
+     * AIDL 的生成物会把构建命令行整条塞进注释，而本项目路径含 `\upstream-src` /
+     * `\universalDebug` —— javac 见到 `\u` 就报 illegal unicode escape，那条路在本机走不通。
+     * 协议码定义在 `HsShellProtocol`（与服务端逐字一致）。
+     */
+    private fun shellTransact(code: Int, arg: String): String {
+        val binder = shellService ?: return ""
+        val data = Parcel.obtain()
+        val reply = Parcel.obtain()
+        return try {
+            data.writeInterfaceToken(HsShellProtocol.DESCRIPTOR)
+            data.writeString(arg)
+            binder.transact(code, data, reply, 0)
+            reply.readException()
+            reply.readString() ?: ""
+        } catch (t: Throwable) {
+            Log.w(TAG, "shellTransact($code) 失败", t)
+            ""
+        } finally {
+            data.recycle()
+            reply.recycle()
+        }
+    }
+
+    /** 绑定 shell 服务（幂等）。返回是否已发起绑定。 */
+    @JvmStatic
+    fun bindShellService(): Boolean {
+        if (shellService != null) return true
+        val act = activity ?: return false
+        return try {
+            if (!Shizuku.pingBinder()) return false
+            val args = Shizuku.UserServiceArgs(ComponentName(act.packageName, HsShellService::class.java.name))
+                .daemon(false)
+                .processNameSuffix("shizuku")
+                .debuggable(false)
+                .version(1)
+            Shizuku.bindUserService(args, shellConnection)
+            Log.i(TAG, "已请求绑定 Shizuku user service")
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "bindUserService 失败", t)
+            false
+        }
+    }
+
+    /** shell 服务当前是否就绪（绑定是异步的 ⇒ 前端可轮询）。 */
+    @JvmStatic
+    fun shellServiceReady(): Boolean = shellService != null
+
+    /** 以 shell 身份执行命令（未就绪时返回 `not-ready`，绝不阻塞）。 */
+    @JvmStatic
+    fun shellExec(command: String): String = try {
+        if (shellService == null) "not-ready" else shellTransact(HsShellProtocol.TX_EXEC, command)
+    } catch (t: Throwable) {
+        Log.w(TAG, "shellExec 失败", t)
+        "error:${t.javaClass.simpleName}:${t.message}"
+    }
+
+    /** 以 shell 身份列举目录（返回 JSON 数组；未就绪返回 `{"error":"not-ready"}`）。 */
+    @JvmStatic
+    fun shellListDir(path: String): String = try {
+        if (shellService == null) "{\"error\":\"not-ready\"}" else shellTransact(HsShellProtocol.TX_LIST_DIR, path)
+    } catch (t: Throwable) {
+        Log.w(TAG, "shellListDir 失败", t)
+        "{\"error\":\"${t.javaClass.simpleName}:${t.message}\"}"
+    }
+
+    /** 以 shell 身份把文件复制进应用中转目录，返回本地可读路径（未就绪返回空串）。 */
+    @JvmStatic
+    fun shellCopyToCache(path: String): String = try {
+        if (shellService == null) "" else shellTransact(HsShellProtocol.TX_COPY_TO_CACHE, path)
+    } catch (t: Throwable) {
+        Log.w(TAG, "shellCopyToCache 失败", t)
+        ""
+    }
+
+    /** shell 身份下是否可读（用于给出明确提示）。 */
+    @JvmStatic
+    fun shellCanRead(path: String): Boolean = try {
+        if (shellService == null) false else shellTransact(HsShellProtocol.TX_CAN_READ, path) == "1"
+    } catch (t: Throwable) {
+        false
+    }
+
+    /**
      * ⚠️ **已废弃、不再调用**（保留仅为记录教训，别再用它）：
      * ① `dev.rikka.shizuku:api:13.1.5` 的公开 API 里**根本没有** `newProcess`
      *    （`javap -public rikka.shizuku.Shizuku` 列到 `exit()` 为止），
      *    所以反射必然拿不到方法；
-     * ② 真机上"用 Shizuku 开全盘访问"这条路会**整进程原生 abort**（无 Java 栈），
+     * ② 真机上"用 Shizuku 开全盘访问"那条同步路径会**整进程原生 abort**（无 Java 栈），
      *    已排除同步线程、`V3_SUPPORT` meta-data 两个原因，栈只在 tombstone 里（需 root）。
-     * ⇒ 现在的做法见 `grantAllFilesViaShizuku`：只复制命令 + 引导用户走系统设置页。
+     * ⇒ 现在改用 user service（见上）。
      */
     @Suppress("unused")
     private fun newShizukuProcess(cmd: Array<String>): Process? = try {
@@ -345,24 +469,6 @@ private const val RC_BASE = 0x5AF0
         val copied = copyToClipboard(cmd)
         shizukuGrantResult = if (copied) "manual-copied" else "manual"
         return "manual"
-    }
-
-    /** 把文本放进系统剪贴板（供"复制 Shizuku 命令"用）。
-     *  ⚠️ 必须是**块体**函数：表达式函数体（`= try { … }`）里不允许 `return`，
-     *  Kotlin 会报 `Returns are not allowed for functions with expression body`。 */
-    @JvmStatic
-    fun copyToClipboard(text: String): Boolean {
-        return try {
-            val act = activity ?: return false
-            val cm =
-                act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
-                    ?: return false
-            cm.setPrimaryClip(ClipData.newPlainText("HiFiShifter", text))
-            true
-        } catch (t: Throwable) {
-            Log.w(TAG, "copyToClipboard 失败", t)
-            false
-        }
     }
 
     /** 上一次「用 Shizuku 开全盘访问」的结果：空串=没跑过；`"pending"`=进行中。 */

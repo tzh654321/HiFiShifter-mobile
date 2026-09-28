@@ -796,6 +796,44 @@ if [ -n "${MANIFEST:-}" ] && [ -f "$MANIFEST" ]; then
   fi
 fi
 
+# ── 15. Shizuku user service 与 AIDL（HS-SHIZUKU-SVC，2026-09-28）──────────────
+# v13 起"以 shell 身份干活"必须走 `Shizuku.bindUserService` ⇒ 需要四样东西：
+#   · AIDL（gradle 生成 Stub）；· 服务实现（跑在 :shizuku 独立进程）；
+#   · 清单里的 <service>；· app/build.gradle.kts 打开 `buildFeatures { aidl = true }`。
+# gen/ 会被 `tauri android init` 抹掉，所以都由本段补。
+echo
+echo "── Shizuku user service（HS-SHIZUKU-SVC）──"
+KOTLIN_SRC_SVC="$ROOT/android/kotlin"
+PKG_PATH_SVC="$(printf '%s' "$PKG_FROM_PATH" | tr '.' '/')"
+AIDL_DST="$GEN_DIR/app/src/main/aidl/$PKG_PATH_SVC"
+JAVA_DST_SVC="$GEN_DIR/app/src/main/java/$PKG_PATH_SVC"
+if [ -f "$KOTLIN_SRC_SVC/HsShellService.kt" ]; then
+  mkdir -p "$AIDL_DST"
+  cp "$KOTLIN_SRC_SVC/IHsShellService.aidl" "$AIDL_DST/IHsShellService.aidl"
+  cp "$KOTLIN_SRC_SVC/HsShellService.kt" "$JAVA_DST_SVC/HsShellService.kt"
+  echo "✓ 已部署 HsShellService.kt（手工 Binder 协议，不用 AIDL）"
+else
+  echo "⚠️ 找不到 HsShellService.kt，跳过（Android/data 将无法读取）" >&2
+fi
+APP_GRADLE_SVC="$GEN_DIR/app/build.gradle.kts"
+if [ -f "$APP_GRADLE_SVC" ]; then
+  if grep -q 'HS-SHIZUKU-SVC' "$APP_GRADLE_SVC"; then
+    echo "· gradle 已开启 aidl，跳过"
+  else
+    # 锚在既有的 `buildFeatures {`：往里加一行 aidl = true（不重复建块）。
+    sed -i 's|\(    buildFeatures {\)|\1\n        // HS-SHIZUKU-SVC: AIDL（Shizuku user service）\n        aidl = true|' "$APP_GRADLE_SVC"
+    grep -q 'aidl = true' "$APP_GRADLE_SVC" && echo "✓ 已开启 buildFeatures.aidl" || echo "❌ 开启 aidl 失败" >&2
+  fi
+fi
+if [ -n "${MANIFEST:-}" ] && [ -f "$MANIFEST" ]; then
+  if grep -q 'HsShellService' "$MANIFEST"; then
+    echo "· Manifest 已有 shell service，跳过"
+  else
+    sed -i 's|\(        <activity\)|        <!-- HS-SHIZUKU-SVC: shell-identity helper, runs in its own process -->\n        <service android:name=".HsShellService" android:exported="false" android:process=":shizuku" />\n        \1|' "$MANIFEST"
+    grep -q 'HsShellService' "$MANIFEST" && echo "✓ 已注册 HsShellService" || echo "❌ 注册 service 失败" >&2
+  fi
+fi
+
 echo
 echo "── 自检 ──"if [ -n "$MA" ]; then
   grep -c 'HS-SAFE-AREA-PATCH' "$MA" | sed 's/^/  MainActivity inset 补丁: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'
@@ -804,6 +842,8 @@ echo "── 自检 ──"if [ -n "$MA" ]; then
 fi
 if [ -n "${MANIFEST:-}" ] && [ -f "$MANIFEST" ]; then
   grep -c 'RECORD_AUDIO' "$MANIFEST" | sed 's/^/  Manifest RECORD_AUDIO: /' | sed 's/1$/已声明/; s/0$/❌ 未声明/'
+  grep -c 'MANAGE_EXTERNAL_STORAGE' "$MANIFEST" | sed 's/^/  Manifest MANAGE_EXTERNAL_STORAGE（设置页开关才会可点）: /' | sed 's/1$/已声明/; s/0$/❌ 未声明/'
+  grep -c 'HsShellService' "$MANIFEST" | sed 's/^/  Manifest Shizuku shell service: /' | sed 's/1$/已注册/; s/0$/❌ 未注册/'
 fi
 if [ -n "${FS_DST:-}" ]; then
   if [ -f "$FS_DST" ]; then

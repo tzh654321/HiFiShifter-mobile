@@ -12873,10 +12873,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..5cbfa3cf 100644
+index 3ebf39a9..c18cb953 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1361 @@
+@@ -1,1026 +1,1391 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14237,6 +14237,36 @@ index 3ebf39a9..5cbfa3cf 100644
 +            setShizukuHint(true);
 +        })();
 +    }, []);
++
++    /**
++     * N2-S：进了 `Android/data` / `Android/obb` 就**自动绑定 Shizuku user service** 并轮询，
++     * 绑定成功后重载目录。
++     *
++     * 为什么必须这样：Android 11+ 把这两块从 `MANAGE_EXTERNAL_STORAGE` 里剔除、SAF 也拒绝
++     * 选它们 ⇒ **只有 shell 身份**（Shizuku user service）能读；不绑的话后端只能报错。
++     * 绑定是异步的（Shizuku 要以 shell 身份启动 `:shizuku` 进程）⇒ 这里轮询就绪再重载。
++     */
++    useEffect(() => {
++        const p = fb.currentPath || '';
++        if (!/\/Android\/(data|obb)(\/|$)/.test(p)) return;
++        let cancelled = false;
++        void (async () => {
++            const st = await fileBrowserApi.shizukuShellReady().catch(() => null);
++            if (st?.ready) return;
++            await fileBrowserApi.shizukuBindShellService().catch(() => null);
++            for (let i = 0; i < 20 && !cancelled; i++) {
++                await new Promise((r) => setTimeout(r, 400));
++                const s = await fileBrowserApi.shizukuShellReady().catch(() => null);
++                if (s?.ready) {
++                    void dispatch(loadDirectory(p));
++                    return;
++                }
++            }
++        })();
++        return () => {
++            cancelled = true;
++        };
++    }, [fb.currentPath, dispatch, fb.error]);
 +
 +    // 目录变化 / 列表刷新后问一次"这份列表可不可信"；顺带查一次 Shizuku 状态
 +    useEffect(() => {
@@ -97413,10 +97443,10 @@ index cf451bd3..f8f4233b 100644
      startBackgroundRender: () =>
          invoke<{ ok: boolean; skipped?: boolean; rendering?: number }>("start_background_render"),
 diff --git a/frontend/src/services/api/fileBrowser.ts b/frontend/src/services/api/fileBrowser.ts
-index fc05dcd6..d5d35b38 100644
+index fc05dcd6..82761e0e 100644
 --- a/frontend/src/services/api/fileBrowser.ts
 +++ b/frontend/src/services/api/fileBrowser.ts
-@@ -32,9 +32,61 @@ export interface MediaAudioStream {
+@@ -32,9 +32,71 @@ export interface MediaAudioStream {
      durationSec: number;
  }
  
@@ -97474,6 +97504,16 @@ index fc05dcd6..d5d35b38 100644
 +        invoke<{ ok: boolean; pending: boolean; error: string; allFiles: boolean }>(
 +            "shizuku_grant_result",
 +        ),
++
++    /**
++     * N2-S：绑定 Shizuku **user service**（以 shell 身份干活）。
++     * Android 11+ 只有 shell 身份能读 `Android/data`、`Android/obb` ⇒ 浏览这两个目录前必须绑。
++     * 绑定是异步的：调用后用 `shizukuShellReady()` 轮询。
++     */
++    shizukuBindShellService: () => invoke<{ ok: boolean }>("shizuku_bind_shell_service"),
++
++    /** N2-S：shell 服务是否已就绪。 */
++    shizukuShellReady: () => invoke<{ ok: boolean; ready: boolean }>("shizuku_shell_ready"),
 +
      searchFilesRecursive: (dirPath: string, query: string) =>
          invoke<FileEntry[]>("search_files_recursive", dirPath, query),
@@ -98102,7 +98142,7 @@ index f0ab3991..bd6ef3b1 100644
 +        invoke<{ ok: boolean }>("save_ui_settings", { settings }),
 +};
 diff --git a/frontend/src/services/invoke.ts b/frontend/src/services/invoke.ts
-index 4da31e42..7dbb5472 100644
+index 4da31e42..dbdcd634 100644
 --- a/frontend/src/services/invoke.ts
 +++ b/frontend/src/services/invoke.ts
 @@ -127,6 +127,13 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
@@ -98119,7 +98159,7 @@ index 4da31e42..7dbb5472 100644
          case "import_audio_item":
              return {
                  audioPath: args[0],
-@@ -601,6 +608,24 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
+@@ -601,6 +608,34 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
          case "list_directory":
              return { dirPath: args[0] };
  
@@ -98140,6 +98180,16 @@ index 4da31e42..7dbb5472 100644
 +            return {};
 +        case "shizuku_grant_result":
 +            return {};
++        case "shizuku_bind_shell_service":
++            return {};
++        case "shizuku_shell_ready":
++            return {};
++        case "shizuku_shell_exec":
++            return { command: args[0] };
++        case "shizuku_shell_list_dir":
++            return { path: args[0] };
++        case "shizuku_shell_copy_to_cache":
++            return { path: args[0] };
 +
          case "get_audio_file_info":
              return { filePath: args[0] };

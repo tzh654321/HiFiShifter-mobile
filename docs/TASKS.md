@@ -2231,3 +2231,46 @@ SAF 仍然保留为"没有全盘权限时"的回退路径。
   换成 user service 后要**只在用户显式点击时绑定**，并全程 try/catch + 绑定超时，
   一旦再出现原生 abort 就立刻退回"复制命令"方案（本轮已保留）。
 * 真机验证依赖 Shizuku 服务已启动（`adb shell sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh`）。
+
+---
+
+## 🚧 Shizuku user service 实现（2026-09-28 21:xx，构建通过、绑定未通）
+
+按用户要求保留并落地 Shizuku 路线（Android 11+ 只有 shell 身份能读 `Android/data`）。
+
+### 已实现（编译/构建全绿）
+
+| 层 | 内容 |
+| :--- | :--- |
+| Kotlin 服务 | `HsShellService.kt`：`Service` + **手工 Binder 协议**（`onTransact` 四个事务码：exec / listDir / copyToCache / canRead）；跑在清单声明的 `android:process=":shizuku"` 独立进程；包名从 `/proc/self/cmdline` 反推 |
+| Kotlin 客户端 | `HifishifterFs`：`bindShellService` / `shellServiceReady` / `shellExec` / `shellListDir` / `shellCopyToCache` / `shellCanRead`（都用 `IBinder.transact` + `Parcel`）|
+| Rust | `platform/saf.rs` 六个桥 + `commands.rs` 五个命令（`shizuku_bind_shell_service` / `shizuku_shell_ready` / `shizuku_shell_exec` / `shizuku_shell_list_dir` / `shizuku_shell_copy_to_cache`），`lib.rs` 注册 |
+| Rust 路由 | `file_browser::needs_shell_identity()`：路径含 `/Android/data/` 或 `/Android/obb/` 时，**列目录走 shell**、**读文件/取信息/预览先经 shell 物化**（`localize_saf_path` 里优先 shell，再回落 SAF）|
+| 前端 | 进入 `Android/data|obb` 目录时**自动绑定**并轮询就绪，就绪后重载目录；`invoke.ts` 参数名登记齐全 |
+
+### ⚠️ 未通的一步：服务没被拉起来
+
+真机（Shizuku 13.5.4 已在跑）：
+
+```
+shizuku_state            = ready      ✓
+bind_shell_service       = ok:true    ✓（请求已发出）
+shizuku_shell_ready      → ready:false（一直没就绪）
+shizuku_shell_exec(id)   → not-ready
+清单/合并清单里的 service = com.arounder.hifishifter.HsShellService / process=:shizuku ✓
+两侧日志              = 都没有（Shizuku 没有启动我们服务的记录）
+```
+
+⇒ 绑定请求没生效。**下一轮排查顺序**（都已备好工具）：
+1. `adb shell dumpsys activity services | grep -i hifishifter` 看 Shizuku 有没有尝试启动 `:shizuku` 进程；
+2. 检查 `Shizuku.UserServiceArgs` 的必需项：`processNameSuffix` 必须与清单 `android:process=":shizuku"` **完全对应**（当前是 `shizuku` ⇒ `:shizuku` ✓ 需再核）；
+3. 用 `Shizuku.addBinderReceivedListenerSticky` 确认绑定**发生时** Shizuku binder 已就绪（我们可能在 ready 之前就发起了 bind）；
+4. 看 Shizuku 应用自身的日志（`logcat -s Shizuku`），它会打印"启动 user service 失败"的原因（常见：service 未导出、未在清单、或 version 不匹配）。
+
+### 🕳️ 顺带记一个 Windows 死结（省得后人再踩）
+
+**不能用 AIDL**：AIDL 生成的 Java 会把构建命令行整条塞进注释，
+而本项目路径含 `\upstream-src` / `\universalDebug` —— javac 见到注释里的 `\u` 直接报
+`illegal unicode escape`（`\u` 后面不是 4 位十六进制）。已在 `setup-gen-android.sh` §15 注释里写明，
+并改为**手工 Binder 协议**（零代码生成）。
+`javap` 也证实：v13 的 `Shizuku` 类**没有 `newProcess`**，`bindUserService` 是唯一入口。
