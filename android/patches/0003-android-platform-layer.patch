@@ -1,8 +1,8 @@
 diff --git a/backend/src-tauri/src/commands.rs b/backend/src-tauri/src/commands.rs
-index 74a47f0b..bdaa64f7 100644
+index 74a47f0b..994b994d 100644
 --- a/backend/src-tauri/src/commands.rs
 +++ b/backend/src-tauri/src/commands.rs
-@@ -1,1902 +1,1993 @@
+@@ -1,1902 +1,1999 @@
 -// 命令门面（Facade）
 -//
 -// 约束：
@@ -3637,6 +3637,12 @@ index 74a47f0b..bdaa64f7 100644
 +    file_browser::list_directory(dir_path)
 +}
 +
++/// N2：这份目录列表是否可信（是否需要引导用户去授权）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn storage_access_state(dir_path: String) -> serde_json::Value {
++    file_browser::storage_access_state(dir_path)
++}
++
 +#[tauri::command(rename_all = "camelCase")]
 +pub fn get_audio_file_info(file_path: String) -> Result<file_browser::AudioFileInfo, String> {
 +    file_browser::get_audio_file_info(file_path)
@@ -4090,10 +4096,10 @@ index 98531493..ba27bdb2 100644
          .pick_file();
  
 diff --git a/backend/src-tauri/src/lib.rs b/backend/src-tauri/src/lib.rs
-index 3eff8813..8d974104 100644
+index 3eff8813..e3b6eac2 100644
 --- a/backend/src-tauri/src/lib.rs
 +++ b/backend/src-tauri/src/lib.rs
-@@ -1,732 +1,786 @@
+@@ -1,732 +1,787 @@
 -/// 热路径调试日志：经 `log::debug!` 走统一日志管线，release 默认 Info 级别下
 -/// 不产生格式化开销；需要诊断时用 `HIFISHIFTER_LOG=debug` 临时打开。
 -/// 定义在 crate 根，供所有子模块（引擎 worker、snapshot、pitch 等）使用。
@@ -5572,6 +5578,7 @@ index 3eff8813..8d974104 100644
 +            commands::clear_pitch_cache,
 +            commands::get_pitch_cache_stats,
 +            commands::list_directory,
++            commands::storage_access_state,
 +            commands::get_audio_file_info,
 +            commands::read_audio_preview,
 +            commands::search_files_recursive,
@@ -6925,10 +6932,10 @@ index 00000000..c0f15e17
 +}
 diff --git a/backend/src-tauri/src/platform/saf.rs b/backend/src-tauri/src/platform/saf.rs
 new file mode 100644
-index 00000000..3e3552e7
+index 00000000..502b1ea3
 --- /dev/null
 +++ b/backend/src-tauri/src/platform/saf.rs
-@@ -0,0 +1,642 @@
+@@ -0,0 +1,687 @@
 +//! SAF（Storage Access Framework）桥接 —— Android 上的文件选择。
 +//!
 +//! *设计见 `docs/11-SAF文件访问设计.md`。*
@@ -7151,6 +7158,51 @@ index 00000000..3e3552e7
 +                .map_err(|e| {
 +                    let _ = env.exception_clear();
 +                    format!("调用 savedTreeUri 失败: {e}")
++                })?;
++            let obj = ret.l().map_err(|e| format!("取返回值失败: {e}"))?;
++            if obj.is_null() {
++                return Ok(String::new());
++            }
++            let s = env
++                .get_string(&JString::from(obj))
++                .map(|v| String::from(v))
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("读字符串失败: {e}")
++                })?;
++            Ok(s)
++        })
++        .unwrap_or_default()
++    }
++
++    /// N2：是否已具备「所有文件访问」（`MANAGE_EXTERNAL_STORAGE`）。
++    ///
++    /// 分区存储下无授权时 `readdir()` 会**静默隐藏**读不到的文件（不报错），
++    /// 所以上层必须能问出这个状态，才能判断"这份目录列表是否可信"。
++    /// Shizuku 自助授权（`appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`）也会让它为真。
++    pub fn is_external_storage_manager() -> bool {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "isExternalStorageManager", "()Z", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 isExternalStorageManager 失败: {e}")
++                })?;
++            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
++        })
++        .unwrap_or(false)
++    }
++
++    /// 共享存储根（通常 `/storage/emulated/0`）；取不到返回空串。
++    pub fn shared_storage_root() -> String {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "sharedStorageRoot", "()Ljava/lang/String;", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 sharedStorageRoot 失败: {e}")
 +                })?;
 +            let obj = ret.l().map_err(|e| format!("取返回值失败: {e}"))?;
 +            if obj.is_null() {

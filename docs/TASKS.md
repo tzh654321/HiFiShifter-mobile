@@ -1888,6 +1888,46 @@ git rm -r --cached 'scripts/_*.py' 'scripts/_*.log' 'scripts/_*.ps1' 'scripts/_*
 | 编号 | 项 | 状态 |
 | :--- | :--- | :--- |
 | **N2** | 根因：FUSE 静默隐藏无权限文件（实测 `list_directory` 只回 1 个目录、两 wav 消失且不报错）| ✅ 已定位 |
-| **N2-A** | 修法 A 收口：后端加 `storage_access_state`（needs_auth 可判定）+ 前端把「授权访问目录」做成**常驻入口**并提示 | ⬜ TODO（§3）|
+| **N2-A** | 修法 A 收口：后端加 `storage_access_state` + 前端把「授权访问目录」做成**常驻入口**并提示 | ✅ DONE（2026-09-28 实测 4/4，见下）|
 | **N2-S** | Shizuku 自助 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow` ⇒ 真路径直读全盘，回落 SAF | ⬜ TODO（§4，**需真机验收**）|
 | **D8** | 长按音频拖到轨道窗 | ⬜ 阻塞于 N2-A / N2-S |
+---
+
+## ✅ N2-A 收口（2026-09-28 实测 4/4）：未授权必须**说出来**，不能静默给残列表
+
+### 改了什么
+
+| 层 | 改动 |
+| :--- | :--- |
+| Kotlin | `android/kotlin/HifishifterFs.kt` 新增 `@JvmStatic isExternalStorageManager()`（`Environment.isExternalStorageManager()`，Shizuku 自助授权后同样为真）、`sharedStorageRoot()`、`hasPersistedTreePermission()` |
+| Rust 桥 | `platform/saf.rs` 新增 `is_external_storage_manager()` / `shared_storage_root()`（沿用既有 `call_static_method` 风格）|
+| Rust 命令 | `commands/file_browser.rs` 新增 `storage_access_state(dir_path)` ⇒ `{isSharedStorage, coveredByTree, allFiles, needsAuth}`；`commands.rs` 加 `#[tauri::command]` 包装；`lib.rs` 注册 |
+| 前端 | `services/api/fileBrowser.ts` 加 `storageAccessState`；`components/layout/FileBrowserPanel.tsx` 加提示条（`data-hs-needs-auth`）+ 常驻「授权访问目录」按钮（与错误态**共用**同一个 `grantDirAccess`）；i18n 五语言加 `fb_needs_auth_hint` |
+
+### 验收（模拟器；`scripts/_probe-n2-saf-auth.mjs`）
+
+| 用例 | 结果 |
+| :--- | :--- |
+| N2-A1 共享存储目录被判定为不可信 | ✅ `{isSharedStorage:true, coveredByTree:false, allFiles:false, needsAuth:true}` |
+| N2-A2 非共享存储路径不触发提示（桌面行为不变）| ✅ `needsAuth:false` |
+| N2-A3 对照：静默截断真实存在 | ✅ 磁盘 `["hs-tone.wav","hs_test_tone.wav"]`，后端只返回 `["123"]` |
+| N2-A4 **未授权时面板出现提示条 +「授权访问目录」入口** | ✅ 文案「此文件夹未授权，列表可能不完整（系统会隐藏无权限的文件）」+ 按钮 |
+
+### 🕳️ 这一轮踩到的两个坑（下一个改这三层的人必读）
+
+1. **改了 `android/kotlin/*.kt` 必须把它拷进生成的安卓工程再构建** ——
+   部署在 `setup-gen-android.sh` §8（`cp android/kotlin/HifishifterFs.kt → gen/android/app/src/main/java/<pkg>/`），
+   **`build-apk.ps1` 不做这一步**。没拷的话 JNI 调用静默失败（我用 `unwrap_or_default()`
+   把失败吞成了空串/`false`），表现为"命令能返回、但字段全是默认值"。
+2. **前端新增后端命令必须同时在 `services/invoke.ts` 的 `buildTauriArgs` 里登记参数名** ——
+   该 helper 是位置参数 + 名字注册表；没登记会抛 `method not wired yet`，
+   而我的 `catch` 把它当成"老后端没有这个命令"静默吞掉 ⇒ 排查时看不到任何报错。
+   （这也解释了第一版"后端判定全对、UI 却不出提示"。）
+
+### 还没做（下一步）
+
+- **真正走通 SAF 列举**：授权一个目录后列表应与 `adb shell ls` 一致（需要点系统选择器，
+  建议真机手点一次，或下一轮用 adb 导航选择器）。
+- **N2-S（Shizuku）**：见 `docs/18` §4；授权成功后 `allFiles=true`、提示条自动消失
+  （`needsAuth` 为假的三个条件之一），需真机验收。
+- **D8**：N2-A 或 N2-S 走通后即可验长按拖拽。

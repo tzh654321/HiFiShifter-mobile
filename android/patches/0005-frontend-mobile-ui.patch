@@ -12873,10 +12873,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..e908cb48 100644
+index 3ebf39a9..632e64e6 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1139 @@
+@@ -1,1026 +1,1195 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14187,6 +14187,48 @@ index 3ebf39a9..e908cb48 100644
 +    const searchInputRef = useRef<HTMLInputElement>(null);
 +    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 +
++    /**
++     * N2：当前目录的列表是否**不可信**（未授权 ⇒ 分区存储会静默隐藏文件）。
++     *
++     * 用组件本地 state 而不是 redux：只有这个面板消费它，没必要扩大 slice 的接口面。
++     */
++    const [needsAuth, setNeedsAuth] = useState(false);
++
++    /**
++     * 引导用户授权目录（SAF tree），成功后**重试当前路径** ——
++     * Rust 侧检测到路径落在已授权 tree 内会自动改走 SAF 列举。
++     * 错误态与"未授权提示条"两处共用同一实现，避免两份逻辑漂移。
++     */
++    const grantDirAccess = useCallback(() => {
++        void (async () => {
++            const r = await fileBrowserApi.pickDirectory();
++            if (r?.ok && !r.canceled) {
++                void dispatch(loadDirectory(fb.currentPath));
++            }
++        })();
++    }, [dispatch, fb.currentPath]);
++
++    // 目录变化 / 列表刷新后问一次"这份列表可不可信"
++    useEffect(() => {
++        let cancelled = false;
++        if (!fb.currentPath) {
++            setNeedsAuth(false);
++            return;
++        }
++        void (async () => {
++            try {
++                const st = await fileBrowserApi.storageAccessState(fb.currentPath);
++                if (!cancelled) setNeedsAuth(Boolean(st?.needsAuth));
++            } catch {
++                // 老版本后端没有这个命令 / 桌面平台异常：静默当作"可信"，不打扰用户
++                if (!cancelled) setNeedsAuth(false);
++            }
++        })();
++        return () => {
++            cancelled = true;
++        };
++    }, [fb.currentPath, fb.entries, fb.loading]);
++
 +    // 清除 debounce
 +    useEffect(
 +        () => () => {
@@ -14817,6 +14859,27 @@ index 3ebf39a9..e908cb48 100644
 +            {/* 文件列表 */}
 +            <ScrollArea className="flex-1 min-h-0" scrollbars="vertical">
 +                <div className="py-1">
++                    {/* N2：「列表可信度」提示条（2026-09-28）。
++                        ⚠️ 为什么必须有它：分区存储下未授权时 `readdir()` 会**静默隐藏**
++                        无权限的文件（目录还在、文件消失、**系统不报错**）⇒ 列表"读取成功"
++                        但内容被截断 ⇒ 进不了下面的错误态 ⇒ 授权按钮永远不出现。
++                        所以这里**不看有没有错误**，只看后端给的 `needsAuth`。 */}
++                    {needsAuth && !fb.loading && !fb.error ? (
++                        <Flex
++                            align="center"
++                            gap="2"
++                            className="mx-2 mb-1 px-2 py-1.5 rounded"
++                            style={{ background: "var(--amber-a3, rgba(255,193,7,0.12))" }}
++                            data-hs-needs-auth="1"
++                        >
++                            <Text size="1" className="flex-1">
++                                {(t as (key: string) => string)("fb_needs_auth_hint")}
++                            </Text>
++                            <Button size="1" variant="soft" onClick={grantDirAccess}>
++                                {(t as (key: string) => string)("fb_grant_dir_access")}
++                            </Button>
++                        </Flex>
++                    ) : null}
 +                    {fb.loading ? (
 +                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
 +                            {(t as (key: string) => string)("fb_loading")}
@@ -14831,14 +14894,7 @@ index 3ebf39a9..e908cb48 100644
 +                            <Button
 +                                size="1"
 +                                variant="soft"
-+                                onClick={() => {
-+                                    void (async () => {
-+                                        const r = await fileBrowserApi.pickDirectory();
-+                                        if (r?.ok && !r.canceled) {
-+                                            void dispatch(loadDirectory(fb.currentPath));
-+                                        }
-+                                    })();
-+                                }}
++                                onClick={grantDirAccess}
 +                            >
 +                                {(t as (key: string) => string)("fb_grant_dir_access")}
 +                            </Button>
@@ -94991,7 +95047,7 @@ index ad269869..6039e410 100644
 +    },
 +);
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..da133d06 100644
+index 858bca55..d6d477e5 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
 @@ -2,6 +2,8 @@ export const enUS = {
@@ -95011,7 +95067,7 @@ index 858bca55..da133d06 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1482,63 @@ export const enUS = {
+@@ -1479,4 +1482,64 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -95073,10 +95129,11 @@ index 858bca55..da133d06 100644
 +    options_show_shortcut_hints: "Show shortcut hints",
 +
 +    fb_grant_dir_access: "Grant folder access",
++    fb_needs_auth_hint: "This folder isn't authorized, so the list may be incomplete (files without permission are hidden by the system).",
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..10e5a653 100644
+index ef08ef81..8894d58d 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
 @@ -2,6 +2,8 @@ export const jaJP = {
@@ -95096,7 +95153,7 @@ index ef08ef81..10e5a653 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1495,55 @@ export const jaJP = {
+@@ -1492,4 +1495,56 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -95150,10 +95207,11 @@ index ef08ef81..10e5a653 100644
 +    options_show_shortcut_hints: "ショートカットのヒントを表示",
 +
 +    fb_grant_dir_access: "フォルダへのアクセスを許可",
++    fb_needs_auth_hint: "このフォルダは未許可のため、一覧が不完全な可能性があります（権限のないファイルは非表示になります）",
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..d7784cc7 100644
+index 508fcb25..51c2ce97 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
 @@ -2,6 +2,8 @@ export const koKR = {
@@ -95173,7 +95231,7 @@ index 508fcb25..d7784cc7 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1472,55 @@ export const koKR = {
+@@ -1469,4 +1472,56 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -95227,10 +95285,11 @@ index 508fcb25..d7784cc7 100644
 +    options_show_shortcut_hints: "단축키 힌트 표시",
 +
 +    fb_grant_dir_access: "폴더 접근 권한 부여",
++    fb_needs_auth_hint: "이 폴더는 권한이 없어 목록이 불완전할 수 있습니다(권한 없는 파일은 시스템이 숨깁니다).",
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..8d67e2de 100644
+index 8bcc3071..e2b86dfc 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
 @@ -2,6 +2,8 @@ export const zhCN = {
@@ -95250,7 +95309,7 @@ index 8bcc3071..8d67e2de 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1447,63 @@ export const zhCN = {
+@@ -1444,4 +1447,64 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -95312,10 +95371,11 @@ index 8bcc3071..8d67e2de 100644
 +    options_show_shortcut_hints: "显示快捷键提示",
 +
 +    fb_grant_dir_access: "授权访问目录",
++    fb_needs_auth_hint: "此文件夹未授权，列表可能不完整（系统会隐藏无权限的文件）",
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..94d01edb 100644
+index 176638e2..b1081f62 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
 @@ -3,6 +3,8 @@ export const zhTW = {
@@ -95335,7 +95395,7 @@ index 176638e2..94d01edb 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1449,55 @@ export const zhTW = {
+@@ -1446,4 +1449,56 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -95389,6 +95449,7 @@ index 176638e2..94d01edb 100644
 +    options_show_shortcut_hints: "顯示快速鍵提示",
 +
 +    fb_grant_dir_access: "授權存取目錄",
++    fb_needs_auth_hint: "此資料夾未授權，清單可能不完整（系統會隱藏無權限的檔案）",
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
@@ -97108,6 +97169,43 @@ index cf451bd3..f8f4233b 100644
      // Background pre-render
      startBackgroundRender: () =>
          invoke<{ ok: boolean; skipped?: boolean; rendering?: number }>("start_background_render"),
+diff --git a/frontend/src/services/api/fileBrowser.ts b/frontend/src/services/api/fileBrowser.ts
+index fc05dcd6..bce59d81 100644
+--- a/frontend/src/services/api/fileBrowser.ts
++++ b/frontend/src/services/api/fileBrowser.ts
+@@ -32,9 +32,32 @@ export interface MediaAudioStream {
+     durationSec: number;
+ }
+ 
++/**
++ * N2：某目录的「列表可信度」。
++ *
++ * 分区存储下无授权时 `readdir()` 会**静默隐藏**读不到的文件（不报错），
++ * 于是"看不到文件"在代码里表现为"列目录成功、只是内容被截断" —— 前端进不了错误态，
++ * 挂在错误态上的「授权访问目录」按钮因而永远不出现。用这个状态把它变成可判定的。
++ */
++export interface StorageAccessState {
++    ok: boolean;
++    /** 目录是否在共享存储上（`/storage/emulated/0` 等）。 */
++    isSharedStorage: boolean;
++    /** 是否被一个已授权的 SAF tree 覆盖（覆盖 ⇒ 走 SAF 列举，可信）。 */
++    coveredByTree: boolean;
++    /** 是否已具备「所有文件访问」（系统设置授权，或 Shizuku 自助授权）。 */
++    allFiles: boolean;
++    /** 列表不可信 ⇒ UI 应提示去授权。 */
++    needsAuth: boolean;
++}
++
+ export const fileBrowserApi = {
+     listDirectory: (dirPath: string) => invoke<FileEntry[]>("list_directory", dirPath),
+ 
++    /** N2：查询这份目录列表是否可信（是否需要引导用户去授权）。 */
++    storageAccessState: (dirPath: string) =>
++        invoke<StorageAccessState>("storage_access_state", dirPath),
++
+     searchFilesRecursive: (dirPath: string, query: string) =>
+         invoke<FileEntry[]>("search_files_recursive", dirPath, query),
+ 
 diff --git a/frontend/src/services/api/project.ts b/frontend/src/services/api/project.ts
 index c888dc37..65060800 100644
 --- a/frontend/src/services/api/project.ts
@@ -97732,7 +97830,7 @@ index f0ab3991..bd6ef3b1 100644
 +        invoke<{ ok: boolean }>("save_ui_settings", { settings }),
 +};
 diff --git a/frontend/src/services/invoke.ts b/frontend/src/services/invoke.ts
-index 4da31e42..3525f846 100644
+index 4da31e42..a427556c 100644
 --- a/frontend/src/services/invoke.ts
 +++ b/frontend/src/services/invoke.ts
 @@ -127,6 +127,13 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
@@ -97749,6 +97847,17 @@ index 4da31e42..3525f846 100644
          case "import_audio_item":
              return {
                  audioPath: args[0],
+@@ -601,6 +608,10 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
+         case "list_directory":
+             return { dirPath: args[0] };
+ 
++        // N2：查询「这份目录列表是否可信」（未授权 ⇒ 分区存储会静默隐藏文件）。
++        case "storage_access_state":
++            return { dirPath: args[0] };
++
+         case "get_audio_file_info":
+             return { filePath: args[0] };
+ 
 diff --git a/frontend/src/types/api.ts b/frontend/src/types/api.ts
 index f3bb43ca..99a4483d 100644
 --- a/frontend/src/types/api.ts

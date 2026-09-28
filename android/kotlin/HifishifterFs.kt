@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.os.Build
+import android.os.Environment
 import android.os.Looper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -208,6 +210,54 @@ object HifishifterFs {
     fun savedTreeUri(): String {
         val act = activity ?: return ""
         return prefs(act).getString(PREF_TREE_URI, "") ?: ""
+    }
+
+    /**
+     * N2：是否已具备「所有文件访问」（`MANAGE_EXTERNAL_STORAGE`）。
+     *
+     * 为什么需要它：Android 10+ 的分区存储下，无授权时 `readdir()` 会**静默隐藏**
+     * 应用读不到的文件（目录还在、文件直接不出现、**系统不报错**）⇒ 文件浏览器只能
+     * 显示一份"被截断但看起来正常"的列表。把它暴露给上层，UI 才能在列表不可信时
+     * 提示用户去授权，而不是让用户以为"这个文件夹是空的"。
+     *
+     * 该权限的两种来源：系统设置里的「所有文件访问」，或 Shizuku 自助授权
+     * （`appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`，见 docs/18 §4）。
+     * 两者都会让这个函数返回 true。
+     */
+    @JvmStatic
+    fun isExternalStorageManager(): Boolean = try {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Environment.isExternalStorageManager()
+        } else {
+            false
+        }
+    } catch (t: Throwable) {
+        Log.w(TAG, "isExternalStorageManager 查询失败", t)
+        false
+    }
+
+    /** 共享存储根（通常 `/storage/emulated/0`）。取不到返回空串。 */
+    @JvmStatic
+    fun sharedStorageRoot(): String = try {
+        Environment.getExternalStorageDirectory()?.absolutePath ?: ""
+    } catch (t: Throwable) {
+        Log.w(TAG, "sharedStorageRoot 查询失败", t)
+        ""
+    }
+
+    /** 当前应用是否已被授予某个**持久化**的 tree 权限（供 UI 判断"授权是否还在"）。 */
+    @JvmStatic
+    fun hasPersistedTreePermission(): Boolean {
+        val act = activity ?: return false
+        val uri = savedTreeUri()
+        if (uri.isEmpty()) return false
+        return try {
+            val target = Uri.parse(uri)
+            act.contentResolver.persistedUriPermissions.any { it.isReadPermission && it.uri == target }
+        } catch (t: Throwable) {
+            Log.w(TAG, "查询持久化 URI 权限失败", t)
+            false
+        }
     }
 
     /**
