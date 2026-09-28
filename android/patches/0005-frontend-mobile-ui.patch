@@ -95524,7 +95524,7 @@ index 508fcb25..74cf100e 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..bb12b8be 100644
+index 8bcc3071..3a93d370 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
 @@ -2,6 +2,8 @@ export const zhCN = {
@@ -95609,7 +95609,7 @@ index 8bcc3071..bb12b8be 100644
 +    fb_needs_auth_hint: "此文件夹未授权，列表可能不完整（系统会隐藏无权限的文件）",
 +    fb_all_files_access: "开启全盘访问（设置）",
 +    fb_shizuku_grant: "用 Shizuku 开启全盘访问",
-+    fb_shizuku_copied_hint: "已把 appops 命令复制到剪贴板：可在 Shizuku 的 rish 终端里粘贴执行；或点上方「开启全盘访问（设置）」一步到位。",
++    fb_shizuku_copied_hint: "已复制命令。注意：① 必须整条粘贴（别漏开头的 appops set 包名）；② 只能在有 shell 权限的地方执行——Shizuku 的 rish 终端或 adb shell；③ 若只是要访问共享存储，点上方「开启全盘访问（设置）」即可，无需终端（但那个权限读不到 Android/data）。",
 +    fb_shizuku_authorize: "授权 Shizuku",
 +
  } as const;

@@ -2171,3 +2171,63 @@ Android 只对**声明过该权限**的应用开放设置页那个开关 ⇒ 否
 SAF 仍然保留为"没有全盘权限时"的回退路径。
 
 ⚠️ 上架注意：`MANAGE_EXTERNAL_STORAGE` 在 Google Play 属敏感权限，若将来要上架需按政策说明用途。
+---
+
+## 🔎 Shizuku 为什么必须保留，以及「复制命令」报错怎么修（2026-09-28 20:3x）
+
+### 1. 为什么 `MANAGE_EXTERNAL_STORAGE` 不够 —— 用户判断正确
+
+| 目标 | 「所有文件访问」 | SAF 目录授权 | **shell 身份（Shizuku/adb）** |
+| :--- | :--- | :--- | :--- |
+| 共享存储普通目录 | ✅ | ✅（读前要物化）| ✅ |
+| **`Android/data/<其它应用>`** | ❌ **被排除**（Android 11+ 把 `Android/data` 与 `Android/obb` 从该权限范围里剔除）| ❌ 选择器会拒绝选它（"为保护隐私，请另选文件夹"）| ✅ **唯一可行** |
+
+⇒ 「浏览其它应用的 Android/data」**只能靠 shell 身份**，所以 Shizuku 这条路必须保留。
+
+### 2. 用户执行复制出来的命令为什么报错
+
+截图里的两条报错：`cmd: Failure calling service appops: Failed transaction (2147483646)`。两个原因叠加：
+
+1. **粘贴被截断**：截图里命令行只剩 `shifter MANAGE_EXTERNAL_STORAGE allow` ——
+   开头的 `appops set com.arounder.` 丢了 ⇒ 命令本身就不完整（`appops` 没被调用，是 `cmd` 在找 `shifter` 这个服务）。
+2. **那个终端没有 shell 权限**：`appops` 只能由 **shell/root** 调用；
+   普通终端 App（或未 `rish` 化的终端）调用系统服务会被 Binder 拒绝 ⇒ `Failed transaction`。
+
+**正确用法**：
+* 用 **`adb shell`**：`adb shell appops set com.arounder.hifishifter MANAGE_EXTERNAL_STORAGE allow`
+  （**已在本机验证**：清单声明权限后由 `default` 变 `allow` ✓）；
+* 或用 **Shizuku 的 `rish`**（远程 shell，具备 shell 身份）粘贴执行；
+* 若只是想开"所有文件访问"，**根本不用终端**：点提示条上的「开启全盘访问（设置）」把开关打开即可
+  （该开关之所以之前是灰的，是因为清单没声明权限 —— 已修）。
+
+### 3. v13 的 API 实情（决定了下一步怎么实现"应用内一键"）
+
+对 `dev.rikka.shizuku:api:13.1.5` 的 AAR 做 `javap` 得到的事实：
+
+* `rikka.shizuku.Shizuku` 的公开方法里**没有 `newProcess`**（只到 `exit()` 为止），
+  只有 `pingBinder` / `checkSelfPermission` / `requestPermission` / `getBinder` /
+  `transactRemote` / `bindUserService` / `peekUserService` / `unbindUserService` 等；
+* 但 AAR 里**有 `rikka.shizuku.ShizukuRemoteProcess`**（`extends Process` + `Parcelable`）。
+
+⇒ 结论：**v13 起"以 shell 身份执行任意命令/代码"的唯一受支持入口是
+`Shizuku.bindUserService(...)` 的 user service**（服务进程以 shell 身份运行，
+内部自己 `Runtime.exec` 或直接读 `Android/data`）。客户端侧的 `ShizukuRemoteProcess`
+正是给 user service 用的。
+
+### 4. 下一步设计（实现"应用内一键 + 读 Android/data"）
+
+1. **AIDL**：定义 `IHsShellService`（方法如 `exec(String cmd): String`、`readFile(path)`、`listDir(path)`）；
+2. **Service 实现**：`class HsShellService : IHsShellService.Stub()`，放在**独立进程**
+   （`android:process=":shizuku"`，必须与主进程分开，否则 Shizuku 无法以 shell 身份启动它）；
+3. **清单**：`<service android:name=".HsShellService" android:exported="false" android:process=":shizuku" />`；
+4. **绑定**：`Shizuku.bindUserService(UserServiceArgs(ComponentName(ctx, HsShellService::class.java), "hs", 1), conn)`；
+5. **用途**：① 执行 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`（顺带把"一键"做回来）；
+   ② 在 shell 进程里**直接列举/读取 `Android/data/...`**（把内容经 AIDL 回传，必要时落 cacheDir 再给 Rust 用普通路径读），
+   真实路径语义不变；
+6. **回退**：Shizuku 不可用/未授权时，仍走 appop（若已开）或 SAF 目录授权。
+
+⚠️ 风险与纪律：
+* 之前**调用客户端库的功能型 API 会让应用原生 abort**（`requestPermission` 实测必崩，已弃用）；
+  换成 user service 后要**只在用户显式点击时绑定**，并全程 try/catch + 绑定超时，
+  一旦再出现原生 abort 就立刻退回"复制命令"方案（本轮已保留）。
+* 真机验证依赖 Shizuku 服务已启动（`adb shell sh /sdcard/Android/data/moe.shizuku.privileged.api/start.sh`）。
