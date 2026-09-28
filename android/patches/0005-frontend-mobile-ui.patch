@@ -34203,10 +34203,10 @@ index 613ea89d..c8a5682b 100644
 +    );
 +};
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..afea3539 100644
+index 242997f5..e565ae70 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7077 @@
+@@ -1,6438 +1,7082 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -41403,14 +41403,19 @@ index 242997f5..afea3539 100644
 +                            return;
 +                        }
 +                        // 没超过阈值 = 单击 ⇒ 拖时间线。
-+                        /* #32：**播放中点击要先暂停** —— 用户点拍数栏的意图是
-+                           "停在这里"，而不是"跳过去接着播"。
-+                           ⚠️ 只加在**单击**路径：双击要"跳过去并开始播放"，
-+                           在这儿加会把刚起的播放又停掉。 */
++                        /* #32 / E20：**播放中单击拍数栏：先暂停、再跳转**。
++                           用户口径（E20）：「播放时单击拍数栏**先暂停后跳转**，否则会跳转回暂停处」。
++                           ⚠️ 关键在**顺序要等落地**：`stopAudioPlayback()` 是异步 thunk，
++                           它的 fulfilled reducer 会把引擎的播放位置写回 `playheadSec` ——
++                           如果先 seek 再去停，那一拍的回写就把刚设好的位置**覆盖**回暂停处
++                           （用户看到的正是"跳转回暂停处"）。⇒ 用 `.finally()` 等停止完成后再 seek。
++                           双击路径不在此列：双击要"跳过去并开始播放"，不能被停掉。 */
++                        const doSeek = () => seekAt(e.clientX, true);
 +                        if (store.getState().session.runtime.isPlaying) {
-+                            void dispatch(stopAudioPlayback());
++                            void dispatch(stopAudioPlayback()).finally(doSeek);
++                        } else {
++                            doSeek();
 +                        }
-+                        seekAt(e.clientX, true);
 +                    }
 +                    mode = "undecided";
 +                };
@@ -48064,10 +48069,10 @@ index 87fcc4b0..5534f0b1 100644
      const vMax = view.center + span / 2;
      const start = Math.ceil(vMin / spec.step) * spec.step;
 diff --git a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-index 08455bfd..f4a42ac4 100644
+index 08455bfd..a0b9aa43 100644
 --- a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
 +++ b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-@@ -1,4435 +1,4892 @@
+@@ -1,4435 +1,4912 @@
 -import type {
 -    KeyboardEvent,
 -    MouseEvent as ReactMouseEvent,
@@ -54130,8 +54135,28 @@ index 08455bfd..f4a42ac4 100644
 +                return sec;
 +            };
 +
-+            // 标尺没有其他编辑操作需要区分，按下时立即提交一次 seek。
-+            let lastSec = updateAt(e.clientX, true);
++            /* E14：**双指缩放参数界面时不该移动进度条**（用户口径：这一点只在轨道界面做到了）。
++               病根：`__hsGestureActive` 只在**第二指落下、会话建立后**才置位，
++               而这里按下就 seek ⇒ 捏合的第一根手指已经先把播放头挪走了。
++               修法：把"按下这一拍的 seek"**延后一帧**，期间若进入双指手势就整个取消
++               （单击仍是"按下即 seek"，只差一帧；对用户无感）。
++               桌面鼠标路径不受影响（指针类型非 touch 时直接执行）。 */
++            let lastSec: number;
++            if (lastRealPointerType() === "touch") {
++                const clientX = e.clientX;
++                let cancelled = false;
++                window.requestAnimationFrame(() => {
++                    if (cancelled) return;
++                    if ((window as unknown as { __hsGestureActive?: boolean }).__hsGestureActive) return;
++                    updateAt(clientX, true);
++                });
++                lastSec = 0;
++                // 拖动/收尾若在手势中途到来，各自都有 `__hsGestureActive` 判断兜住。
++                void cancelled;
++            } else {
++                // 标尺没有其他编辑操作需要区分，按下时立即提交一次 seek。
++                lastSec = updateAt(e.clientX, true);
++            }
 +
 +            // 拖动中的 setplayheadSec 逐事件派发会让所有订阅 session 的组件
 +            // 随 mousemove 频率重渲；rAF 合帧后与画布重绘节奏一致。
@@ -59303,10 +59328,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..19b3b2d5 100644
+index c0db2221..114ac10c 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2649 @@
+@@ -1,2297 +1,2656 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -61882,7 +61907,14 @@ index c0db2221..19b3b2d5 100644
 +
 +    if (!selector.show) return null;
 +    return (
-+        <div className="min-w-0 flex-1 flex justify-end" data-playhead-sec={visualSec.toFixed(6)}>
++        <div
++            className="min-w-0 flex-1 flex justify-end"
++            data-playhead-sec={visualSec.toFixed(6)}
++            /* E3：收起轨道头时**只隐藏这块读数**（不再整行隐藏）——
++               整行隐藏会让轨道行整体上移，与时间线不再对齐；
++               保留这一片区域（含右侧的速度映射键），对齐才成立。 */
++            data-hs-tracklist-readout
++        >
 +            <span
 +                ref={maxLabelSpanRef}
 +                aria-hidden
@@ -81594,23 +81626,30 @@ index 00000000..d1faffae
 +    }, [s, vp, isPhone]);
 +}
 diff --git a/frontend/src/features/fileBrowser/audioPreview.ts b/frontend/src/features/fileBrowser/audioPreview.ts
-index a89df9b9..a57e8bef 100644
+index a89df9b9..7e420609 100644
 --- a/frontend/src/features/fileBrowser/audioPreview.ts
 +++ b/frontend/src/features/fileBrowser/audioPreview.ts
-@@ -135,3 +135,13 @@ class AudioPreviewEngine {
+@@ -135,3 +135,20 @@ class AudioPreviewEngine {
  
  /** 全局单例 */
  export const audioPreview = new AudioPreviewEngine();
 +
 +/* 调试钩子（与 `__hsViewport` / `__hsParamViewport` 同一约定）：
 +   试听走 WebAudio，DOM 上没有"正在响"的可观测量 —— 要验
-+   「传输栏按停止能不能停掉试听」只能问引擎自己。只读 + 一个 stop，不改行为。 */
-+(
-+    window as unknown as { __hsAudioPreview?: { playing: () => boolean; stop: () => void } }
-+).__hsAudioPreview = {
-+    playing: () => audioPreview.isPlaying(),
-+    stop: () => audioPreview.stop(),
-+};
++   「传输栏按停止能不能停掉试听」只能问引擎自己。只读 + 一个 stop，不改行为。
++
++   ⚠️ **必须判环境**：本模块现在被 `transportThunks` import（"按停止也停试听"那条修复），
++   而 sessionSlice → transportThunks 这条链会被**大量单元测试**导入 ——
++   在 Node（vitest 的无 DOM 用例）里没有 `window`，模块顶层直接访问会让整个套件加载失败
++   （实测：9 个套件 Failed Suites、少跑 21 个用例）。 */
++if (typeof window !== "undefined") {
++    (
++        window as unknown as { __hsAudioPreview?: { playing: () => boolean; stop: () => void } }
++    ).__hsAudioPreview = {
++        playing: () => audioPreview.isPlaying(),
++        stop: () => audioPreview.stop(),
++    };
++}
 diff --git a/frontend/src/features/fileBrowser/fileBrowserSlice.ts b/frontend/src/features/fileBrowser/fileBrowserSlice.ts
 index 62c63c62..5029e689 100644
 --- a/frontend/src/features/fileBrowser/fileBrowserSlice.ts
@@ -95726,10 +95765,10 @@ index 176638e2..6da39d85 100644
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..08b78ce4 100644
+index d42792c8..681a8396 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
-@@ -1,471 +1,1213 @@
+@@ -1,471 +1,1222 @@
 -@tailwind base;
 -@tailwind components;
 -@tailwind utilities;
@@ -97212,12 +97251,21 @@ index d42792c8..08b78ce4 100644
 +    display: none !important;
 +}
 +
-+/* 收起轨道头时「只留 ✕」（用户 C2）：左上角那行（轨道标题 + 时间/拍数读数 +
-+   速度映射按钮）整行让位。实测：不隐藏时读数会被挤到 `-106..17`，
-+   26px 的窄条仍能露出它右边约 17px 的"尾巴"，看起来就是一团乱字符。
-+   ⚠️ `hs-panel-close`（✕）**不在**这一行里（它是 App 层绝对定位的按钮）⇒ 不受影响。 */
-+body[data-hs-header-collapsed="1"] [data-hs-tracklist-head-bar] {
++/* 收起轨道头时（用户 E3，**覆盖 C2 的旧做法**）：
++   **只隐藏左上角的「拍数/秒数」读数**，但**保留这一行及其高度**，也保留其中的
++   速度映射键（✕ 是 App 层绝对定位的，本来就不在这一行里）。
++   ⚠️ 为什么不能整行 `display: none`：那一行有 `headerHeight` 的高度，
++   藏掉之后轨道行整体上移 ⇒ **轨道头与轨道不再对齐**（用户实测反馈）。
++   旧做法（C2）当时是为了"只留 ✕"，但代价是对齐崩掉 —— 现在按用户口径改。 */
++body[data-hs-header-collapsed="1"] [data-hs-tracklist-head-bar] .hs-tracklist-title,
++body[data-hs-header-collapsed="1"] [data-hs-tracklist-head-bar] [data-hs-tracklist-readout] {
 +    display: none !important;
++}
++/* 这一行在窄条里要收紧内边距，避免速度映射键被裁掉。 */
++body[data-hs-header-collapsed="1"] [data-hs-tracklist-head-bar] {
++    padding-left: 2px !important;
++    padding-right: 2px !important;
++    gap: 0 !important;
 +}
 +
 +/*
