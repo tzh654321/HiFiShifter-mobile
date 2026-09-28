@@ -160,13 +160,14 @@ private const val RC_BASE = 0x5AF0
      * `\universalDebug` —— javac 见到 `\u` 就报 illegal unicode escape，那条路在本机走不通。
      * 协议码定义在 `HsShellProtocol`（与服务端逐字一致）。
      */
-    private fun shellTransact(code: Int, arg: String): String {
+    private fun shellTransact(code: Int, arg: String, arg2: String? = null): String {
         val binder = shellService ?: return ""
         val data = Parcel.obtain()
         val reply = Parcel.obtain()
         return try {
             data.writeInterfaceToken(HsShellProtocol.DESCRIPTOR)
             data.writeString(arg)
+            if (arg2 != null) data.writeString(arg2)
             binder.transact(code, data, reply, 0)
             reply.readException()
             reply.readString() ?: ""
@@ -225,7 +226,14 @@ private const val RC_BASE = 0x5AF0
     /** 以 shell 身份把文件复制进应用中转目录，返回本地可读路径（未就绪返回空串）。 */
     @JvmStatic
     fun shellCopyToCache(path: String): String = try {
-        if (shellService == null) "" else shellTransact(HsShellProtocol.TX_COPY_TO_CACHE, path)
+        if (shellService == null) {
+            ""
+        } else {
+            /* 目标目录由这里给（服务进程没有 Context / 包名不可靠）：
+               应用**外部** files 目录 —— shell 身份可写、本应用可读。 */
+            val destDir = activity?.getExternalFilesDir(null)?.absolutePath ?: ""
+            shellTransact(HsShellProtocol.TX_COPY_TO_CACHE, path, destDir)
+        }
     } catch (t: Throwable) {
         Log.w(TAG, "shellCopyToCache 失败", t)
         ""

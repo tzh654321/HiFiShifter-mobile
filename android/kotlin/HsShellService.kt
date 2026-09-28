@@ -1,9 +1,6 @@
 package com.arounder.hifishifter
 
-import android.app.Service
-import android.content.Intent
 import android.os.Binder
-import android.os.IBinder
 import android.os.Parcel
 import android.util.Log
 import org.json.JSONArray
@@ -22,21 +19,26 @@ object HsShellProtocol {
 }
 
 /**
- * Shizuku user service：**以 shell 身份运行**的辅助服务。
+ * Shizuku user service：**以 shell 身份运行**的辅助类。
  *
- * ⚠️ 为什么不用 AIDL（重要，别再改回去）：
- *   AIDL 生成的 Java 会把构建命令行整条塞进注释，而**本项目的路径里含
- *   `\upstream-src` / `\universalDebug`** —— javac 见到注释里的 `\u` 就报
- *   `illegal unicode escape`（`\u` 后面不是 4 位十六进制）。这条路在 Windows + 该路径下**走不通**。
- *   ⇒ 改成**手工 Binder 协议**：服务返回一个覆写了 `onTransact` 的 `Binder`，
- *   客户端用 `transact(code, data, reply, 0)` 直接调；零代码生成、零 aidl.exe。
+ * 🔴 **它必须直接继承 `Binder`（而不是 `Service`）** —— 真机日志实证：
+ * ```
+ * SuiUserServiceStarter: starting service …/HsShellService...
+ * java.lang.ClassCastException: …HsShellService cannot be cast to android.os.IBinder
+ * ```
+ * Shizuku（这里是 Sui 实现）在 shell 进程里**直接 new 出这个类并强转成 IBinder**，
+ * 所以类本身就是那个 binder；写成 `Service` + `onBind` 会绑定失败。
+ * 清单里的 `<service>` 声明保留（Shizuku 文档要求该组件被声明；不写会按"未声明"处理）。
  *
- * ⚠️ 另两个关键点：
- *   · 必须跑在**独立进程**（清单 `android:process=":shizuku"`）——Shizuku 要以 shell 身份
- *     启动这个进程；
+ * ⚠️ 另外两点：
+ *   · 跑在**独立进程** `android:process=":shizuku"`（清单已声明）；
  *   · 该进程**没有常规 Context** ⇒ 包名从 `/proc/self/cmdline` 反推。
+ *
+ * ⚠️ 刻意不用 AIDL：AIDL 生成物会把构建命令行塞进注释，而本项目路径含
+ *   `\upstream-src` / `\universalDebug` ⇒ javac 报 illegal unicode escape。
+ *   这里用手工 Binder 协议（协议码见 `HsShellProtocol`），零代码生成。
  */
-class HsShellService : Service() {
+class HsShellService : Binder() {
 
     companion object {
         private const val TAG = "HS-SHIZUKU-SVC"
@@ -45,45 +47,38 @@ class HsShellService : Service() {
         private const val STAGING = "hs_shell"
     }
 
-    private val shellBinder = object : Binder() {
-        override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
-            return when (code) {
-                HsShellProtocol.TX_EXEC,
-                HsShellProtocol.TX_LIST_DIR,
-                HsShellProtocol.TX_COPY_TO_CACHE,
-                -> {
-                    data.enforceInterface(HsShellProtocol.DESCRIPTOR)
-                    val arg = data.readString() ?: ""
-                    val result = when (code) {
-                        HsShellProtocol.TX_EXEC -> exec(arg)
-                        HsShellProtocol.TX_LIST_DIR -> listDir(arg)
-                        else -> copyToCache(arg)
-                    }
-                    if (reply != null) {
-                        reply.writeNoException()
-                        reply.writeString(result)
-                    }
-                    true
+    override fun onTransact(code: Int, data: Parcel, reply: Parcel?, flags: Int): Boolean {
+        return when (code) {
+            HsShellProtocol.TX_EXEC,
+            HsShellProtocol.TX_LIST_DIR,
+            HsShellProtocol.TX_COPY_TO_CACHE,
+            -> {
+                data.enforceInterface(HsShellProtocol.DESCRIPTOR)
+                val arg = data.readString() ?: ""
+                val result = when (code) {
+                    HsShellProtocol.TX_EXEC -> exec(arg)
+                    HsShellProtocol.TX_LIST_DIR -> listDir(arg)
+                    /* 中转目录由**客户端**给：服务进程（Sui 以 shell/root 启动）里
+                       `/proc/self/cmdline` 不是包名，反推会算错目标路径（实测 copyToCache 因此失败）。 */
+                    else -> copyToCache(arg, data.readString() ?: "")
                 }
-                HsShellProtocol.TX_CAN_READ -> {
-                    data.enforceInterface(HsShellProtocol.DESCRIPTOR)
-                    val arg = data.readString() ?: ""
-                    if (reply != null) {
-                        reply.writeNoException()
-                        reply.writeInt(if (canRead(arg)) 1 else 0)
-                    }
-                    true
+                if (reply != null) {
+                    reply.writeNoException()
+                    reply.writeString(result)
                 }
-                else -> super.onTransact(code, data, reply, flags)
+                true
             }
+            HsShellProtocol.TX_CAN_READ -> {
+                data.enforceInterface(HsShellProtocol.DESCRIPTOR)
+                val arg = data.readString() ?: ""
+                if (reply != null) {
+                    reply.writeNoException()
+                    reply.writeInt(if (canRead(arg)) 1 else 0)
+                }
+                true
+            }
+            else -> super.onTransact(code, data, reply, flags)
         }
-    }
-
-    override fun onBind(intent: Intent?): IBinder = shellBinder
-
-    override fun onDestroy() {
-        Log.i(TAG, "HsShellService 销毁")
-        super.onDestroy()
     }
 
     /** 跑命令并回收 stdout/stderr（先读流再 waitFor，避免管道写满死锁）。 */
@@ -128,29 +123,37 @@ class HsShellService : Service() {
         JSONObject().put("error", "${t.javaClass.simpleName}:${t.message}").toString()
     }
 
-    /** 把文件复制进应用中转目录，返回本地路径（失败空串）；Binder 事务 1MB 上限 ⇒ 必须落盘。 */
-    private fun copyToCache(path: String): String = try {
-        val src = File(path)
-        if (!src.isFile) {
-            Log.w(TAG, "copyToCache: 不是文件 $path")
-            ""
-        } else {
-            val appFiles = File("/sdcard/Android/data/${packageNameOfProcess()}/files", STAGING)
-            if (!appFiles.exists() && !appFiles.mkdirs()) {
-                Log.w(TAG, "copyToCache: 无法创建中转目录 ${appFiles.absolutePath}")
+    /** 把文件复制进应用中转目录，返回本地路径（失败空串）；Binder 事务 1MB 上限 ⇒ 必须落盘。
+     *  ⚠️ 用**块体**函数：表达式体里不允许 `return`（Kotlin 会报
+     *  `Returns are not allowed for functions with expression body`）。 */
+    private fun copyToCache(path: String, destDir: String): String {
+        return try {
+            val src = File(path)
+            if (!src.isFile) {
+                Log.w(TAG, "copyToCache: 不是文件 $path")
+                ""
+            } else if (destDir.isEmpty()) {
+                Log.w(TAG, "copyToCache: 客户端未给目标目录")
                 ""
             } else {
-                val dst = File(appFiles, "${System.currentTimeMillis()}_${src.name.replace('/', '_')}")
-                src.inputStream().use { ins ->
-                    dst.outputStream().use { outs -> ins.copyTo(outs, 256 * 1024) }
+                val appFiles = File(destDir, STAGING)
+                if (!appFiles.exists() && !appFiles.mkdirs()) {
+                    Log.w(TAG, "copyToCache: 无法创建中转目录 ${appFiles.absolutePath}")
+                    ""
+                } else {
+                    val dst =
+                        File(appFiles, "${System.currentTimeMillis()}_${src.name.replace('/', '_')}")
+                    src.inputStream().use { ins ->
+                        dst.outputStream().use { outs -> ins.copyTo(outs, 256 * 1024) }
+                    }
+                    Log.i(TAG, "copyToCache: $path -> ${dst.absolutePath} (${dst.length()} bytes)")
+                    dst.absolutePath
                 }
-                Log.i(TAG, "copyToCache: $path -> ${dst.absolutePath} (${dst.length()} bytes)")
-                dst.absolutePath
             }
+        } catch (t: Throwable) {
+            Log.w(TAG, "copyToCache 失败: $path", t)
+            ""
         }
-    } catch (t: Throwable) {
-        Log.w(TAG, "copyToCache 失败: $path", t)
-        ""
     }
 
     private fun canRead(path: String): Boolean = try {
@@ -159,9 +162,5 @@ class HsShellService : Service() {
         false
     }
 
-    private fun packageNameOfProcess(): String = try {
-        File("/proc/self/cmdline").readText().trimEnd('\u0000').substringBefore(':')
-    } catch (t: Throwable) {
-        "com.arounder.hifishifter"
-    }
+
 }

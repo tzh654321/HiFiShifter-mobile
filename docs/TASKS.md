@@ -2274,3 +2274,45 @@ shizuku_shell_exec(id)   → not-ready
 `illegal unicode escape`（`\u` 后面不是 4 位十六进制）。已在 `setup-gen-android.sh` §15 注释里写明，
 并改为**手工 Binder 协议**（零代码生成）。
 `javap` 也证实：v13 的 `Shizuku` 类**没有 `newProcess`**，`bindUserService` 是唯一入口。
+---
+
+## ✅ Shizuku user service 打通（2026-09-28 21:3x）—— Android/data 现在可读
+
+上一轮"绑定不生效"的**确切原因**在 Shizuku/Sui 自己的日志里：
+
+```
+SuiUserServiceStarter: starting service com.arounder.hifishifter/com.arounder.hifishifter.HsShellService...
+SuiUserServiceStarter: unable to start service ...
+java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be cast to android.os.IBinder
+```
+
+⇒ **user service 的类本身必须就是 `IBinder`**：Shizuku（本机是 Sui 实现）在 shell 进程里
+**直接 new 出这个类并强转成 `IBinder`**，所以它得写成 `class HsShellService : Binder()`，
+而不是 `Service` + `onBind` 返回 binder（后者正是我们第一版，绑定必然失败）。
+
+### 顺带修掉的第二处
+
+物化（`copyToCache`）一开始返回空串：服务进程里 `/proc/self/cmdline` **不是包名**
+（Sui 启动的进程），据此反推目标目录必然算错。改成**由客户端把目标目录一并传过去**
+（应用外部 files 目录，shell 可写、应用可读），协议里该事务写两个字符串。
+
+### 真机验证（全部通过）
+
+| 用例 | 结果 |
+| :--- | :--- |
+| 绑定 + 就绪 | ✅ `bind=ok` → `ready:true`（日志：`SuiUserServiceStarter: starting service …` → `HS-SAF: 已连接`）|
+| shell 身份 | ✅ `shizuku_shell_exec("id")` ⇒ **`uid=0(root)`**（本机走 Sui，服务直接是 root）|
+| 列别的应用 data | ✅ `list_directory('/sdcard/Android/data')` ⇒ **556 项** |
+| 读别的应用里的音频 | ✅ `get_audio_file_info('/sdcard/Android/data/tv.danmaku.bili/.../xxx.m4a')` ⇒ `44100/2ch/9.87s`（自动经 shell 物化）|
+| 试听该音频 | ✅ `read_audio_preview` ⇒ PCM 44100Hz/2ch |
+
+⇒ Android 11+ 里"只有 shell 身份能读 `Android/data`/`obb`"这条限制**已在本应用内解决**，
+用户不需要去终端敲命令：进 `Android/data` 目录时前端会自动绑定并轮询就绪，然后正常浏览/试听/拖拽。
+
+### 关键实现要点（后人别改回去）
+
+1. **类要继承 `Binder`**（不是 `Service`）；
+2. **不用 AIDL**：AIDL 生成物把构建命令行塞进注释，本项目路径含 `\upstream-src` /
+   `\universalDebug` ⇒ javac 报 `illegal unicode escape`；改手工 Binder 协议（零生成）；
+3. 服务跑在清单声明的 `android:process=":shizuku"`；
+4. 目标目录/包名**由客户端传**，服务进程里不要去猜（`/proc/self/cmdline` 不可靠）。
