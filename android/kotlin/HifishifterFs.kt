@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.os.Looper
@@ -16,6 +17,7 @@ import org.json.JSONObject
 import android.net.Uri
 import android.provider.OpenableColumns
 import android.util.Log
+import rikka.shizuku.Shizuku
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -57,7 +59,9 @@ object HifishifterFs {
      *   · 要避开 `ActivityResultRegistry` 自己分配的随机码（它从 >= 0x10000 起），
      *     否则会与 WebView 的文件选择器撞码。
      */
-    private const val RC_BASE = 0x5AF0
+    // Shizuku 授权请求码：与 SAF 的保留区间错开，避免撞码。
+private const val REQ_SHIZUKU = 0x5AF0 + 200
+private const val RC_BASE = 0x5AF0
     private const val RC_SLOTS = 128
 
     @Volatile
@@ -87,6 +91,48 @@ object HifishifterFs {
         activity = a
         // 顺手清掉过期的导入副本（用户反复导入大文件时 cache 会涨）。
         runCatching { pruneOldImports(a) }
+        /* N2-S：注册 Shizuku 授权结果监听（只注册一次）。
+           用 try/catch 包住：没装 Shizuku 的设备上这个调用会抛（provider 找不到），
+           绝不能让它把 attach 带崩 —— 那会连累 SAF 的初始化。 */
+        if (!shizukuListenerAttached) {
+            try {
+                Shizuku.addRequestPermissionResultListener { requestCode, grantResult ->
+                    if (requestCode == REQ_SHIZUKU) {
+                        Log.i(TAG, "Shizuku 授权结果: grantResult=$grantResult")
+                    }
+                }
+                shizukuListenerAttached = true
+            } catch (t: Throwable) {
+                Log.i(TAG, "Shizuku 不可用（未装/未运行），跳过监听注册: ${t.javaClass.simpleName}")
+            }
+        }
+    }
+
+    /** Shizuku 权限结果监听是否已注册（只注册一次）。 */
+    @Volatile
+    private var shizukuListenerAttached = false
+
+    /**
+     * 用 Shizuku 的 shell 身份起一个进程（`Shizuku.newProcess`）。
+     *
+     * ⚠️ 这里走**反射**而不是直接调用：`dev.rikka.shizuku:api:13.1.5` 里该方法在编译期
+     * 不可见（Kotlin 报 `Cannot access 'newProcess': it is private in 'Shizuku'`），
+     * 但运行时是存在的（Shizuku 的公开能力，官方文档也这么用）。
+     * 反射包一层既不改依赖版本，也能在方法真的缺失时优雅返回 null。
+     */
+    private fun newShizukuProcess(cmd: Array<String>): Process? = try {
+        val m = Shizuku::class.java.getDeclaredMethod(
+            "newProcess",
+            Array<String>::class.java,
+            Array<String>::class.java,
+            String::class.java,
+        )
+        m.isAccessible = true
+        @Suppress("UNCHECKED_CAST")
+        m.invoke(null, cmd, null, null) as? Process
+    } catch (t: Throwable) {
+        Log.w(TAG, "反射调用 Shizuku.newProcess 失败", t)
+        null
     }
 
     /**
@@ -258,6 +304,78 @@ object HifishifterFs {
     } catch (t: Throwable) {
         Log.w(TAG, "ownExternalRoot 查询失败", t)
         ""
+    }
+
+    /**
+     * N2-S：**通过 Shizuku 自助拿到「全部文件访问」**（非 root 机）。
+     *
+     * 原理：Shizuku 让普通应用借到 **shell(adb) 身份**，于是能执行系统自带的
+     *   `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`
+     * 之后 `Environment.isExternalStorageManager()` 为真 —— 与用户手动去系统设置打开
+     * 「所有文件访问」**完全等效**，只是省掉那几步（详见 docs/18 §4）。
+     *
+     * 返回值约定（Rust 侧原样回给前端做提示）：
+     *   `""`                     成功
+     *   `"no-activity"`          Activity 未 attach
+     *   `"shizuku-unavailable"`  Shizuku 未安装 / 未运行
+     *   `"shizuku-no-permission"` 本应用尚未被 Shizuku 授权（先走 requestShizukuPermission）
+     *   `"appops-failed:<code>:<stderr>"` 命令失败（部分 ROM 限制 appops）
+     */
+    @JvmStatic
+    fun grantAllFilesViaShizuku(): String {
+        val act = activity ?: return "no-activity"
+        val pkg = act.packageName
+        return try {
+            if (!Shizuku.pingBinder()) return "shizuku-unavailable"
+            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+                return "shizuku-no-permission"
+            }
+            val proc = newShizukuProcess(
+                arrayOf("sh", "-c", "appops set $pkg MANAGE_EXTERNAL_STORAGE allow"),
+            ) ?: return "shizuku-newprocess-unavailable"
+            val code = proc.waitFor()
+            val err = proc.errorStream?.bufferedReader()?.use { it.readText() }?.trim().orEmpty()
+            if (code == 0) {
+                Log.i(TAG, "Shizuku 已授予 MANAGE_EXTERNAL_STORAGE（pkg=$pkg）")
+                ""
+            } else {
+                Log.w(TAG, "Shizuku appops 失败 code=$code err=$err")
+                "appops-failed:$code:$err"
+            }
+        } catch (t: Throwable) {
+            Log.w(TAG, "grantAllFilesViaShizuku 异常", t)
+            "appops-failed:-1:${t.message ?: t.javaClass.simpleName}"
+        }
+    }
+
+    /** Shizuku 是否可用（已装且在跑）。 */
+    @JvmStatic
+    fun shizukuAvailable(): Boolean = try {
+        Shizuku.pingBinder()
+    } catch (t: Throwable) {
+        false
+    }
+
+    /** Shizuku 是否已授权本应用。 */
+    @JvmStatic
+    fun shizukuPermissionGranted(): Boolean = try {
+        Shizuku.pingBinder() && Shizuku.checkSelfPermission() == PackageManager.PERMISSION_GRANTED
+    } catch (t: Throwable) {
+        false
+    }
+
+    /** 发起 Shizuku 授权请求（弹系统对话框）；结果经 `attach()` 里注册的监听回来。 */
+    @JvmStatic
+    fun requestShizukuPermission(): Boolean = try {
+        if (!Shizuku.pingBinder()) {
+            false
+        } else {
+            Shizuku.requestPermission(REQ_SHIZUKU)
+            true
+        }
+    } catch (t: Throwable) {
+        Log.w(TAG, "requestShizukuPermission 异常", t)
+        false
     }
 
     /**

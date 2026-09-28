@@ -12873,10 +12873,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..2672f443 100644
+index 3ebf39a9..b714849f 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1209 @@
+@@ -1,1026 +1,1277 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14208,7 +14208,58 @@ index 3ebf39a9..2672f443 100644
 +        })();
 +    }, [dispatch, fb.currentPath]);
 +
-+    // 目录变化 / 列表刷新后问一次"这份列表可不可信"
++    /**
++     * N2-S：Shizuku 状态（`ready` / `need-permission` / `unavailable`）。
++     *
++     * 这条路的价值：借 Shizuku 的 shell 身份跑
++     * `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow` ⇒ 之后**全盘真路径直读**，
++     * 既不用逐目录 SAF 授权、读文件也不必先物化（详见 docs/18 §4）。
++     * 拿不到状态（老后端/桌面）一律当 `unavailable`，只显示系统设置那条路。
++     */
++    const [shizuku, setShizuku] = useState<'ready' | 'need-permission' | 'unavailable'>(
++        'unavailable',
++    );
++
++    /** N2-S：按当前 Shizuku 状态推进（未授权先请求，已授权直接开全盘访问）。 */
++    const grantAllFiles = useCallback(() => {
++        void (async () => {
++            if (shizuku === 'need-permission') {
++                await fileBrowserApi.requestShizukuPermission();
++                // 授权对话框是系统的，回来后由重新查询状态决定下一步
++                const st = await fileBrowserApi.shizukuState().catch(() => null);
++                const next = String(st?.state ?? 'unavailable');
++                setShizuku(next === 'ready' ? 'ready' : next === 'need-permission' ? 'need-permission' : 'unavailable');
++                if (next !== 'ready') return;
++            }
++            const r = await fileBrowserApi.grantAllFilesViaShizuku().catch(() => null);
++            if (r?.ok) {
++                // 开成功 ⇒ 重查状态（needsAuth 会变 false，提示条自动收起）
++                const st = await fileBrowserApi.storageAccessState(fb.currentPath).catch(() => null);
++                setNeedsAuth(Boolean(st?.needsAuth));
++            }
++        })();
++    }, [shizuku, fb.currentPath]);
++
++    // 目录变化 / 列表刷新后问一次"这份列表可不可信"；顺带查一次 Shizuku 状态
++    useEffect(() => {
++        let cancelled = false;
++        void fileBrowserApi
++            .shizukuState()
++            .then((st) => {
++                if (cancelled) return;
++                const s = String(st?.state ?? 'unavailable');
++                setShizuku(
++                    s === 'ready' ? 'ready' : s === 'need-permission' ? 'need-permission' : 'unavailable',
++                );
++            })
++            .catch(() => {
++                if (!cancelled) setShizuku('unavailable');
++            });
++        return () => {
++            cancelled = true;
++        };
++    }, [fb.currentPath, fb.entries, fb.loading]);
++
 +    useEffect(() => {
 +        let cancelled = false;
 +        if (!fb.currentPath) {
@@ -14889,6 +14940,23 @@ index 3ebf39a9..2672f443 100644
 +                            >
 +                                {(t as (key: string) => string)("fb_all_files_access")}
 +                            </Button>
++                            {/* N2-S：装了 Shizuku 时再给一条"一键"的路（省去去设置里点）。
++                                `ready` ⇒ 直接执行 appops；`need-permission` ⇒ 先请求授权。
++                                没装（unavailable）就不显示，避免噪音。 */}
++                            {shizuku === 'unavailable' ? null : (
++                                <Button
++                                    size="1"
++                                    variant="soft"
++                                    data-hs-shizuku={shizuku}
++                                    onClick={grantAllFiles}
++                                >
++                                    {(t as (key: string) => string)(
++                                        shizuku === 'ready'
++                                            ? 'fb_shizuku_grant'
++                                            : 'fb_shizuku_authorize',
++                                    )}
++                                </Button>
++                            )}
 +                            <Button size="1" variant="soft" onClick={grantDirAccess}>
 +                                {(t as (key: string) => string)("fb_grant_dir_access")}
 +                            </Button>
@@ -95061,7 +95129,7 @@ index ad269869..6039e410 100644
 +    },
 +);
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..279ef4b0 100644
+index 858bca55..8dc79dc9 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
 @@ -2,6 +2,8 @@ export const enUS = {
@@ -95081,7 +95149,7 @@ index 858bca55..279ef4b0 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1482,65 @@ export const enUS = {
+@@ -1479,4 +1482,67 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -95145,10 +95213,12 @@ index 858bca55..279ef4b0 100644
 +    fb_grant_dir_access: "Grant folder access",
 +    fb_needs_auth_hint: "This folder isn't authorized, so the list may be incomplete (files without permission are hidden by the system).",
 +    fb_all_files_access: "Allow all files (Settings)",
++    fb_shizuku_grant: "Grant all files via Shizuku",
++    fb_shizuku_authorize: "Authorize Shizuku",
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..2869fd19 100644
+index ef08ef81..be6dba33 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
 @@ -2,6 +2,8 @@ export const jaJP = {
@@ -95168,7 +95238,7 @@ index ef08ef81..2869fd19 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1495,57 @@ export const jaJP = {
+@@ -1492,4 +1495,59 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -95224,10 +95294,12 @@ index ef08ef81..2869fd19 100644
 +    fb_grant_dir_access: "フォルダへのアクセスを許可",
 +    fb_needs_auth_hint: "このフォルダは未許可のため、一覧が不完全な可能性があります（権限のないファイルは非表示になります）",
 +    fb_all_files_access: "すべてのファイルへのアクセス（設定）",
++    fb_shizuku_grant: "Shizuku で全ファイルアクセスを有効化",
++    fb_shizuku_authorize: "Shizuku を許可",
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..be6679d8 100644
+index 508fcb25..ff9f61ff 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
 @@ -2,6 +2,8 @@ export const koKR = {
@@ -95247,7 +95319,7 @@ index 508fcb25..be6679d8 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1472,57 @@ export const koKR = {
+@@ -1469,4 +1472,59 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -95303,10 +95375,12 @@ index 508fcb25..be6679d8 100644
 +    fb_grant_dir_access: "폴더 접근 권한 부여",
 +    fb_needs_auth_hint: "이 폴더는 권한이 없어 목록이 불완전할 수 있습니다(권한 없는 파일은 시스템이 숨깁니다).",
 +    fb_all_files_access: "모든 파일 접근 허용(설정)",
++    fb_shizuku_grant: "Shizuku로 모든 파일 접근 허용",
++    fb_shizuku_authorize: "Shizuku 권한 부여",
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..884be1bc 100644
+index 8bcc3071..f3ed4856 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
 @@ -2,6 +2,8 @@ export const zhCN = {
@@ -95326,7 +95400,7 @@ index 8bcc3071..884be1bc 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1447,65 @@ export const zhCN = {
+@@ -1444,4 +1447,67 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -95390,10 +95464,12 @@ index 8bcc3071..884be1bc 100644
 +    fb_grant_dir_access: "授权访问目录",
 +    fb_needs_auth_hint: "此文件夹未授权，列表可能不完整（系统会隐藏无权限的文件）",
 +    fb_all_files_access: "开启全盘访问（设置）",
++    fb_shizuku_grant: "用 Shizuku 开启全盘访问",
++    fb_shizuku_authorize: "授权 Shizuku",
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..093357f4 100644
+index 176638e2..4ebc791b 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
 @@ -3,6 +3,8 @@ export const zhTW = {
@@ -95413,7 +95489,7 @@ index 176638e2..093357f4 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1449,57 @@ export const zhTW = {
+@@ -1446,4 +1449,59 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -95469,6 +95545,8 @@ index 176638e2..093357f4 100644
 +    fb_grant_dir_access: "授權存取目錄",
 +    fb_needs_auth_hint: "此資料夾未授權，清單可能不完整（系統會隱藏無權限的檔案）",
 +    fb_all_files_access: "開啟全盤存取（設定）",
++    fb_shizuku_grant: "用 Shizuku 開啟全盤存取",
++    fb_shizuku_authorize: "授權 Shizuku",
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
@@ -97189,10 +97267,10 @@ index cf451bd3..f8f4233b 100644
      startBackgroundRender: () =>
          invoke<{ ok: boolean; skipped?: boolean; rendering?: number }>("start_background_render"),
 diff --git a/frontend/src/services/api/fileBrowser.ts b/frontend/src/services/api/fileBrowser.ts
-index fc05dcd6..5d708dec 100644
+index fc05dcd6..0019845a 100644
 --- a/frontend/src/services/api/fileBrowser.ts
 +++ b/frontend/src/services/api/fileBrowser.ts
-@@ -32,9 +32,38 @@ export interface MediaAudioStream {
+@@ -32,9 +32,51 @@ export interface MediaAudioStream {
      durationSec: number;
  }
  
@@ -97227,6 +97305,19 @@ index fc05dcd6..5d708dec 100644
 +     * Shizuku 自助 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow` 是等效的另一条路（docs/18 §4）。
 +     */
 +    openAllFilesAccessSettings: () => invoke<{ ok: boolean }>("open_all_files_access_settings"),
++
++    /**
++     * N2-S：Shizuku 状态 —— `ready`（已授权，可直接开全盘访问）/ `need-permission`
++     * （装了但本应用未被授权）/ `unavailable`（没装或没在跑）。
++     */
++    shizukuState: () => invoke<{ ok: boolean; state: string }>("shizuku_state"),
++
++    /** N2-S：发起 Shizuku 授权请求（弹系统对话框）。 */
++    requestShizukuPermission: () => invoke<{ ok: boolean }>("request_shizuku_permission"),
++
++    /** N2-S：借 Shizuku 的 shell 身份开「全部文件访问」（`error` 为空 = 成功）。 */
++    grantAllFilesViaShizuku: () =>
++        invoke<{ ok: boolean; error: string; allFiles: boolean }>("grant_all_files_via_shizuku"),
 +
      searchFilesRecursive: (dirPath: string, query: string) =>
          invoke<FileEntry[]>("search_files_recursive", dirPath, query),
@@ -97855,7 +97946,7 @@ index f0ab3991..bd6ef3b1 100644
 +        invoke<{ ok: boolean }>("save_ui_settings", { settings }),
 +};
 diff --git a/frontend/src/services/invoke.ts b/frontend/src/services/invoke.ts
-index 4da31e42..c45b07bf 100644
+index 4da31e42..b1e33b2e 100644
 --- a/frontend/src/services/invoke.ts
 +++ b/frontend/src/services/invoke.ts
 @@ -127,6 +127,13 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
@@ -97872,7 +97963,7 @@ index 4da31e42..c45b07bf 100644
          case "import_audio_item":
              return {
                  audioPath: args[0],
-@@ -601,6 +608,14 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
+@@ -601,6 +608,22 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
          case "list_directory":
              return { dirPath: args[0] };
  
@@ -97882,6 +97973,14 @@ index 4da31e42..c45b07bf 100644
 +
 +        // N2-S：跳系统设置「所有文件访问」页（无参）
 +        case "open_all_files_access_settings":
++            return {};
++
++        // N2-S：Shizuku 三连（均无参）
++        case "shizuku_state":
++            return {};
++        case "request_shizuku_permission":
++            return {};
++        case "grant_all_files_via_shizuku":
 +            return {};
 +
          case "get_audio_file_info":

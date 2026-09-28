@@ -726,9 +726,62 @@ PY
   fi
 fi
 
+# ── 14. Shizuku（HS-SHIZUKU，2026-09-28）────────────────────────────────────
+# 目的：**非 root 机**上拿到"全部文件访问"（比 SAF 更彻底：真路径直读，不需要逐目录授权、
+# 也不需要读前物化）。原理是借 Shizuku 的 shell 身份执行系统自带的
+#   appops set <pkg> MANAGE_EXTERNAL_STORAGE allow
+# 之后 `Environment.isExternalStorageManager()` 为真 ⇒ 现有逻辑（needsAuth 判定、
+# 导入路径）无需再改。用户也可改走系统设置里的「所有文件访问」页（等效，见 docs/18 §3/§6）。
+#
+# ⚠️ 依赖**必须写在这里**：`gen/` 会被 `tauri android init` 整棵抹掉，
+#    只手改 gen 工程留不下来（本段就是给"重放"用的）。
 echo
-echo "── 自检 ──"
-if [ -n "$MA" ]; then
+echo "── Shizuku 依赖与 provider（HS-SHIZUKU）──"
+APP_GRADLE_SHZ="$GEN_DIR/app/build.gradle.kts"
+if [ ! -f "$APP_GRADLE_SHZ" ]; then
+  echo "⚠️ 没找到 app/build.gradle.kts，跳过 Shizuku（全盘访问会不可用）" >&2
+elif grep -q 'HS-SHIZUKU' "$APP_GRADLE_SHZ"; then
+  echo "· 已注入过 Shizuku 依赖，跳过"
+else
+  cat >> "$APP_GRADLE_SHZ" <<'GRADLE'
+
+// ── HS-SHIZUKU（由 scripts/setup-gen-android.sh §14 注入，勿手改）───────────
+// 非 root 机借 Shizuku 的 shell 身份执行
+//   appops set <pkg> MANAGE_EXTERNAL_STORAGE allow
+// 拿到"全部文件访问"（真路径直读，等效于系统设置里的同名开关）。
+// api = 客户端接口；provider = 让 Shizuku 能找到本应用并回调权限结果。
+dependencies {
+    implementation("dev.rikka.shizuku:api:13.1.5")
+    implementation("dev.rikka.shizuku:provider:13.1.5")
+}
+GRADLE
+  if grep -q 'HS-SHIZUKU' "$APP_GRADLE_SHZ"; then
+    echo "✓ 已追加 Shizuku 依赖（api/provider 13.1.5）"
+  else
+    echo "❌ 追加失败，请手工检查 $APP_GRADLE_SHZ" >&2
+  fi
+fi
+
+if [ -n "${MANIFEST:-}" ] && [ -f "$MANIFEST" ]; then
+  if grep -q 'HS-SHIZUKU' "$MANIFEST"; then
+    echo "· Manifest 已注入过 Shizuku provider，跳过"
+  else
+    # ⚠️ 锚点必须是 `<application>` **内部**的第一个子元素（这里是 `<activity`）——
+    #    `<provider>` 与 `<uses-permission>` 不同，它**只能**出现在 `<application>` 里面；
+    #    照抄权限那处的 `<application` 锚点会让 provider 变成 manifest 直属子元素，
+    #    AAPT 直接报 `unexpected element <provider> found in <manifest>`（实测踩过）。
+    #    注释用纯 ASCII：这行要经 sed 写入，中文在不同 locale 下会变乱码。
+    sed -i 's|\(        <activity\)|        <!-- HS-SHIZUKU: Shizuku provider (non-root all-files access, see docs/18 section 4) -->\n        <provider android:name="rikka.shizuku.ShizukuProvider" android:authorities="${applicationId}.shizuku" android:enabled="true" android:exported="true" android:multiprocess="false" />\n        \1|' "$MANIFEST"
+    if grep -q 'HS-SHIZUKU' "$MANIFEST"; then
+      echo "✓ 已注入 ShizukuProvider → $(basename "$MANIFEST")"
+    else
+      echo "❌ 注入失败，请手工检查 $MANIFEST" >&2
+    fi
+  fi
+fi
+
+echo
+echo "── 自检 ──"if [ -n "$MA" ]; then
   grep -c 'HS-SAFE-AREA-PATCH' "$MA" | sed 's/^/  MainActivity inset 补丁: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'
   grep -c 'HS-SAF-PATCH' "$MA" | sed 's/^/  MainActivity SAF 补丁: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'
   grep -c 'HS-RECORD-AUDIO-PATCH' "$MA" | sed 's/^/  MainActivity 录音权限补丁: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'

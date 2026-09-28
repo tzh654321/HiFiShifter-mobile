@@ -1,8 +1,8 @@
 diff --git a/backend/src-tauri/src/commands.rs b/backend/src-tauri/src/commands.rs
-index 74a47f0b..5a9541a2 100644
+index 74a47f0b..ae234335 100644
 --- a/backend/src-tauri/src/commands.rs
 +++ b/backend/src-tauri/src/commands.rs
-@@ -1,1902 +1,2013 @@
+@@ -1,1902 +1,2056 @@
 -// 命令门面（Facade）
 -//
 -// 约束：
@@ -3657,6 +3657,49 @@ index 74a47f0b..5a9541a2 100644
 +    }
 +}
 +
++/// N2-S：Shizuku 状态（`ready` / `need-permission` / `unavailable`）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn shizuku_state() -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        return serde_json::json!({ "ok": true, "state": crate::platform::saf::shizuku_state() });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        serde_json::json!({ "ok": true, "state": "unavailable" })
++    }
++}
++
++/// N2-S：发起 Shizuku 授权请求。
++#[tauri::command(rename_all = "camelCase")]
++pub fn request_shizuku_permission() -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        let ok = crate::platform::saf::request_shizuku_permission();
++        return serde_json::json!({ "ok": ok });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        serde_json::json!({ "ok": false })
++    }
++}
++
++/// N2-S：借 Shizuku 的 shell 身份执行 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`。
++/// `error` 为空串表示成功。
++#[tauri::command(rename_all = "camelCase")]
++pub fn grant_all_files_via_shizuku() -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        let err = crate::platform::saf::grant_all_files_via_shizuku();
++        let all_files = crate::platform::saf::is_external_storage_manager();
++        return serde_json::json!({ "ok": err.is_empty(), "error": err, "allFiles": all_files });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        serde_json::json!({ "ok": false, "error": "desktop", "allFiles": false })
++    }
++}
++
 +#[tauri::command(rename_all = "camelCase")]
 +pub fn get_audio_file_info(file_path: String) -> Result<file_browser::AudioFileInfo, String> {
 +    file_browser::get_audio_file_info(file_path)
@@ -4110,10 +4153,10 @@ index 98531493..ba27bdb2 100644
          .pick_file();
  
 diff --git a/backend/src-tauri/src/lib.rs b/backend/src-tauri/src/lib.rs
-index 3eff8813..42a8dfe2 100644
+index 3eff8813..23214d2f 100644
 --- a/backend/src-tauri/src/lib.rs
 +++ b/backend/src-tauri/src/lib.rs
-@@ -1,732 +1,788 @@
+@@ -1,732 +1,791 @@
 -/// 热路径调试日志：经 `log::debug!` 走统一日志管线，release 默认 Info 级别下
 -/// 不产生格式化开销；需要诊断时用 `HIFISHIFTER_LOG=debug` 临时打开。
 -/// 定义在 crate 根，供所有子模块（引擎 worker、snapshot、pitch 等）使用。
@@ -5594,6 +5637,9 @@ index 3eff8813..42a8dfe2 100644
 +            commands::list_directory,
 +            commands::storage_access_state,
 +            commands::open_all_files_access_settings,
++            commands::shizuku_state,
++            commands::request_shizuku_permission,
++            commands::grant_all_files_via_shizuku,
 +            commands::get_audio_file_info,
 +            commands::read_audio_preview,
 +            commands::search_files_recursive,
@@ -6947,10 +6993,10 @@ index 00000000..c0f15e17
 +}
 diff --git a/backend/src-tauri/src/platform/saf.rs b/backend/src-tauri/src/platform/saf.rs
 new file mode 100644
-index 00000000..92fe1765
+index 00000000..64e10fd1
 --- /dev/null
 +++ b/backend/src-tauri/src/platform/saf.rs
-@@ -0,0 +1,770 @@
+@@ -0,0 +1,844 @@
 +//! SAF（Storage Access Framework）桥接 —— Android 上的文件选择。
 +//!
 +//! *设计见 `docs/11-SAF文件访问设计.md`。*
@@ -7258,6 +7304,80 @@ index 00000000..92fe1765
 +                })
 +        })
 +        .unwrap_or_default()
++    }
++
++    /// N2-S：Shizuku 状态 —— `"ready"` / `"need-permission"` / `"unavailable"`。
++    pub fn shizuku_state() -> String {
++        let ready = with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "shizukuPermissionGranted", "()Z", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 shizukuPermissionGranted 失败: {e}")
++                })?;
++            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
++        })
++        .unwrap_or(false);
++        if ready {
++            return "ready".to_string();
++        }
++        let available = with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "shizukuAvailable", "()Z", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 shizukuAvailable 失败: {e}")
++                })?;
++            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
++        })
++        .unwrap_or(false);
++        if available {
++            "need-permission".to_string()
++        } else {
++            "unavailable".to_string()
++        }
++    }
++
++    /// N2-S：发起 Shizuku 授权请求（弹系统对话框）。返回是否成功发起。
++    pub fn request_shizuku_permission() -> bool {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "requestShizukuPermission", "()Z", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 requestShizukuPermission 失败: {e}")
++                })?;
++            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
++        })
++        .unwrap_or(false)
++    }
++
++    /// N2-S：用 Shizuku 的 shell 身份执行 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`。
++    /// 返回空串 = 成功；否则是错误码（供前端显示）。见 `HifishifterFs.grantAllFilesViaShizuku`。
++    pub fn grant_all_files_via_shizuku() -> String {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "grantAllFilesViaShizuku", "()Ljava/lang/String;", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 grantAllFilesViaShizuku 失败: {e}")
++                })?;
++            let obj = ret.l().map_err(|e| format!("取返回值失败: {e}"))?;
++            if obj.is_null() {
++                return Ok(String::new());
++            }
++            env.get_string(&JString::from(obj))
++                .map(|v| String::from(v))
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("读字符串失败: {e}")
++                })
++        })
++        .unwrap_or_else(|e| format!("jni-failed:{e}"))
 +    }
 +
 +    /// N2-S：跳到系统设置的「所有文件访问」页面（非 root 机拿全盘真路径直读的第二条路）。
