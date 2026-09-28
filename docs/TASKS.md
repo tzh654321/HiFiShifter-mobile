@@ -2136,3 +2136,38 @@ read_audio_preview(<mp3>)        → PCM 数据（修复前 Permission denied）
 
 - **Shizuku 一键授权**：需要 tombstone（root）或换用 `ShizukuBinderWrapper + IAppOpsService` 路线才能继续；
   目前以"复制命令 + 系统设置"两条可用路径替代。
+---
+
+## ✅ 全盘访问的真正根因：「所有文件访问」开关置灰 = **清单没声明权限**（2026-09-28 20:2x）
+
+用户反馈两件事：① 系统设置里「授予管理所有文件的权限」是**灰的**、点不动；
+② 在终端里执行复制出来的 `appops` 命令报 `cmd: Failure calling service appops: Failed transaction (2147483646)`。
+
+**根因（一条同时解释两件事）**：应用的 `AndroidManifest.xml` **从未声明**
+`android.permission.MANAGE_EXTERNAL_STORAGE`。
+Android 只对**声明过该权限**的应用开放设置页那个开关 ⇒ 否则显示为灰；
+同时 shell 侧的 `appops set` 也会被拒（`Failed transaction`）。
+（用户终端那条还额外有个问题：粘贴被截断成了 `shifter MANAGE_EXTERNAL_STORAGE allow`，
+而且那个终端没有 shell 权限。）
+
+**修法**：清单里声明权限（生成脚本 §10 与 gen 树都已加，注释保持**纯 ASCII**
+—— 中文经 sed 写入会乱码，之前就因此把清单写坏过一次）：
+
+```xml
+<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+```
+
+**真机验证（都通过）**：
+
+| 检查 | 结果 |
+| :--- | :--- |
+| APK 内权限声明 | ✅ `uses-permission: MANAGE_EXTERNAL_STORAGE` |
+| `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow` | ✅ `default` → **`allow`**（改前被拒）|
+| `storage_access_state` | ✅ `allFiles:true, needsAuth:false`（提示条自动收起）|
+| 全盘**真路径直读** | ✅ `/sdcard/Download/test-rr.wav` ⇒ 48000/2ch/140s（既不走 SAF、也不物化）|
+| `list_directory('/sdcard/Download')` | ✅ **134 项**（含大量 mp3；改前 FUSE 静默隐藏文件）|
+
+⇒ 结论：**开了「所有文件访问」之后，N2/D8/预览三条链在真机上全部自然可用，SAF 授权与 Shizuku 都不再是必需**。
+SAF 仍然保留为"没有全盘权限时"的回退路径。
+
+⚠️ 上架注意：`MANAGE_EXTERNAL_STORAGE` 在 Google Play 属敏感权限，若将来要上架需按政策说明用途。

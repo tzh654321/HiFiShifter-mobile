@@ -597,20 +597,36 @@ grep -n 'minSdk\|targetSdk\|abiFilters' "$GRADLE"
 # 为什么必须两边都做：Manifest 只是"声明"，Android 6+ 对危险权限还要**运行时授予** ——
 # 只加 Manifest 的话，后端一开麦还是被拒（用户报「录制按钮用不了」的真因之一）。
 echo
-echo "── AndroidManifest：补 RECORD_AUDIO 权限 ──"
+echo "── AndroidManifest：补 RECORD_AUDIO 与 MANAGE_EXTERNAL_STORAGE 权限 ──"
 MANIFEST="$GEN_DIR/app/src/main/AndroidManifest.xml"
 if [ ! -f "$MANIFEST" ]; then
-  echo "⚠️ 没找到 AndroidManifest.xml，跳过（录制会因缺权限失败）" >&2
-elif grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
-  echo "· 已有 RECORD_AUDIO，跳过"
+  echo "⚠️ 没找到 AndroidManifest.xml，跳过（录制/全盘访问会因缺权限失败）" >&2
 else
-  # 锚在 `<application` 上而不是 `<uses-permission`：后者的属性列表可能跨行，
-  # 而 `<application` 这个标签一定存在且不会跨行写法歧义。
-  sed -i 's|\(<application\)|    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    \1|' "$MANIFEST"
   if grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
-    echo "✓ 已追加 RECORD_AUDIO → $(basename "$MANIFEST")"
+    echo "· 已有 RECORD_AUDIO，跳过"
   else
-    echo "❌ 追加失败，请手工检查 $MANIFEST" >&2
+    # 锚在 `<application` 上而不是 `<uses-permission`：后者的属性列表可能跨行，
+    # 而 `<application` 这个标签一定存在且不会跨行写法歧义。
+    sed -i 's|\(<application\)|    <uses-permission android:name="android.permission.RECORD_AUDIO" />\n    \1|' "$MANIFEST"
+    if grep -q 'android.permission.RECORD_AUDIO' "$MANIFEST"; then
+      echo "✓ 已追加 RECORD_AUDIO → $(basename "$MANIFEST")"
+    else
+      echo "❌ 追加失败，请手工检查 $MANIFEST" >&2
+    fi
+  fi
+  # HS-ALLFILES（2026-09-28）：**必须声明** MANAGE_EXTERNAL_STORAGE，
+  # 否则系统设置里的「授予管理所有文件的权限」开关是**灰的**（Android 只对声明了该权限的
+  # 应用开放这个开关），shell 侧 `appops set …` 也会被拒（真机实测：用户看到灰开关 +
+  # 手动执行 appops 报 `Failed transaction`）。声明之后：设置页开关可点、appops 可用。
+  if grep -q 'android.permission.MANAGE_EXTERNAL_STORAGE' "$MANIFEST"; then
+    echo "· 已有 MANAGE_EXTERNAL_STORAGE，跳过"
+  else
+    sed -i 's|\(<application\)|    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />\n    \1|' "$MANIFEST"
+    if grep -q 'android.permission.MANAGE_EXTERNAL_STORAGE' "$MANIFEST"; then
+      echo "✓ 已追加 MANAGE_EXTERNAL_STORAGE（系统设置开关才会可点）"
+    else
+      echo "❌ 追加失败，请手工检查 $MANIFEST" >&2
+    fi
   fi
 fi
 
