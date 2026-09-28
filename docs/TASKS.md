@@ -1178,7 +1178,7 @@ adb -s emulator-5554 shell pm install -r -t -d /data/local/tmp/hs.apk
 | D6 | 钢琴栏缩放触到边界会**卡住**（学拍数栏的做法）| ✅ DONE（模拟器 3/3，见下）|
 | D6b | 同上后半句：**补充动画**（用户已标 todo）| TODO（仍待做动画）|
 | D7 | 气声音量**左侧图标**可以与右侧"开启"图标一致（除颜色）| ✅ DONE（2026-09-28：真凶=参数 id 随算法变，见下）|
-| D8 | 文件浏览器支持**长按音频拖动至轨道窗**（当前测不了：文件浏览器看不到任何文件 = N2）| TODO（阻塞于 N2；N2 用 §3 修法 A 或 §4 Shizuku 任一即可解锁）|
+| D8 | 文件浏览器支持**长按音频拖动至轨道窗** | ✅ DONE（2026-09-28 真机实测：长按后拖动 → start/move/drop 全链 + 轨道生成块；见下「两个真机 bug」）|
 
 ### E. 上一轮已完成项的真机复核（用户清单未列，但必须收口）
 
@@ -2037,3 +2037,59 @@ read_audio_preview(<mp3>)        → PCM 数据（修复前 Permission denied）
 1. **`search_files_recursive` 走 SAF 目录**：它仍用 `fs::read_dir` 递归 ⇒ 在授权目录里搜索会**静默漏掉文件**（与 `list_directory` 修前同一根因）。
 2. **`/sdcard` 未归一**：`storage_access_state('/sdcard/...')` 会判成 `isSharedStorage:false`（`/sdcard` 是指向 `/storage/emulated/0` 的符号链接）。
 3. N2-S 的 Shizuku 授权对话框（需应用真前台点一次；见上一节）。
+
+---
+
+## ✅ 两个真机 bug 修复（2026-09-28 19:0x）：预览停不下来 + 跨界面拖动的长按优先级
+
+### ① 上游 bug：「预览时按停止停不下来」
+
+**根因**（读码 + 真机实测）：文件浏览器的试听走 **WebAudio**（`features/fileBrowser/audioPreview` 单例），
+而传输栏的「停止」只 dispatch redux 的 `stopAudioPlayback` —— **两条路互不相干**，
+停的是工程播放，试听声音照旧在响。
+
+**修法（选在 thunk 层，不散落到按钮）**：`transportThunks.ts` 里
+`stopAudioPlayback` 与 `playOriginal` 开头各加一次 `audioPreview.stop()`。
+这两个 thunk 是**所有入口**的共同下游（手机底栏、桌面 ActionBar、时间线内按钮、
+键盘快捷键、录制流程）⇒ 一处覆盖全部；顺带解决"起播时两路声音叠着响"。
+
+**真机验收**（`_probe-preview-stop-and-longpress-drag.mjs`）：
+
+| 用例 | 结果 |
+| :--- | :--- |
+| 点文件行试听 ⇒ 引擎在响 | ✅ `__hsAudioPreview.playing() === true` |
+| 按传输栏「停止」⇒ 试听被停 | ✅ `false`（**修复前恒为 true**）|
+
+> 顺带给试听引擎加了只读调试钩子 `window.__hsAudioPreview = { playing, stop }`
+> —— 试听是 WebAudio，DOM 上**没有**"正在响"的可观测量，不加钩子这条根本没法验。
+
+### ② 跨界面拖动文件不成功 —— 判断完全正确：长按没优先于"落指划动"
+
+**用户原话**「原因可能是长按并拖动没有优先于 落指直接划动平移界面」—— 就是这个。
+
+**根因**：原实现 pointerdown 就置位、**移动 5px 立即激活拖拽**；而列表是 `ScrollArea`，
+浏览器把纵向手势当**滚动**接管，随后派发 `pointercancel` 把我们的指针掐掉 ⇒ 拖拽当场中止。
+（合成 PointerEvent 永远复现不出来 —— 那条路径里根本没有浏览器手势竞争，
+所以我之前"模拟器 4/4 通过"与真机体验不一致。）
+
+**修法两道**：
+1. **长按门槛 `LONG_PRESS_MS = 260`**：按住够久才算"要拖"；期间先移动超过阈值 ⇒
+   判定为用户在**滚动列表**，直接放弃本次拖拽（不打扰滚动）。
+2. 长按成立后挂**非被动 `touchmove`** 并 `preventDefault()`：`touch-action` 无法在手势中途更改，
+   这是在浏览器手里抢回手势的唯一可靠做法。必须用原生 `addEventListener(..., {passive:false})`
+   —— React 合成事件对 touch 系列默认被动，`preventDefault` 无效。
+
+**真机验收**（**真实触摸**驱动，见上表同一探针）：
+
+| 用例 | 结果 |
+| :--- | :--- |
+| ②-a 长按 320ms 后拖动 | ✅ 事件链 `start → move×11 → duration → drop`（不再被 pointercancel 掐掉）|
+| ②-b 放手后轨道多出一个块 | ✅ 块数 0 → 1 |
+| ②-c **反例**：落指即快划 | ✅ **不触发拖拽**（事件序列为空）⇒ 列表滚动保留 |
+
+### 📋 顺带回答：「23 条新批次」完成情况
+
+任务板逐行核对（含今天真机复验）：**23/23 全部 ✅**。
+（此前唯一还是 TODO 的是 **D8**，它今天已在真机验通：拖动 + 落点生成块；
+本次把该行状态一并更新。）另有 3 条"同类遗留"仍记在案：`search_files_recursive` 未走 SAF、
+`/sdcard` 未归一、Shizuku 授权对话框需应用真前台点一次。

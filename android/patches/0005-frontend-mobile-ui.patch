@@ -12873,10 +12873,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..c25c1785 100644
+index 3ebf39a9..95db2824 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1282 @@
+@@ -1,1026 +1,1341 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14489,6 +14489,29 @@ index 3ebf39a9..c25c1785 100644
 +    const ghostRef = useRef<HTMLDivElement | null>(null);
 +
 +    const DRAG_THRESHOLD = 5; // 像素阈值，防止误触
++    /* 🔴 真机 bug 修复（用户口径「跨界面拖动文件依旧不成功，原因可能是长按并拖动
++       没有优先于落指直接划动平移界面」）—— 判断完全正确：
++       原实现里 pointerdown 就置位、**移动 5px 立即激活拖拽**，而列表是 `ScrollArea`，
++       浏览器把它当纵向滚动接管 ⇒ 派发 `pointercancel` 把我们的指针掐掉
++       ⇒ 拖拽当场中止（表现为"怎么拖都不成功"，而在合成事件下永远复现不出来）。
++       修法两道：
++         ① **长按门槛**：按住 `LONG_PRESS_MS` 才算"要拖"；期间先移动超过阈值 ⇒
++            判定为用户在**滚动列表**，直接放弃本次拖拽（不打扰滚动）。
++         ② 长按成立后挂**非被动 `touchmove`** 并 `preventDefault()` —— 这是在
++            `touch-action` 无法中途更改的前提下，唯一能可靠"从浏览器手里抢下手势"的做法
++            （`preventDefault` 的 touchmove 会让浏览器放弃滚动，`pointercancel` 随之不来）。
++       `touchmove` 必须用原生 `addEventListener(..., { passive: false })`：
++       React 的合成事件挂在根容器上，对 touch 系列默认是被动的，`preventDefault` 无效。 */
++    const LONG_PRESS_MS = 260;
++    const longPressTimerRef = useRef<number | null>(null);
++    const dragArmedRef = useRef(false);
++
++    const clearLongPressTimer = useCallback(() => {
++        if (longPressTimerRef.current !== null) {
++            window.clearTimeout(longPressTimerRef.current);
++            longPressTimerRef.current = null;
++        }
++    }, []);
 +
 +    const handlePointerDownForDrag = useCallback(
 +        (e: React.PointerEvent<HTMLDivElement>, entry: FileEntry) => {
@@ -14499,6 +14522,13 @@ index 3ebf39a9..c25c1785 100644
 +                selectedPaths.size > 0 && selectedPaths.has(entry.path)
 +                    ? Array.from(selectedPaths)
 +                    : [entry.path];
++            /* 长按门槛：按住够久才把"拖拽权"从浏览器滚动那边抢过来（见上方注释）。 */
++            dragArmedRef.current = false;
++            clearLongPressTimer();
++            longPressTimerRef.current = window.setTimeout(() => {
++                longPressTimerRef.current = null;
++                dragArmedRef.current = true;
++            }, LONG_PRESS_MS);
 +            // 不拦截 pointer，让 click 事件仍能触发预览
 +            setDragState({
 +                filePath: entry.path,
@@ -14510,7 +14540,7 @@ index 3ebf39a9..c25c1785 100644
 +                isRightDrag: e.button === 2,
 +            });
 +        },
-+        [selectedPaths],
++        [selectedPaths, clearLongPressTimer],
 +    );
 +
 +    /** B4：边缘切页的停留计时（避免误触）。 */
@@ -14558,6 +14588,15 @@ index 3ebf39a9..c25c1785 100644
 +                const dx = e.clientX - ds.startX;
 +                const dy = e.clientY - ds.startY;
 +                if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD) return;
++                /* 长按还没成立就先动了 ⇒ 用户在**滚动列表**，不是要拖拽：
++                   直接放弃本次拖拽（不 preventDefault、不发 start 事件），
++                   让浏览器照常滚 —— 这是"长按并拖动优先于落指划动"的另一半。 */
++                if (!dragArmedRef.current) {
++                    clearLongPressTimer();
++                    dragStateRef.current = null;
++                    setDragState(null);
++                    return;
++                }
 +                // 激活拖拽
 +                dragStateRef.current = { ...ds, active: true };
 +
@@ -14640,6 +14679,10 @@ index 3ebf39a9..c25c1785 100644
 +
 +        function onPointerUp(e: PointerEvent) {
 +            const ds = dragStateRef.current;
++            // 收尾：清掉长按计时器与"已获得拖拽权"标记（否则下一次手势开始前
++            // 滚动会被残留的 armed 挡住）。
++            clearLongPressTimer();
++            dragArmedRef.current = false;
 +            if (ds?.active) {
 +                // 发送拖拽结束（drop）事件
 +                window.dispatchEvent(
@@ -14664,6 +14707,8 @@ index 3ebf39a9..c25c1785 100644
 +        // 拖拽态永久卡死（ghost 滞留、列表行保持半透明、move 事件持续派发）。
 +        function onPointerCancel() {
 +            const ds = dragStateRef.current;
++            clearLongPressTimer();
++            dragArmedRef.current = false;
 +            if (ds?.active) {
 +                window.dispatchEvent(
 +                    new CustomEvent("hifi-file-drag", {
@@ -14690,12 +14735,26 @@ index 3ebf39a9..c25c1785 100644
 +            }
 +        }
 +
++        /* 🔴 从浏览器手里抢手势（长按成立之后）：
++           列表是 `ScrollArea`，浏览器会把它当纵向滚动接管并派发 `pointercancel`，
++           把我们的拖拽掐死在半路。`touch-action` 不能在手势中途改，
++           唯一可靠的做法是**非被动** `touchmove` + `preventDefault()`
++           —— 浏览器因此放弃滚动，`pointercancel` 也就不来了。
++           只在长按成立（`dragArmedRef`）后才拦：否则列表就没法滚了。 */
++        function onTouchMoveBlockScroll(e: TouchEvent) {
++            if (dragArmedRef.current) {
++                if (e.cancelable) e.preventDefault();
++            }
++        }
++        window.addEventListener("touchmove", onTouchMoveBlockScroll, { passive: false });
++
 +        window.addEventListener("pointermove", onPointerMove);
 +        window.addEventListener("pointerup", onPointerUp);
 +        window.addEventListener("pointercancel", onPointerCancel);
 +        window.addEventListener("blur", onPointerCancel);
 +        window.addEventListener("contextmenu", onContextMenu, true);
 +        return () => {
++            window.removeEventListener("touchmove", onTouchMoveBlockScroll);
 +            window.removeEventListener("pointermove", onPointerMove);
 +            window.removeEventListener("pointerup", onPointerUp);
 +            window.removeEventListener("pointercancel", onPointerCancel);
@@ -81484,6 +81543,24 @@ index 00000000..d1faffae
 +        };
 +    }, [s, vp, isPhone]);
 +}
+diff --git a/frontend/src/features/fileBrowser/audioPreview.ts b/frontend/src/features/fileBrowser/audioPreview.ts
+index a89df9b9..a57e8bef 100644
+--- a/frontend/src/features/fileBrowser/audioPreview.ts
++++ b/frontend/src/features/fileBrowser/audioPreview.ts
+@@ -135,3 +135,13 @@ class AudioPreviewEngine {
+ 
+ /** 全局单例 */
+ export const audioPreview = new AudioPreviewEngine();
++
++/* 调试钩子（与 `__hsViewport` / `__hsParamViewport` 同一约定）：
++   试听走 WebAudio，DOM 上没有"正在响"的可观测量 —— 要验
++   「传输栏按停止能不能停掉试听」只能问引擎自己。只读 + 一个 stop，不改行为。 */
++(
++    window as unknown as { __hsAudioPreview?: { playing: () => boolean; stop: () => void } }
++).__hsAudioPreview = {
++    playing: () => audioPreview.isPlaying(),
++    stop: () => audioPreview.stop(),
++};
 diff --git a/frontend/src/features/fileBrowser/fileBrowserSlice.ts b/frontend/src/features/fileBrowser/fileBrowserSlice.ts
 index 62c63c62..5029e689 100644
 --- a/frontend/src/features/fileBrowser/fileBrowserSlice.ts
@@ -95133,6 +95210,45 @@ index ad269869..6039e410 100644
 +        });
 +    },
 +);
+diff --git a/frontend/src/features/session/thunks/transportThunks.ts b/frontend/src/features/session/thunks/transportThunks.ts
+index 59e658ed..3939ddf1 100644
+--- a/frontend/src/features/session/thunks/transportThunks.ts
++++ b/frontend/src/features/session/thunks/transportThunks.ts
+@@ -3,6 +3,9 @@ import { webApi } from "../../../services/webviewApi";
+ 
+ import { setMetronomeConfig, persistUiSettings } from "../sessionSlice";
+ import type { SessionState } from "../sessionSlice";
++// 文件浏览器的试听引擎（WebAudio 单例）。传输栏的播放/停止必须同时管它 ——
++// 见 `stopAudioPlayback` 里的 bug 说明（两条路原本互不相干 ⇒「按停止停不下来」）。
++import { audioPreview } from "../../fileBrowser/audioPreview";
+ 
+ /**
+  * 更新节拍器配置并即时应用到引擎：
+@@ -83,6 +86,14 @@ function enqueueTransportCommand<T>(run: () => Promise<T>): Promise<T> {
+ export const stopAudioPlayback = createAsyncThunk(
+     "session/stopAudioPlayback",
+     async (options: { restoreAnchor?: boolean } | void, { getState }) => {
++        /* 🔴 上游 bug 修复（用户口径「预览时按停止停不下来」）：
++           文件浏览器的试听走 **WebAudio**（`features/fileBrowser/audioPreview`），
++           与工程的播放/停止**完全是两条路** —— 传输栏的「停止」只 dispatch 本 thunk、
++           停的是工程播放，试听声音照旧在响。
++           修法选在 **thunk 层**而不是各个按钮上：`stopAudioPlayback` / `playOriginal`
++           是所有入口（手机底栏、桌面 ActionBar、时间线内按钮、键盘快捷键、录制流程）
++           的共同下游，这里一处即可全覆盖。 */
++        audioPreview.stop();
+         const restoreAnchor = Boolean(
+             (options as { restoreAnchor?: boolean } | undefined)?.restoreAnchor,
+         );
+@@ -158,6 +169,9 @@ export type PlayOriginalResult = {
+ export const playOriginal = createAsyncThunk<PlayOriginalResult, void>(
+     "session/playOriginal",
+     async (_, { getState }) => {
++        /* 起播前先掐掉文件浏览器的试听（同 `stopAudioPlayback` 的说明）：
++           否则两路声音会叠着响，用户按暂停/停止也分不清停的是哪一路。 */
++        audioPreview.stop();
+         const state = getState() as { session: SessionState };
+         const anchorSec = state.session.playheadSec;
+ 
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
 index 858bca55..8dc79dc9 100644
 --- a/frontend/src/i18n/en-US.ts
