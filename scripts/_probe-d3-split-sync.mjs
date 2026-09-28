@@ -125,54 +125,63 @@ const main = async () => {
     // ── ② 确保参数面板可见 ────────────────────────────────────────────────────
     await sleep(1000);
     console.log('▸ 打开「参数面板」：' + JSON.stringify(await cdp.call(OPEN_PARAMS_PANEL)));
-    const on = await cdp.call(READ_VISIBLE);
-    console.log('▸ 同步 ON 状态：' + JSON.stringify(on));
 
+    /* ⚠️ 2026-09-28 修正：**不能假定启动时同步是开的**。
+       原版把"刚打开时的状态"当成 ON、把"点一次开关之后"当成 OFF —— 实际相反
+       （冷启动后 `data-hs-paramsync` 根本没设 ⇒ 同步是关的），于是断言全红、
+       而真正打开同步后的那个状态（可见拍数栏 1 / 滑动条 1）恰好就是 D3 想要的。
+       改成**按 flag 状态驱动**：先读，必要时切一次，再读 ⇒ 与初始开关状态无关。 */
+    const TOGGLE_SYNC = async () => {
+        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+        // 同步开关是 `.hs-param-head` 里的**第一个 IconButton**
+        // （`aria-label={t("sync_timeline_view")}`，onClick = 取反 `paramEditorSyncTimeline`）。
+        // 它**不在 ∨ 菜单里** —— 别再找 `∨` 触发按钮（会得到 no-v-trigger）。
+        const head = document.querySelector('.hs-param-head');
+        if (!head) return { error: 'no-param-head' };
+        const toggle = head.querySelector('button');
+        if (!toggle) return { error: 'no-sync-button' };
+        toggle.click();
+        await wait(1400);
+        return { ok: true };
+    };
+
+    /** 读到指定 flag 的状态（必要时切一次开关）。 */
+    const readWithFlag = async (want) => {
+        let s = await cdp.call(READ_VISIBLE);
+        for (let i = 0; i < 2 && s.syncFlag !== want; i++) {
+            const t = await cdp.call(TOGGLE_SYNC);
+            if (!t.ok) return { ...s, toggleError: t };
+            s = await cdp.call(READ_VISIBLE);
+        }
+        return s;
+    };
+
+    // ── ③ 同步 **ON** ⇒ 只留 1 个拍数栏(timeline) + 1 条滑动条(params) ────────
+    const on = await readWithFlag('on');
+    console.log('▸ 同步 ON 状态：' + JSON.stringify(on));
     const visRulers = on.rulers.filter((r) => r.visible).map((r) => r.v);
     const visSb = on.sbs.filter((s) => s.visible).map((s) => s.v);
-
     check(
         'D3-a 同屏 + 同步 ON：可见拍数栏恰好 1 个且是 timeline',
         on.syncFlag === 'on' && visRulers.length === 1 && visRulers[0] === 'timeline',
         `body 标记=${on.syncFlag}；可见拍数栏=${JSON.stringify(visRulers)}；全部=${JSON.stringify(on.rulers)}`,
     );
     check(
-        'D3-a2 同屏 + 同步 ON：可见水平滑动条恰好 1 个且是 params',
-        visSb.length === 1 && visSb[0] === 'params',
+        'D3-a2 同屏 + 同步 ON：可见水平滑动条恰好 1 条且是 params',
+        on.syncFlag === 'on' && visSb.length === 1 && visSb[0] === 'params',
         `可见滑动条=${JSON.stringify(visSb)}；全部=${JSON.stringify(on.sbs)}`,
     );
 
-    // ── ③ 关掉同步，验"两份都该在"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const off = await cdp.call(async () => {
-        const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-        // 同步开关是 `.hs-param-head` 里的**第一个 IconButton**
-        // （`PianoRollPanel` 里 `aria-label={t("sync_timeline_view")}` 那个，
-        //  onClick = `setParamEditorSyncTimeline(!s.paramEditorSyncTimeline)`）。
-        // 它**不在 ∨ 菜单里** —— 别再找 `∨` 触发按钮（会得到 no-v-trigger）。
-        const head = document.querySelector('.hs-param-head');
-        if (!head) return { error: 'no-param-head' };
-        const toggle = head.querySelector('button');
-        if (!toggle) return { error: 'no-sync-button' };
-        const before = toggle.getAttribute('aria-pressed') ?? toggle.getAttribute('data-state') ?? '?';
-        toggle.click();
-        await wait(1800);
-        return { ok: true, before, label: toggle.getAttribute('aria-label') || '' };
-    });
-    console.log('▸ 关同步：' + JSON.stringify(off));
-
-    if (off?.ok) {
-        const after = await cdp.call(READ_VISIBLE);
-        console.log('▸ 同步 OFF 状态：' + JSON.stringify(after));
-        const r2 = after.rulers.filter((r) => r.visible).length;
-        const s2 = after.sbs.filter((s) => s.visible).length;
-        check(
-            'D3-b 同步 OFF：两份拍数栏与两条滑动条都回来（各 2）',
-            r2 === 2 && s2 === 2,
-            `可见拍数栏=${r2}；可见滑动条=${s2}；body 标记=${after.syncFlag}`,
-        );
-    } else {
-        check('D3-b 同步 OFF 分支', false, `切不动同步开关（${JSON.stringify(off)}）⇒ 未验证`, true);
-    }
+    // ── ④ 同步 **OFF** ⇒ 两份都回来（各 2）───────────────────────────────────
+    const offState = await readWithFlag('(未设)');
+    console.log('▸ 同步 OFF 状态：' + JSON.stringify(offState));
+    const r2 = offState.rulers.filter((r) => r.visible).length;
+    const s2 = offState.sbs.filter((s) => s.visible).length;
+    check(
+        'D3-b 同步 OFF：两份拍数栏与两条滑动条都回来（各 2）',
+        offState.syncFlag === '(未设)' && r2 === 2 && s2 === 2,
+        `可见拍数栏=${r2}；可见滑动条=${s2}；body 标记=${offState.syncFlag}`,
+    );
 
     // ── ④ 复原：手机视口 ─────────────────────────────────────────────────────
     adb('shell wm size reset');

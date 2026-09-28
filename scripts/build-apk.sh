@@ -30,11 +30,26 @@ SRC="$ROOT/upstream-src/backend/src-tauri"
 ABI="arm64-v8a"
 SCOPE=""
 EXTRA=()
+SEEN_DD=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    arm64-v8a|x86_64|armeabi-v7a) ABI="$1" ;;
+    --) SEEN_DD=1 ;;
     --release|--debug) SCOPE="$1" ;;
-    *) EXTRA+=("$1") ;;
+    arm64-v8a|x86_64|armeabi-v7a) ABI="$1" ;;
+    -*) EXTRA+=("$1") ;;
+    *)
+      # 🔴 2026-09-28：**未知的位置参数必须报错**。原来落在 `*)` 里被当成"额外 tauri
+      # 参数"原样透传 —— `build-apk.sh arm64`（少了 `-v8a`）于是把裸词 `arm64` 追加到
+      # cargo 命令行末尾，报一句看不懂的
+      # `Usage: cargo.exe build [OPTIONS]` + `exited with code 1`，
+      # 完全看不出是 ABI 写错（实测白烧一轮构建）。`--` 之后才允许裸词。
+      if [ "$SEEN_DD" = "1" ]; then
+        EXTRA+=("$1")
+      else
+        echo "错误: 无法识别的参数 '$1'（ABI 只能是 arm64-v8a / x86_64 / armeabi-v7a；额外 tauri 参数请用 '--' 分隔）" >&2
+        exit 2
+      fi
+      ;;
   esac
   shift
 done

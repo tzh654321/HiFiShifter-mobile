@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..680139c1 100644
+index 3802022a..217b23e1 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4369 @@
+@@ -1,4006 +1,4529 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -4531,6 +4531,12 @@ index 3802022a..680139c1 100644
 +    const splitRatioRef = useRef(splitRatio);
 +    const [isDragging, setIsDragging] = useState(false);
 +    const [quickSearchOpen, setQuickSearchOpen] = useState(false);
++    /** C5/C6：手机端分屏容器（上下两块都在它里面）。 */
++    const mobileSplitRef = useRef<HTMLDivElement | null>(null);
++    /** C5/C6：手柄绑定挂在 document 上（跨挂载/重绘不失效），所以要按引用读当前面板态。 */
++    const mobilePanelsRef = useRef<{ timeline: boolean; params: boolean; files: boolean; notes: boolean }>(
++        { timeline: true, params: false, files: false, notes: false },
++    );
 +
 +    // 三套布局（ADR-006 / docs/04 §2）：phone 下时间线与参数面板互斥，由底部页签切换；
 +    // tablet（600–1279px）两块面板同屏 + 侧栏常驻 + 播放条常驻，但顶栏/工具栏换成触摸友好的那套。
@@ -4540,6 +4546,9 @@ index 3802022a..680139c1 100644
 +    const isTouchShell = isPhone || isTablet;
 +    /* C（#17）：底栏页签已删除，四个面板的显隐改为「视图」菜单勾选项（redux）。 */
 +    const mobilePanels = useAppSelector((st) => st.session.mobilePanels);
++    /* C5/C6：手机端**是否还有"非轨道面板"** —— 决定上下两块要不要按 `splitRatio`
++       分高度（只有一块时那一块独占 = 全屏；两块都在时才需要分界线）。 */
++    const mobileHasNonTrackPanel = mobilePanels.params || mobilePanels.files || mobilePanels.notes;
 +
 +    /**
 +     * D3（2026-09-27）：打开「同步参数编辑器水平位置与缩放」且**两块面板同屏**时，
@@ -4981,6 +4990,133 @@ index 3802022a..680139c1 100644
 +
 +        return { startDrag };
 +    }, []);
++
++    /* ── C5/C6：手机端分屏边界（**触摸**）────────────────────────────────────
++       规格 `docs/15` / `prompt.md`：
++         · 全屏非轨道界面**从顶部下拉**进入分屏（分屏 = 轨道 + 先前那个界面）；
++         · 分界线可拖，**拖到很接近底部或顶部时变回全屏**；
++         · 上下拖动 **参数界面拍数栏 / 文件管理标题栏 / 记事本标题栏** 可更改分屏边界，
++           某个界面所得太小则**自动关闭**。
++
++       🔴 为什么不能复用上面那个 `splitter`：
++         · 它**故意排除触摸**（`shouldSuppressHoverSideEffects` —— 8px 窄条 + 按下即生效，
++           画线起止贴近边界时极易误扫，"布局调整保留给鼠标"）；
++         · 它按 `container.children[0]/[2]` 定位，那是**桌面/平板**那棵树的形状。
++
++       ⇒ 手柄 = 下方面板**自己的顶部标题条**（正是规格列的那三个），
++         用 `data-hs-split-handle` / `data-hs-time-ruler="params"` 标记后集中绑定，
++         不侵入三个面板内部。绑定挂在 **document 的捕获阶段**：手柄会随面板显隐
++         挂载/卸载，绑在元素上会在"拖动中被卸载"时丢掉后半程；挂在 document 上
++         则跨挂载、跨重绘都不失效。 */
++    useEffect(() => {
++        if (!isPhone) return;
++        /** 局部 `clamp`（上面那个是 splitter hook 内的局部函数，作用域不重叠）。 */
++        const clamp = (v: number, minV: number, maxV: number): number =>
++            Math.min(maxV, Math.max(minV, v));
++        /** 拖到多靠近边界算"太小 ⇒ 自动关闭"（比值按容器高的归一化位置）。 */
++        const COLLAPSE_BOTTOM = 0.86;
++        const COLLAPSE_TOP = 0.14;
++        /** 死区：小于它只当"点了一下标题条"（同一根条上还有各自的点击语义）。 */
++        const DEAD_PX = 14;
++        const HANDLE_SELECTOR = '[data-hs-split-handle], [data-hs-time-ruler="params"]';
++        let drag: { pointerId: number; startY: number; moved: boolean; ratio: number } | null = null;
++
++        const findHandle = (target: EventTarget | null): HTMLElement | null => {
++            const container = mobileSplitRef.current;
++            if (!(target instanceof Element) || container === null) return null;
++            const el = target.closest<HTMLElement>(HANDLE_SELECTOR);
++            if (el === null || !container.contains(el)) return null;
++            // 标题条里还有按钮（打开文件夹 / 刷新 / 关闭 / 编辑预览切换）：那些按下不归我们管。
++            return target.closest("button") === null ? el : null;
++        };
++
++        /** 直接改 DOM 的 flexGrow（与桌面分割条同一手法，避免每帧整树重绘）。 */
++        const paintRatio = (ratio: number): void => {
++            const container = mobileSplitRef.current;
++            if (container === null || container.children.length < 2) return;
++            const top = container.children[0] as HTMLElement;
++            const bottom = container.children[1] as HTMLElement;
++            top.style.flexGrow = String(ratio);
++            bottom.style.flexGrow = String(1 - ratio);
++        };
++
++        const onMove = (e: PointerEvent) => {
++            const d = drag;
++            if (d === null || e.pointerId !== d.pointerId) return;
++            const container = mobileSplitRef.current;
++            if (container === null) return;
++            const rect = container.getBoundingClientRect();
++            if (!(rect.height > 0)) return;
++            if (!d.moved) {
++                if (Math.abs(e.clientY - d.startY) < DEAD_PX) return;
++                d.moved = true;
++                /* 全屏（只有非轨道面板）时**下拉 = 进入分屏**：把轨道块打开，
++                   边界随后交给手指。 */
++                if (!mobilePanelsRef.current.timeline) dispatch(showMobilePanel("timeline"));
++            }
++            e.preventDefault();
++            const ratio = clamp((e.clientY - rect.top) / rect.height, 0.06, 0.94);
++            d.ratio = ratio;
++            splitRatioRef.current = ratio;
++            /* 刚进入分屏的那一帧下方面板块还没挂上（React 尚未提交）⇒
++               只有两块都在时才直接改 DOM；否则交给下面那次 `setSplitRatio`。 */
++            if (container.children.length >= 2) paintRatio(ratio);
++            else setSplitRatio(clamp(ratio, 0.15, 0.85));
++        };
++
++        const onUp = (e: PointerEvent) => {
++            const d = drag;
++            if (d === null || e.pointerId !== d.pointerId) return;
++            drag = null;
++            window.removeEventListener("pointermove", onMove);
++            window.removeEventListener("pointerup", onUp);
++            window.removeEventListener("pointercancel", onUp);
++            if (!d.moved) return; // 只是点了一下标题条 ⇒ 边界不动
++            const settled = clamp(d.ratio, 0.15, 0.85);
++            if (d.ratio >= COLLAPSE_BOTTOM) {
++                /* 下方被压得太小 ⇒ 关掉所有"非轨道"面板 ⇒ 回到全屏轨道界面。 */
++                for (const key of ["params", "files", "notes"] as const) {
++                    if (mobilePanelsRef.current[key]) dispatch(toggleMobilePanel(key));
++                }
++            } else if (d.ratio <= COLLAPSE_TOP) {
++                /* 轨道被压得太小 ⇒ 关掉轨道 ⇒ 回到"先前那个界面"的全屏。 */
++                dispatch(toggleMobilePanel("timeline"));
++            }
++            setSplitRatio(settled);
++            localStorage.setItem("hifishifter.splitRatio", String(settled));
++        };
++
++        const onDown = (e: PointerEvent) => {
++            if (e.pointerType === "mouse") return; // 鼠标走桌面那条分割条
++            if (findHandle(e.target) === null) return;
++            drag = { pointerId: e.pointerId, startY: e.clientY, moved: false, ratio: splitRatioRef.current };
++            window.addEventListener("pointermove", onMove, { passive: false });
++            window.addEventListener("pointerup", onUp);
++            window.addEventListener("pointercancel", onUp);
++        };
++
++        document.addEventListener("pointerdown", onDown, { capture: true });
++        return () => {
++            document.removeEventListener("pointerdown", onDown, { capture: true });
++            window.removeEventListener("pointermove", onMove);
++            window.removeEventListener("pointerup", onUp);
++            window.removeEventListener("pointercancel", onUp);
++            drag = null;
++        };
++    }, [isPhone, dispatch]);
++
++    /* C5/C6：把 `mobilePanels` 同步进 ref（上面那个 effect 只依赖 `isPhone`，
++       闭包里的 `mobilePanels` 会过期——而拖动期间恰恰会改它：下拉进分屏）。 */
++    useEffect(() => {
++        mobilePanelsRef.current = mobilePanels;
++        /* 手柄必须禁掉浏览器的手势接管，否则真实触摸下 pointermove 会被
++           原生的纵向滚动/缩放吃掉（同 `touchAction = "none"` 的那套原因）。 */
++        for (const el of document.querySelectorAll<HTMLElement>(
++            '[data-hs-split-handle], [data-hs-time-ruler="params"]',
++        )) {
++            el.style.touchAction = "none";
++        }
++    }, [mobilePanels, isPhone]);
 +
 +    const statusText = useMemo(() => {
 +        // 精确匹配
@@ -8161,11 +8297,28 @@ index 3802022a..680139c1 100644
 +                    {/* 参数工具行：菜单栏下方、钢琴窗上方（用户口径）。
 +                        选择/绘制/眼睛 从底栏搬到这里，并新增 ∨ 参数菜单入口。 */}
 +                    {mobilePanels.params ? <MobileParamToolRow /> : null}
-+                    {/* C（#17）：勾了几个面板就分几块，垂直均分（`flex-1`）。
-+                        至少有一个（`toggleMobilePanel` 里守卫），所以不会整片空白。 */}
-+                    <Box className="flex-1 min-h-0 relative bg-qt-base flex flex-col">
++                    {/* C（#17）：勾了几个面板就分几块。
++                        至少有一个（`toggleMobilePanel` 里守卫），所以不会整片空白。
++
++                        C5/C6：上下两块**按 `splitRatio` 分高度**（此前一律 `flex-1`
++                        均分 ⇒ 三块同屏时每块高度不可控、也没法调）。
++                        只有"轨道块"与"非轨道块"**同时存在**时才分；只有一块时它
++                        独占 = 全屏。分界线的手柄是下方面板自己的顶部标题条
++                        （参数拍数栏 / 文件标题栏 / 记事本标题栏），见上面那个 effect。 */}
++                    <Box
++                        ref={mobileSplitRef}
++                        className="flex-1 min-h-0 relative bg-qt-base flex flex-col"
++                        data-hs-mobile-split="1"
++                    >
 +                        {mobilePanels.timeline ? (
-+                            <div className="flex-1 min-h-0 relative">
++                            <div
++                                className="min-h-0 relative"
++                                style={
++                                    mobileHasNonTrackPanel
++                                        ? { flexGrow: splitRatio, flexBasis: 0 }
++                                        : { flexGrow: 1, flexBasis: 0 }
++                                }
++                            >
 +                                {/* #16：**各面板自己的关闭键** —— 分屏时每块都能独立收起。 */}
 +                                <button
 +                                    type="button"
@@ -8192,43 +8345,50 @@ index 3802022a..680139c1 100644
 +                                <ClipEdgeLongPressHint />
 +                            </div>
 +                        ) : null}
-+                        {mobilePanels.params ? (
-+                            <div className="flex-1 min-h-0 relative">
-+                                {/* #52：用户口径「全屏参数界面下点 ✕ ⇒ 回到全屏轨道界面」。
-+                                 *
-+                                 * 分屏时（timeline 也开着）✕ 只收起本块；
-+                                 * **只有 params 一个**时，除了关它还要强制打开 timeline，
-+                                 * 否则 `toggleMobilePanel` 的「至少保留一个」守卫会直接忽略
-+                                 * ⇒ 点了没反应。
-+                                 *
-+                                 * ⚠️ 用 `showMobilePanel`（强制勾上）而非 toggle —— 后者是翻转，
-+                                 * 万一 timeline 恰好开着就会被它关掉。 */}
-+                                <button
-+                                    type="button"
-+                                    className="hs-panel-close"
-+                                    aria-label="关闭"
-+                                    title="关闭"
-+                                    onClick={() => {
-+                                        const onlyParams =
-+                                            mobilePanels.params &&
-+                                            Object.values(mobilePanels).filter(Boolean).length === 1;
-+                                        dispatch(toggleMobilePanel("params"));
-+                                        if (onlyParams) dispatch(showMobilePanel("timeline"));
-+                                    }}
-+                                >
-+                                    ✕
-+                                </button>
-+                                <PianoRollPanel />
-+                            </div>
-+                        ) : null}
-+                        {mobilePanels.files ? (
-+                            <div className="flex-1 min-h-0 relative">
-+                                                                <FileBrowserPanel />
-+                            </div>
-+                        ) : null}
-+                        {mobilePanels.notes ? (
-+                            <div className="flex-1 min-h-0 relative">
-+                                                                <NotebookPanel />
++                        {mobileHasNonTrackPanel ? (
++                            <div
++                                className="min-h-0 relative flex flex-col"
++                                style={{ flexGrow: 1 - splitRatio, flexBasis: 0 }}
++                            >
++                                {mobilePanels.params ? (
++                                    <div className="flex-1 min-h-0 relative">
++                                        {/* #52：用户口径「全屏参数界面下点 ✕ ⇒ 回到全屏轨道界面」。
++                                         *
++                                         * 分屏时（timeline 也开着）✕ 只收起本块；
++                                         * **只有 params 一个**时，除了关它还要强制打开 timeline，
++                                         * 否则 `toggleMobilePanel` 的「至少保留一个」守卫会直接忽略
++                                         * ⇒ 点了没反应。
++                                         *
++                                         * ⚠️ 用 `showMobilePanel`（强制勾上）而非 toggle —— 后者是翻转，
++                                         * 万一 timeline 恰好开着就会被它关掉。 */}
++                                        <button
++                                            type="button"
++                                            className="hs-panel-close"
++                                            aria-label="关闭"
++                                            title="关闭"
++                                            onClick={() => {
++                                                const onlyParams =
++                                                    mobilePanels.params &&
++                                                    Object.values(mobilePanels).filter(Boolean).length === 1;
++                                                dispatch(toggleMobilePanel("params"));
++                                                if (onlyParams) dispatch(showMobilePanel("timeline"));
++                                            }}
++                                        >
++                                            ✕
++                                        </button>
++                                        <PianoRollPanel />
++                                    </div>
++                                ) : null}
++                                {mobilePanels.files ? (
++                                    <div className="flex-1 min-h-0 relative">
++                                        <FileBrowserPanel />
++                                    </div>
++                                ) : null}
++                                {mobilePanels.notes ? (
++                                    <div className="flex-1 min-h-0 relative">
++                                        <NotebookPanel />
++                                    </div>
++                                ) : null}
 +                            </div>
 +                        ) : null}
 +                    </Box>
@@ -12713,10 +12873,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..67e84211 100644
+index 3ebf39a9..e908cb48 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1134 @@
+@@ -1,1026 +1,1139 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14453,11 +14613,16 @@ index 3ebf39a9..67e84211 100644
 +
 +    return (
 +        <Flex direction="column" className="h-full bg-qt-window text-qt-text select-none">
-+            {/* 标题栏 */}
++            {/* 标题栏
++                C5/C6：它同时是**手机端分屏边界的手柄**（规格 `docs/15` / `prompt.md`：
++                「上下拖动 …文件管理标题栏… 可以更改分屏边界位置」）—— 标题栏正好压在
++                上下两块的边界上；App 侧按 `data-hs-split-handle` 集中绑定（不侵入本组件）。
++                条里的按钮（打开文件夹 / 刷新 / 关闭）不归手柄管，App 侧会跳过。 */}
 +            <Flex
 +                align="center"
 +                justify="between"
 +                className="h-8 px-2 border-b border-qt-border shrink-0"
++                data-hs-split-handle="files"
 +            >
 +                <Text size="2" weight="medium" className="truncate">
 +                    {(t as (key: string) => string)("fb_title")}
@@ -18495,10 +18660,10 @@ index 00000000..e932247d
 +    );
 +}
 diff --git a/frontend/src/components/layout/NotebookPanel.tsx b/frontend/src/components/layout/NotebookPanel.tsx
-index de6d05a3..407ff0b2 100644
+index de6d05a3..af40d929 100644
 --- a/frontend/src/components/layout/NotebookPanel.tsx
 +++ b/frontend/src/components/layout/NotebookPanel.tsx
-@@ -1,75 +1,83 @@
+@@ -1,75 +1,88 @@
 -import { Box, Button, Flex, Text } from "@radix-ui/themes";
 -import { useMemo } from "react";
 -import { useAppDispatch, useAppSelector } from "../../app/hooks";
@@ -18592,10 +18757,15 @@ index de6d05a3..407ff0b2 100644
 +
 +    return (
 +        <Flex className="h-full min-h-0 flex-col bg-qt-window">
++            {/* 标题栏
++                C5/C6：手机端**分屏边界的手柄**（规格 `docs/15` / `prompt.md`：
++                「上下拖动 …记事本标题栏… 可以更改分屏边界位置」）。App 侧按
++                `data-hs-split-handle` 集中绑定；条里的按钮不归手柄管。 */}
 +            <Flex
 +                align="center"
 +                justify="between"
 +                className="shrink-0 border-b border-qt-border px-2 py-1.5"
++                data-hs-split-handle="notes"
 +            >
 +                <Text size="2" weight="medium">
 +                    {t("notebook")}
@@ -33781,10 +33951,10 @@ index 613ea89d..c8a5682b 100644
 +    );
 +};
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..260dee24 100644
+index 242997f5..afea3539 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,6912 @@
+@@ -1,6438 +1,7077 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -41061,6 +41231,9 @@ index 242997f5..260dee24 100644
 +                    const TAP_SLOP = 12;
 +                    let tapIds: number[] = [];
 +                    const tapStart = new Map<number, { x: number; y: number }>();
++                    /** 各指针的**最新**位置。slip 要按位移量算，必须用最新位置算两指中点
++                        （`tapStart` 是按下位置，拿来算位移会恒为 0）。 */
++                    const tapLast = new Map<number, { x: number; y: number }>();
 +                    let tapAt = 0;
 +                    let tapFired = false;
 +                    /* E 组（最后一格）：**双指长按并划动 = slip（调整音频相对块位置）**。
@@ -41072,38 +41245,141 @@ index 242997f5..260dee24 100644
 +                       否则"双指缩放"会在 0.5s 后悄悄点亮 Alt，把后续拖动变成 slip，
 +                       用户看到的就是"缩放/平移和 slip 混在一起"。 */
 +                    let twoMoved = false;
++                    /* A3：本轮双指交互里"Alt 是否已经点亮过"。
++                       点亮之后**不再撤销**——见 `onTwoMove` 的说明。 */
++                    let altLit = false;
++                    /* ── A3：双指长按并划动 = slip 的会话 ────────────────────────────
++                       桥到面板既有的 slip 通道（`hifi:slipPreview` / `hifi:slipCommit`
++                       → `handleKernelDragPreview` / `handleKernelDragCommit`）。
++
++                       🔴 为什么**不**借内核那份拖拽手势（三条都实测过）：
++                        ① 第二指落下时内核的手势已被收掉：`TwoFingerGestureController`
++                           在 1→2 指过渡里对第一指派发 window 级 `pointercancel`/`pointerup`
++                           （`abortPointer`，docs/08 §4.1 的设计），而内核的收尾监听恰在
++                           window 上 ⇒ 500ms 长按到点时内核早已没有活动手势，此后移动
++                           不产生任何手势（实测：合成 `altKey:true` 的单指拖拽**能** slip
++                           ⇒ 内核 slip 通道本身没问题，缺的是"起手时机"）；
++                        ② 即便重新武装，内核的 move 分派**不按 pointerId 过滤**（一份
++                           `gesture` 消费所有指针的 move）⇒ 两指各自的 move 轮流驱动同一份
++                           位移，读值在两指位置之间跳，跳幅恒等于两指间距。
++                       ⇒ 位移取**两指中点**（与捏合缩放同一锚点），既不抖也无间距偏移。 */
++                    let slipClipId: string | null = null;
++                    let slipTrackId = "";
++                    let slipMidX0 = 0;
++                    let slipSec = 0;
++                    let slipPreviewed = false;
 +                    const clearTwoTimer = () => {
 +                        if (twoTimer !== null) {
 +                            window.clearTimeout(twoTimer);
 +                            twoTimer = null;
 +                        }
 +                    };
++                    /** 两指中点的 x（按各指针**最新**位置；还没动过则退回按下位置）。 */
++                    const twoMidX = (): number => {
++                        const xs: number[] = [];
++                        for (const id of tapIds) {
++                            const p = tapLast.get(id) ?? tapStart.get(id);
++                            if (p) xs.push(p.x);
++                        }
++                        if (xs.length === 0) return 0;
++                        return xs.reduce((sum, x) => sum + x, 0) / xs.length;
++                    };
++                    /** 长按到点：记住"哪一块要被 slip"（命中用内核自己的 hitTest，不另写一套）。 */
++                    const beginSlip = () => {
++                        const p0 = tapStart.get(tapIds[0]);
++                        const host = kernelHostRef.current;
++                        if (p0 === undefined || host === null) return;
++                        const hit = host.debugHitAt(p0.x, p0.y);
++                        if (hit.kind !== "clip" || !hit.clipId) return;
++                        slipClipId = hit.clipId;
++                        slipTrackId =
++                            sessionRef.current.clips.find((entry) => entry.id === hit.clipId)
++                                ?.trackId ?? "";
++                        slipMidX0 = twoMidX();
++                        slipSec = 0;
++                        slipPreviewed = false;
++                    };
++                    const stepSlip = () => {
++                        if (slipClipId === null) return;
++                        const host = kernelHostRef.current;
++                        if (host === null) return;
++                        const pxPerSec = host.getViewport().pxPerSec;
++                        if (!(pxPerSec > 0)) return;
++                        const deltaSec = (twoMidX() - slipMidX0) / pxPerSec;
++                        // 去重：面板每次预览都写 Redux，而不去重时指针静止也会持续重建几何。
++                        if (Math.abs(deltaSec - slipSec) < 1e-4) return;
++                        slipSec = deltaSec;
++                        slipPreviewed = true;
++                        window.dispatchEvent(
++                            new CustomEvent("hifi:slipPreview", {
++                                detail: {
++                                    clipId: slipClipId,
++                                    deltaSec,
++                                    targetTrackId: slipTrackId,
++                                },
++                            }),
++                        );
++                    };
++                    /** 收尾：**只有真产生过位移才提交**（否则面板侧 origin 为空，提交是空操作；
++                        取消时才需要让它去回滚）。 */
++                    const endSlip = (cancelled: boolean) => {
++                        const clipId = slipClipId;
++                        if (clipId === null) return;
++                        slipClipId = null;
++                        if (!slipPreviewed && !cancelled) return;
++                        window.dispatchEvent(
++                            new CustomEvent("hifi:slipCommit", {
++                                detail: {
++                                    clipId,
++                                    deltaSec: slipSec,
++                                    targetTrackId: slipTrackId,
++                                    cancelled,
++                                },
++                            }),
++                        );
++                    };
 +                    const onTwoDown = (e: PointerEvent) => {
 +                        if (e.pointerType === "mouse") return;
 +                        if (tapIds.length === 0) {
 +                            tapAt = performance.now();
 +                            twoMoved = false;
++                            altLit = false;
++                            slipClipId = null;
 +                        }
 +                        tapIds.push(e.pointerId);
 +                        tapStart.set(e.pointerId, { x: e.clientX, y: e.clientY });
++                        tapLast.set(e.pointerId, { x: e.clientX, y: e.clientY });
 +                        tapFired = false;
 +                        // 两指都按下后才启动长按计时（单指不算）。
 +                        if (tapIds.length === 2 && twoTimer === null) {
 +                            twoTimer = window.setTimeout(() => {
 +                                // ⚠️ 到点时再确认"这两指一直没动"才点亮。
 +                                if (!twoMoved && tapIds.length >= 2) {
++                                    altLit = true;
 +                                    setTouchModifiers({ alt: true });
++                                    beginSlip();
 +                                }
 +                            }, 500);
 +                        }
 +                    };
 +                    /**
 +                     * #41：双指在动 ⇒ 走"平移且缩放"，**取消长按候选**。
-+                     * 一旦取消，本次手势不再可能变成 slip（要抬手重来）。
++                     *
++                     * 🔴 A3 修正（2026-09-28）：**已点亮的 Alt 不能在这里被撤销**。
++                     * 「双指长按**并划动**」的"划动"本来就是长按之后的动作，而这里原先
++                     * 一见 8px 位移就 `clearTouchModifiers()` ⇒ 一动手就把虚拟 Alt 清掉，
++                     * slip 永远起不来。撤销只对"**还没点亮**的候选"有意义。
++                     * 点亮之后改走 slip 通道：只累计位移，不再管"是否算长按"。
 +                     */
 +                    const onTwoMove = (e: PointerEvent) => {
 +                        if (e.pointerType === "mouse") return;
-+                        if (tapIds.length < 2 || twoMoved) return;
++                        tapLast.set(e.pointerId, { x: e.clientX, y: e.clientY });
++                        if (tapIds.length < 2) return;
++                        if (altLit) {
++                            stepSlip();
++                            return;
++                        }
++                        if (twoMoved) return;
 +                        for (const id of tapIds) {
 +                            const st = tapStart.get(id);
 +                            if (!st) continue;
@@ -41123,6 +41399,9 @@ index 242997f5..260dee24 100644
 +                    const onTwoUp = (e: PointerEvent) => {
 +                        if (!tapIds.includes(e.pointerId)) return;
 +                        clearTwoTimer();
++                        // 长按已点亮 ⇒ 这一轮是 slip：先收尾再清修饰键（提交要读 origin 的
++                        // `slipMode`，它是按下时快照的，与此刻的修饰键无关，但顺序上更清楚）。
++                        if (altLit && tapIds.length <= 2) endSlip(false);
 +                        clearTouchModifiers();
 +                        const st = tapStart.get(e.pointerId);
 +                        const moved =
@@ -41130,6 +41409,8 @@ index 242997f5..260dee24 100644
 +                                   Math.abs(e.clientY - st.y) > TAP_SLOP);
 +                        tapIds = tapIds.filter((id) => id !== e.pointerId);
 +                        tapStart.delete(e.pointerId);
++                        tapLast.delete(e.pointerId);
++                        if (tapIds.length === 0) altLit = false;
 +                        if (moved) tapFired = true; // 有人动过 ⇒ 不算 tap
 +                        if (tapIds.length > 0 || tapFired) return;
 +                        // 双指都抬起且没人动过、总时长够短 ⇒ 双指 tap
@@ -41138,8 +41419,11 @@ index 242997f5..260dee24 100644
 +                        if (trackId) handleSelectTrack(trackId);
 +                    };
 +                    const onTwoCancel = (e: PointerEvent) => {
++                        if (altLit) endSlip(true);
 +                        tapIds = tapIds.filter((id) => id !== e.pointerId);
 +                        tapStart.delete(e.pointerId);
++                        tapLast.delete(e.pointerId);
++                        if (tapIds.length === 0) altLit = false;
 +                        clearTwoTimer();
 +                        clearTouchModifiers();
 +                    };
@@ -43030,6 +43314,57 @@ index 242997f5..260dee24 100644
 +     * @param origin 本次边缘手势的按下时快照（含 `rippleFollowers` 与参与者几何）。
 +     * @returns 无返回值。
 +     */
++    /**
++     * A3：把「双指长按并划动 = slip」桥到**上面这两个既有回调**。
++     *
++     * 【为什么不让内核代劳（E 组那侧写的三条实测结论的结论）】
++     *   ① 第二指落下时内核那份手势已经被收掉（`TwoFingerGestureController`
++     *      的 1→2 指过渡会 abort 第一指），500ms 长按到点时它早就没有活动手势；
++     *   ② 即便重新武装，内核的 move 分派不按 pointerId 过滤 ⇒ 两指各自的 move
++     *      轮流驱动同一份位移，读数在两指位置之间跳（跳幅恒等于两指间距）。
++     * 而这条 slip 语义的几何/吸附/undo/落库**本来就整份长在面板**（`handleKernelDragPreview`
++     * / `handleKernelDragCommit`）⇒ 直接桥两个事件即可复用同一份实现，
++     * 位移由手势层用**两指中点**算（与捏合缩放同一锚点，不抖也没有间距偏移）。
++     */
++    React.useEffect(() => {
++        const slipModifiers = { ctrlKey: false, shiftKey: false, altKey: true, metaKey: false };
++        const onPreview = (e: Event) => {
++            const d = (e as CustomEvent<{ clipId: string; deltaSec: number; targetTrackId: string }>)
++                .detail;
++            if (!d?.clipId) return;
++            handleKernelDragPreview({
++                clipId: d.clipId,
++                deltaSec: d.deltaSec,
++                targetTrackId: d.targetTrackId,
++                modifiers: slipModifiers,
++            });
++        };
++        const onCommit = (e: Event) => {
++            const d = (
++                e as CustomEvent<{
++                    clipId: string;
++                    deltaSec: number;
++                    targetTrackId: string;
++                    cancelled: boolean;
++                }>
++            ).detail;
++            if (!d?.clipId) return;
++            handleKernelDragCommit({
++                clipId: d.clipId,
++                deltaSec: d.deltaSec,
++                targetTrackId: d.targetTrackId,
++                cancelled: d.cancelled === true,
++                modifiers: slipModifiers,
++            });
++        };
++        window.addEventListener("hifi:slipPreview", onPreview as EventListener);
++        window.addEventListener("hifi:slipCommit", onCommit as EventListener);
++        return () => {
++            window.removeEventListener("hifi:slipPreview", onPreview as EventListener);
++            window.removeEventListener("hifi:slipCommit", onCommit as EventListener);
++        };
++    }, [handleKernelDragPreview, handleKernelDragCommit]);
++
 +    const applyKernelTrimRipplePreview = React.useCallback(
 +        (origin: NonNullable<typeof kernelTrimOriginRef.current>) => {
 +            // `origin.baseById` 是 Map（按下时按参与者建），纯函数要 Record——
@@ -65203,10 +65538,10 @@ index 226da0e7..ec0be5bc 100644
 +};
 \ No newline at end of file
 diff --git a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-index a2ae3b60..fbbe025d 100644
+index a2ae3b60..92821a60 100644
 --- a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
 +++ b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-@@ -1,5487 +1,6046 @@
+@@ -1,5487 +1,6058 @@
 -/**
 - * 时间轴渲染内核 · 命令式宿主
 - *
@@ -70774,6 +71109,18 @@ index a2ae3b60..fbbe025d 100644
 + * 且覆盖位的语义是"**当前手势会话**的修饰键"，与某个 host 实例无关。
 + */
 +const touchModifiers = { ctrl: false, shift: false, alt: false, meta: false };
++
++/* 验收钩子（CDP 探针用，与 `__hsGestureDebug` 同类）：把「虚拟修饰键覆盖位」
++ * **按引用**挂到 window，读到的永远是当前值。
++ *
++ * 为什么需要：slip / copy / 免吸附全由这四位决定，而触屏上 `PointerEvent`
++ * 的这些字段**恒为 false** ⇒ 探针只能看"结果有没有变"。而 A3 的失败面恰恰是
++ * **时序**（什么时候点亮、什么时候被撤掉）——光看结果分不清"压根没点亮"还是
++ * "点亮了又被清掉"，那是两种完全不同的修法。 */
++{
++    const dbg = window as unknown as { __hsTouchModifiers?: typeof touchModifiers };
++    dbg.__hsTouchModifiers = touchModifiers;
++}
 +
 +/** 手势层设置触屏修饰键（只传要改的字段）。 */
 +export function setTouchModifiers(patch: Partial<typeof touchModifiers>): void {
@@ -77952,10 +78299,10 @@ index 00000000..f40f46fe
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..ddd71c0b
+index 00000000..0c82dfe2
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1866 @@
+@@ -0,0 +1,1890 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -78389,16 +78736,40 @@ index 00000000..ddd71c0b
 +    );
 +}
 +
-+/** 参数 id → 图标。未知 id 走兜底，保证「每项都能看到不同的图形」。 */
++/**
++ * 参数 id → 图标。未知 id 走兜底，保证「每项都能看到不同的图形」。
++ *
++ * 🔴 D7 的真凶（2026-09-28 实测，用户口径「为什么唯独气声图标不好改」）：
++ * **参数 id 会随算法变**，而这里原先只写了"老算法"那一套 id ——
++ *
++ * | 算法 | 气声的参数 id | 张力的参数 id |
++ * | :--- | :--- | :--- |
++ * | vslib / world 时代 | `breathiness` | `tension` |
++ * | **nsf-hifigan（默认算法）** | **`breath_gain`** | **`hifigan_tension`** |
++ *
++ * ⇒ 在默认算法下，气声与张力两行都**落不到对应 case**、静默退化成兜底通用图标；
++ * 而用户看到的"左右不像同一款图标"就是这么来的（右侧胶囊固定用 `BreathAirIcon`）。
++ * 实测证据：注入各 id 后读左侧 svg 的 path 签名 —— `breathiness` 得到气流曲线
++ * （`M2.2 3.6C4.8 1 …`），`breath_gain` 却与 `hifigan_tension` **完全相同**
++ * （`M2.4 5h11.2M2.…` = 兜底图标）。
++ *
++ * 这就是"别的都容易改、唯独气声难"的原因：其它行的 id 在各算法下都稳定，
++ * 改一次就到处生效；气声（与张力）是**同一个参数在不同算法下有两个 id**，
++ * 只补一个 case 在默认算法下根本不会命中 —— 也不会报错，只是悄悄画错。
++ */
 +function paramIcon(id: string): React.ReactNode {
 +    switch (id) {
 +        case "pitch":
 +            return <IconPitchSnap />;
 +        case "formant_shift_cents":
 +            return <IconParamFormant />;
++        /* 气声：vslib/world = `breathiness`，nsf-hifigan = `breath_gain`。 */
 +        case "breathiness":
++        case "breath_gain":
 +            return <BreathAirIcon />;
++        /* 张力：同上，`tension` / `hifigan_tension`。 */
 +        case "tension":
++        case "hifigan_tension":
 +            return <IconParamTension />;
 +        case "volume":
 +            return <IconParamVolume />;
