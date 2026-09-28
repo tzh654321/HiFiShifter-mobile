@@ -2093,3 +2093,46 @@ read_audio_preview(<mp3>)        → PCM 数据（修复前 Permission denied）
 （此前唯一还是 TODO 的是 **D8**，它今天已在真机验通：拖动 + 落点生成块；
 本次把该行状态一并更新。）另有 3 条"同类遗留"仍记在案：`search_files_recursive` 未走 SAF、
 `/sdcard` 未归一、Shizuku 授权对话框需应用真前台点一次。
+
+---
+
+## 🔴 Shizuku 一键授权：真机闪退定位与"安全替代"（2026-09-28 19:2x–19:5x）
+
+### 现象与已排除的原因
+
+用户报「点『用 Shizuku 开启全盘访问』软件直接闪退」。**是原生 abort**
+（无 Java 栈、`dumpsys dropbox` 查不到；栈只在 tombstone，需 root 才读得到）。
+逐条排除：
+
+| 假设 | 结果 |
+| :--- | :--- |
+| 同步调用阻塞了 JNI/主线程 | ❌ 改为主线程 `post` + 异步取结果后**仍崩**（命令已能立刻返回 `pending`）|
+| provider 少 `moe.shizuku.client.V3_SUPPORT` meta-data（v13 要求）| ❌ 补上（外加 `INTERACT_ACROSS_USERS_FULL`）后**仍崩** |
+| `Shizuku.newProcess` 反射写法错 | ⚠️ 顺带查清：`javap -public rikka.shizuku.Shizuku`（api 13.1.5）**根本没有 `newProcess`**，只有 `requestPermission` / `checkSelfPermission` / `pingBinder` / `transactRemote` / `getBinder` / `exit` 等 |
+| 应用自身不稳（不点也会死？）| ❌ 对照实验：重启后 45 秒不操作**稳定存活**，只在调用后死 |
+
+⇒ 结论：**只要调用 Shizuku 客户端库的功能型 API（`requestPermission`、起进程），本应用就会被原生 abort**。
+在拿到 tombstone 之前不再走这条路。
+
+### 现在的实现（安全 + 仍然有用）
+
+| 入口 | 行为 |
+| :--- | :--- |
+| 「**开启全盘访问（设置）**」 | 跳系统「所有文件访问」页；打开即 `allFiles=true`（**已验证可用**，等效于 Shizuku 那条）|
+| 「用 Shizuku 开启全盘访问」| 改为把 `appops set com.arounder.hifishifter MANAGE_EXTERNAL_STORAGE allow` **复制到剪贴板** + 显示指引（可在 Shizuku 的 `rish` 终端粘贴执行）；**不再调用任何有崩溃风险的 API** |
+
+真机验收：点击后**进程存活**（不再闪退）✅、提示条出现「已把 appops 命令复制到剪贴板…」✅。
+
+### 顺带修掉的两条同类遗留
+
+1. **`/sdcard` 归一**：`/sdcard`、`/mnt/sdcard`、`/storage/self/primary` 统一归一成
+   `/storage/emulated/0/...`（`normalize_android_path`），`storage_access_state` 与
+   `list_directory` 的 SAF 前缀匹配都改用它。
+   真机复验：`storage_access_state("/sdcard/Download")` ⇒ `isSharedStorage:true, needsAuth:true` ✅（改前 false）。
+2. **`search_files_recursive` 走 SAF**：授权目录里改用 `list_tree_children` 逐层 BFS
+   （深度 ≤ 32、最多 500 条），不再用 `fs::read_dir` 递归 ⇒ 不再"静默漏文件"。
+
+### 待办
+
+- **Shizuku 一键授权**：需要 tombstone（root）或换用 `ShizukuBinderWrapper + IAppOpsService` 路线才能继续；
+  目前以"复制命令 + 系统设置"两条可用路径替代。

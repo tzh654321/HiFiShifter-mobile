@@ -12873,10 +12873,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..95db2824 100644
+index 3ebf39a9..5cbfa3cf 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1341 @@
+@@ -1,1026 +1,1361 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14219,44 +14219,59 @@ index 3ebf39a9..95db2824 100644
 +    const [shizuku, setShizuku] = useState<'ready' | 'need-permission' | 'unavailable'>(
 +        'unavailable',
 +    );
++    /** 点过 Shizuku 那条路之后显示一行「命令已复制」的提示。 */
++    const [shizukuHint, setShizukuHint] = useState(false);
 +
-+    /** N2-S：按当前 Shizuku 状态推进（未授权先请求，已授权直接开全盘访问）。 */
++    /**
++     * N2-S：点了 Shizuku 那条路之后做的事。
++     *
++     * 🔴 不再调 Shizuku 的**功能型 API**（`requestPermission` / 起进程）：
++     * 真机上它们会让应用**整进程原生 abort 闪退**（无 Java 栈；已排除同步线程与
++     * `V3_SUPPORT` meta-data，栈只在需 root 才能读的 tombstone 里）。
++     * 现在改为：把 `appops` 命令**复制到剪贴板**，用户可在 Shizuku 的 `rish` 终端粘贴执行；
++     * 上方的「开启全盘访问（设置）」仍是一键可用的正路。
++     */
 +    const grantAllFiles = useCallback(() => {
 +        void (async () => {
-+            if (shizuku === 'need-permission') {
-+                await fileBrowserApi.requestShizukuPermission();
-+                // 授权对话框是系统的，回来后由重新查询状态决定下一步
-+                const st = await fileBrowserApi.shizukuState().catch(() => null);
-+                const next = String(st?.state ?? 'unavailable');
-+                setShizuku(next === 'ready' ? 'ready' : next === 'need-permission' ? 'need-permission' : 'unavailable');
-+                if (next !== 'ready') return;
-+            }
-+            const r = await fileBrowserApi.grantAllFilesViaShizuku().catch(() => null);
-+            if (r?.ok) {
-+                // 开成功 ⇒ 重查状态（needsAuth 会变 false，提示条自动收起）
-+                const st = await fileBrowserApi.storageAccessState(fb.currentPath).catch(() => null);
-+                setNeedsAuth(Boolean(st?.needsAuth));
-+            }
++            await fileBrowserApi.grantAllFilesViaShizuku().catch(() => null);
++            setShizukuHint(true);
 +        })();
-+    }, [shizuku, fb.currentPath]);
++    }, []);
 +
 +    // 目录变化 / 列表刷新后问一次"这份列表可不可信"；顺带查一次 Shizuku 状态
 +    useEffect(() => {
 +        let cancelled = false;
-+        void fileBrowserApi
-+            .shizukuState()
-+            .then((st) => {
-+                if (cancelled) return;
-+                const s = String(st?.state ?? 'unavailable');
-+                setShizuku(
-+                    s === 'ready' ? 'ready' : s === 'need-permission' ? 'need-permission' : 'unavailable',
-+                );
-+            })
-+            .catch(() => {
-+                if (!cancelled) setShizuku('unavailable');
-+            });
++        const refresh = () => {
++            void fileBrowserApi
++                .shizukuState()
++                .then((st) => {
++                    if (cancelled) return;
++                    const s = String(st?.state ?? 'unavailable');
++                    setShizuku(
++                        s === 'ready'
++                            ? 'ready'
++                            : s === 'need-permission'
++                              ? 'need-permission'
++                              : 'unavailable',
++                    );
++                })
++                .catch(() => {
++                    if (!cancelled) setShizuku('unavailable');
++                });
++        };
++        refresh();
++        /* 🔴 用户手动在 Shizuku 应用里授权后，本应用**必须重新查询**才知道
++           （`shizuku_state` 只在挂载/目录变化时查 ⇒ 之前一直显示"未授权"）。
++           回到前台/窗口重新聚焦时都刷新一次。 */
++        const onVisible = () => {
++            if (document.visibilityState === 'visible') refresh();
++        };
++        document.addEventListener('visibilitychange', onVisible);
++        window.addEventListener('focus', refresh);
 +        return () => {
 +            cancelled = true;
++            document.removeEventListener('visibilitychange', onVisible);
++            window.removeEventListener('focus', refresh);
 +        };
 +    }, [fb.currentPath, fb.entries, fb.loading]);
 +
@@ -15024,6 +15039,11 @@ index 3ebf39a9..95db2824 100644
 +                                {(t as (key: string) => string)("fb_grant_dir_access")}
 +                            </Button>
 +                            </Flex>
++                            {shizukuHint ? (
++                                <Text size="1" data-hs-shizuku-hint="1" style={{ display: "block" }}>
++                                    {(t as (key: string) => string)("fb_shizuku_copied_hint")}
++                                </Text>
++                            ) : null}
 +                        </Flex>
 +                    ) : null}
 +                    {fb.loading ? (
@@ -95250,7 +95270,7 @@ index 59e658ed..3939ddf1 100644
          const anchorSec = state.session.playheadSec;
  
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..8dc79dc9 100644
+index 858bca55..25c8eb49 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
 @@ -2,6 +2,8 @@ export const enUS = {
@@ -95270,7 +95290,7 @@ index 858bca55..8dc79dc9 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1482,67 @@ export const enUS = {
+@@ -1479,4 +1482,68 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -95335,11 +95355,12 @@ index 858bca55..8dc79dc9 100644
 +    fb_needs_auth_hint: "This folder isn't authorized, so the list may be incomplete (files without permission are hidden by the system).",
 +    fb_all_files_access: "Allow all files (Settings)",
 +    fb_shizuku_grant: "Grant all files via Shizuku",
++    fb_shizuku_copied_hint: "appops command copied. Paste it into Shizuku's rish shell, or use the Settings button above.",
 +    fb_shizuku_authorize: "Authorize Shizuku",
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..be6dba33 100644
+index ef08ef81..44c4582b 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
 @@ -2,6 +2,8 @@ export const jaJP = {
@@ -95359,7 +95380,7 @@ index ef08ef81..be6dba33 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1495,59 @@ export const jaJP = {
+@@ -1492,4 +1495,60 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -95416,11 +95437,12 @@ index ef08ef81..be6dba33 100644
 +    fb_needs_auth_hint: "このフォルダは未許可のため、一覧が不完全な可能性があります（権限のないファイルは非表示になります）",
 +    fb_all_files_access: "すべてのファイルへのアクセス（設定）",
 +    fb_shizuku_grant: "Shizuku で全ファイルアクセスを有効化",
++    fb_shizuku_copied_hint: "appops コマンドをコピーしました。Shizuku の rish 端末に貼り付けて実行するか、上の設定ボタンをお使いください。",
 +    fb_shizuku_authorize: "Shizuku を許可",
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..ff9f61ff 100644
+index 508fcb25..74cf100e 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
 @@ -2,6 +2,8 @@ export const koKR = {
@@ -95440,7 +95462,7 @@ index 508fcb25..ff9f61ff 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1472,59 @@ export const koKR = {
+@@ -1469,4 +1472,60 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -95497,11 +95519,12 @@ index 508fcb25..ff9f61ff 100644
 +    fb_needs_auth_hint: "이 폴더는 권한이 없어 목록이 불완전할 수 있습니다(권한 없는 파일은 시스템이 숨깁니다).",
 +    fb_all_files_access: "모든 파일 접근 허용(설정)",
 +    fb_shizuku_grant: "Shizuku로 모든 파일 접근 허용",
++    fb_shizuku_copied_hint: "appops 명령을 복사했습니다. Shizuku rish 터미널에 붙여 실행하거나 위 설정 버튼을 사용하세요.",
 +    fb_shizuku_authorize: "Shizuku 권한 부여",
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..f3ed4856 100644
+index 8bcc3071..bb12b8be 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
 @@ -2,6 +2,8 @@ export const zhCN = {
@@ -95521,7 +95544,7 @@ index 8bcc3071..f3ed4856 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1447,67 @@ export const zhCN = {
+@@ -1444,4 +1447,68 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -95586,11 +95609,12 @@ index 8bcc3071..f3ed4856 100644
 +    fb_needs_auth_hint: "此文件夹未授权，列表可能不完整（系统会隐藏无权限的文件）",
 +    fb_all_files_access: "开启全盘访问（设置）",
 +    fb_shizuku_grant: "用 Shizuku 开启全盘访问",
++    fb_shizuku_copied_hint: "已把 appops 命令复制到剪贴板：可在 Shizuku 的 rish 终端里粘贴执行；或点上方「开启全盘访问（设置）」一步到位。",
 +    fb_shizuku_authorize: "授权 Shizuku",
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..4ebc791b 100644
+index 176638e2..6da39d85 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
 @@ -3,6 +3,8 @@ export const zhTW = {
@@ -95610,7 +95634,7 @@ index 176638e2..4ebc791b 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1449,59 @@ export const zhTW = {
+@@ -1446,4 +1449,60 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -95667,6 +95691,7 @@ index 176638e2..4ebc791b 100644
 +    fb_needs_auth_hint: "此資料夾未授權，清單可能不完整（系統會隱藏無權限的檔案）",
 +    fb_all_files_access: "開啟全盤存取（設定）",
 +    fb_shizuku_grant: "用 Shizuku 開啟全盤存取",
++    fb_shizuku_copied_hint: "已把 appops 命令複製到剪貼簿：可在 Shizuku 的 rish 終端貼上執行；或點上方「開啟全盤存取（設定）」。",
 +    fb_shizuku_authorize: "授權 Shizuku",
 +
  } as const;
@@ -97388,10 +97413,10 @@ index cf451bd3..f8f4233b 100644
      startBackgroundRender: () =>
          invoke<{ ok: boolean; skipped?: boolean; rendering?: number }>("start_background_render"),
 diff --git a/frontend/src/services/api/fileBrowser.ts b/frontend/src/services/api/fileBrowser.ts
-index fc05dcd6..0019845a 100644
+index fc05dcd6..d5d35b38 100644
 --- a/frontend/src/services/api/fileBrowser.ts
 +++ b/frontend/src/services/api/fileBrowser.ts
-@@ -32,9 +32,51 @@ export interface MediaAudioStream {
+@@ -32,9 +32,61 @@ export interface MediaAudioStream {
      durationSec: number;
  }
  
@@ -97436,9 +97461,19 @@ index fc05dcd6..0019845a 100644
 +    /** N2-S：发起 Shizuku 授权请求（弹系统对话框）。 */
 +    requestShizukuPermission: () => invoke<{ ok: boolean }>("request_shizuku_permission"),
 +
-+    /** N2-S：借 Shizuku 的 shell 身份开「全部文件访问」（`error` 为空 = 成功）。 */
++    /**
++     * N2-S：**发起**「用 Shizuku 开全部文件访问」。异步：命令立刻返回（`pending`），
++     * 结果用 `shizukuGrantResult()` 轮询 —— Shizuku 的调用必须在**主线程**跑，
++     * 从 JNI 线程同步调用会让应用直接闪退（真机实测）。
++     */
 +    grantAllFilesViaShizuku: () =>
-+        invoke<{ ok: boolean; error: string; allFiles: boolean }>("grant_all_files_via_shizuku"),
++        invoke<{ ok: boolean; pending: boolean; first?: string }>("grant_all_files_via_shizuku"),
++
++    /** N2-S：轮询上面那次发起的结果（`pending` 为真表示还在跑）。 */
++    shizukuGrantResult: () =>
++        invoke<{ ok: boolean; pending: boolean; error: string; allFiles: boolean }>(
++            "shizuku_grant_result",
++        ),
 +
      searchFilesRecursive: (dirPath: string, query: string) =>
          invoke<FileEntry[]>("search_files_recursive", dirPath, query),
@@ -98067,7 +98102,7 @@ index f0ab3991..bd6ef3b1 100644
 +        invoke<{ ok: boolean }>("save_ui_settings", { settings }),
 +};
 diff --git a/frontend/src/services/invoke.ts b/frontend/src/services/invoke.ts
-index 4da31e42..b1e33b2e 100644
+index 4da31e42..7dbb5472 100644
 --- a/frontend/src/services/invoke.ts
 +++ b/frontend/src/services/invoke.ts
 @@ -127,6 +127,13 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
@@ -98084,7 +98119,7 @@ index 4da31e42..b1e33b2e 100644
          case "import_audio_item":
              return {
                  audioPath: args[0],
-@@ -601,6 +608,22 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
+@@ -601,6 +608,24 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
          case "list_directory":
              return { dirPath: args[0] };
  
@@ -98096,12 +98131,14 @@ index 4da31e42..b1e33b2e 100644
 +        case "open_all_files_access_settings":
 +            return {};
 +
-+        // N2-S：Shizuku 三连（均无参）
++        // N2-S：Shizuku 相关（均无参）
 +        case "shizuku_state":
 +            return {};
 +        case "request_shizuku_permission":
 +            return {};
 +        case "grant_all_files_via_shizuku":
++            return {};
++        case "shizuku_grant_result":
 +            return {};
 +
          case "get_audio_file_info":

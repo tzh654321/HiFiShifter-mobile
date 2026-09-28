@@ -771,7 +771,7 @@ if [ -n "${MANIFEST:-}" ] && [ -f "$MANIFEST" ]; then
     #    照抄权限那处的 `<application` 锚点会让 provider 变成 manifest 直属子元素，
     #    AAPT 直接报 `unexpected element <provider> found in <manifest>`（实测踩过）。
     #    注释用纯 ASCII：这行要经 sed 写入，中文在不同 locale 下会变乱码。
-    sed -i 's|\(        <activity\)|        <!-- HS-SHIZUKU: Shizuku provider (non-root all-files access, see docs/18 section 4) -->\n        <provider android:name="rikka.shizuku.ShizukuProvider" android:authorities="${applicationId}.shizuku" android:enabled="true" android:exported="true" android:multiprocess="false" />\n        \1|' "$MANIFEST"
+    sed -i 's|\(        <activity\)|        <!-- HS-SHIZUKU: Shizuku provider (see docs/18 section 4). NOTE: v13 REQUIRES the V3_SUPPORT meta-data; without it the client aborts natively the first time any Shizuku API is used. -->\n        <provider android:name="rikka.shizuku.ShizukuProvider" android:authorities="${applicationId}.shizuku" android:enabled="true" android:exported="true" android:multiprocess="false" android:permission="android.permission.INTERACT_ACROSS_USERS_FULL">\n            <meta-data android:name="moe.shizuku.client.V3_SUPPORT" android:value="true" />\n        </provider>\n        \1|' "$MANIFEST"
     if grep -q 'HS-SHIZUKU' "$MANIFEST"; then
       echo "✓ 已注入 ShizukuProvider → $(basename "$MANIFEST")"
     else

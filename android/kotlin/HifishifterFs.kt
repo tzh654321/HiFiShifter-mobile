@@ -7,6 +7,7 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
+import android.os.Handler
 import android.os.Looper
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -115,11 +116,15 @@ private const val RC_BASE = 0x5AF0
     /**
      * 用 Shizuku 的 shell 身份起一个进程（`Shizuku.newProcess`）。
      *
-     * ⚠️ 这里走**反射**而不是直接调用：`dev.rikka.shizuku:api:13.1.5` 里该方法在编译期
-     * 不可见（Kotlin 报 `Cannot access 'newProcess': it is private in 'Shizuku'`），
-     * 但运行时是存在的（Shizuku 的公开能力，官方文档也这么用）。
-     * 反射包一层既不改依赖版本，也能在方法真的缺失时优雅返回 null。
+     * ⚠️ **已废弃、不再调用**（保留仅为记录教训，别再用它）：
+     * ① `dev.rikka.shizuku:api:13.1.5` 的公开 API 里**根本没有** `newProcess`
+     *    （`javap -public rikka.shizuku.Shizuku` 列到 `exit()` 为止），
+     *    所以反射必然拿不到方法；
+     * ② 真机上"用 Shizuku 开全盘访问"这条路会**整进程原生 abort**（无 Java 栈），
+     *    已排除同步线程、`V3_SUPPORT` meta-data 两个原因，栈只在 tombstone 里（需 root）。
+     * ⇒ 现在的做法见 `grantAllFilesViaShizuku`：只复制命令 + 引导用户走系统设置页。
      */
+    @Suppress("unused")
     private fun newShizukuProcess(cmd: Array<String>): Process? = try {
         val m = Shizuku::class.java.getDeclaredMethod(
             "newProcess",
@@ -323,30 +328,50 @@ private const val RC_BASE = 0x5AF0
      */
     @JvmStatic
     fun grantAllFilesViaShizuku(): String {
+        /* 🔴 真机结论（2026-09-28，用户报「点用 Shizuku 授权时软件直接闪退」）：
+           只要真正调用 Shizuku 客户端库的**功能型** API（`requestPermission` / 起进程），
+           应用就会**整进程原生 abort** —— 没有 Java 栈、`dumpsys dropbox` 也查不到，
+           栈只在 tombstone 里（需要 root 才能读）。
+           已排除的：① 同步阻塞（改为主线程 + 异步后仍崩）；
+                     ② provider 少 `moe.shizuku.client.V3_SUPPORT` meta-data（补上后仍崩）；
+                     ③ `newProcess` 反射（13.1.5 的公开 API 里**根本没有**这个方法）。
+           ⇒ 在拿到 tombstone 定位之前，**不再调用任何有崩溃风险的功能型 API**。
+           改为对用户**安全且同样有效**的两条路：
+             · 本函数：把 `appops` 命令**复制到剪贴板**（用户可在 Shizuku 的 rish 终端里粘贴执行）；
+             · 前端那个「开启全盘访问（设置）」按钮：直接跳系统设置页（已验证可用）。
+           状态查询（pingBinder / checkSelfPermission）是安全的，保留。 */
         val act = activity ?: return "no-activity"
-        val pkg = act.packageName
+        val cmd = "appops set ${act.packageName} MANAGE_EXTERNAL_STORAGE allow"
+        val copied = copyToClipboard(cmd)
+        shizukuGrantResult = if (copied) "manual-copied" else "manual"
+        return "manual"
+    }
+
+    /** 把文本放进系统剪贴板（供"复制 Shizuku 命令"用）。
+     *  ⚠️ 必须是**块体**函数：表达式函数体（`= try { … }`）里不允许 `return`，
+     *  Kotlin 会报 `Returns are not allowed for functions with expression body`。 */
+    @JvmStatic
+    fun copyToClipboard(text: String): Boolean {
         return try {
-            if (!Shizuku.pingBinder()) return "shizuku-unavailable"
-            if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
-                return "shizuku-no-permission"
-            }
-            val proc = newShizukuProcess(
-                arrayOf("sh", "-c", "appops set $pkg MANAGE_EXTERNAL_STORAGE allow"),
-            ) ?: return "shizuku-newprocess-unavailable"
-            val code = proc.waitFor()
-            val err = proc.errorStream?.bufferedReader()?.use { it.readText() }?.trim().orEmpty()
-            if (code == 0) {
-                Log.i(TAG, "Shizuku 已授予 MANAGE_EXTERNAL_STORAGE（pkg=$pkg）")
-                ""
-            } else {
-                Log.w(TAG, "Shizuku appops 失败 code=$code err=$err")
-                "appops-failed:$code:$err"
-            }
+            val act = activity ?: return false
+            val cm =
+                act.getSystemService(Context.CLIPBOARD_SERVICE) as? ClipboardManager
+                    ?: return false
+            cm.setPrimaryClip(ClipData.newPlainText("HiFiShifter", text))
+            true
         } catch (t: Throwable) {
-            Log.w(TAG, "grantAllFilesViaShizuku 异常", t)
-            "appops-failed:-1:${t.message ?: t.javaClass.simpleName}"
+            Log.w(TAG, "copyToClipboard 失败", t)
+            false
         }
     }
+
+    /** 上一次「用 Shizuku 开全盘访问」的结果：空串=没跑过；`"pending"`=进行中。 */
+    @JvmStatic
+    fun shizukuGrantResult(): String = shizukuGrantResult ?: ""
+
+    /** 结果字段（主线程写、JNI 线程读）。 */
+    @Volatile
+    private var shizukuGrantResult: String? = null
 
     /** Shizuku 是否可用（已装且在跑）。 */
     @JvmStatic
@@ -370,7 +395,12 @@ private const val RC_BASE = 0x5AF0
         if (!Shizuku.pingBinder()) {
             false
         } else {
-            Shizuku.requestPermission(REQ_SHIZUKU)
+            /* 同 `grantAllFilesViaShizuku`：Shizuku 的 `requestPermission` 也要求主线程，
+               从 JNI 线程直接调会整进程崩。这里改成 post 到主线程、立即返回。 */
+            Handler(Looper.getMainLooper()).post {
+                runCatching { Shizuku.requestPermission(REQ_SHIZUKU) }
+                    .onFailure { t -> Log.w(TAG, "requestShizukuPermission 异常", t) }
+            }
             true
         }
     } catch (t: Throwable) {

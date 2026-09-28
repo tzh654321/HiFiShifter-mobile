@@ -1,8 +1,8 @@
 diff --git a/backend/src-tauri/src/commands.rs b/backend/src-tauri/src/commands.rs
-index 74a47f0b..ae234335 100644
+index 74a47f0b..d59c92ff 100644
 --- a/backend/src-tauri/src/commands.rs
 +++ b/backend/src-tauri/src/commands.rs
-@@ -1,1902 +1,2056 @@
+@@ -1,1902 +1,2078 @@
 -// 命令门面（Facade）
 -//
 -// 约束：
@@ -3685,18 +3685,40 @@ index 74a47f0b..ae234335 100644
 +}
 +
 +/// N2-S：借 Shizuku 的 shell 身份执行 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`。
-+/// `error` 为空串表示成功。
++/// ⚠️ 现在是**异步**的：Shizuku 的 API 要求主线程，从 JNI 线程同步调用会整进程崩溃
++/// （真机实测：点一下按钮应用直接闪退、连 Java 栈都没有）。本命令只负责发起，
++/// 立刻返回 `{ ok: true, pending: true }`，结果用 `shizuku_grant_result` 轮询。
 +#[tauri::command(rename_all = "camelCase")]
 +pub fn grant_all_files_via_shizuku() -> serde_json::Value {
 +    #[cfg(target_os = "android")]
 +    {
-+        let err = crate::platform::saf::grant_all_files_via_shizuku();
-+        let all_files = crate::platform::saf::is_external_storage_manager();
-+        return serde_json::json!({ "ok": err.is_empty(), "error": err, "allFiles": all_files });
++        let first = crate::platform::saf::grant_all_files_via_shizuku();
++        return serde_json::json!({ "ok": true, "pending": true, "first": first });
 +    }
 +    #[cfg(not(target_os = "android"))]
 +    {
-+        serde_json::json!({ "ok": false, "error": "desktop", "allFiles": false })
++        serde_json::json!({ "ok": false, "pending": false, "error": "desktop" })
++    }
++}
++
++/// N2-S：轮询「用 Shizuku 开全盘访问」的结果。
++/// `error` 空串 = 成功；`pending` = 还在跑；其它 = 错误码。
++#[tauri::command(rename_all = "camelCase")]
++pub fn shizuku_grant_result() -> serde_json::Value {
++    #[cfg(target_os = "android")]
++    {
++        let res = crate::platform::saf::shizuku_grant_result();
++        let all_files = crate::platform::saf::is_external_storage_manager();
++        return serde_json::json!({
++            "ok": res.is_empty(),
++            "pending": res == "pending",
++            "error": res,
++            "allFiles": all_files,
++        });
++    }
++    #[cfg(not(target_os = "android"))]
++    {
++        serde_json::json!({ "ok": false, "pending": false, "error": "desktop", "allFiles": false })
 +    }
 +}
 +
@@ -4153,10 +4175,10 @@ index 98531493..ba27bdb2 100644
          .pick_file();
  
 diff --git a/backend/src-tauri/src/lib.rs b/backend/src-tauri/src/lib.rs
-index 3eff8813..23214d2f 100644
+index 3eff8813..aae54ca2 100644
 --- a/backend/src-tauri/src/lib.rs
 +++ b/backend/src-tauri/src/lib.rs
-@@ -1,732 +1,791 @@
+@@ -1,732 +1,792 @@
 -/// 热路径调试日志：经 `log::debug!` 走统一日志管线，release 默认 Info 级别下
 -/// 不产生格式化开销；需要诊断时用 `HIFISHIFTER_LOG=debug` 临时打开。
 -/// 定义在 crate 根，供所有子模块（引擎 worker、snapshot、pitch 等）使用。
@@ -5640,6 +5662,7 @@ index 3eff8813..23214d2f 100644
 +            commands::shizuku_state,
 +            commands::request_shizuku_permission,
 +            commands::grant_all_files_via_shizuku,
++            commands::shizuku_grant_result,
 +            commands::get_audio_file_info,
 +            commands::read_audio_preview,
 +            commands::search_files_recursive,
@@ -6993,10 +7016,10 @@ index 00000000..c0f15e17
 +}
 diff --git a/backend/src-tauri/src/platform/saf.rs b/backend/src-tauri/src/platform/saf.rs
 new file mode 100644
-index 00000000..64e10fd1
+index 00000000..1c4bfeeb
 --- /dev/null
 +++ b/backend/src-tauri/src/platform/saf.rs
-@@ -0,0 +1,844 @@
+@@ -0,0 +1,868 @@
 +//! SAF（Storage Access Framework）桥接 —— Android 上的文件选择。
 +//!
 +//! *设计见 `docs/11-SAF文件访问设计.md`。*
@@ -7353,6 +7376,30 @@ index 00000000..64e10fd1
 +            ret.z().map_err(|e| format!("读布尔返回值失败: {e}"))
 +        })
 +        .unwrap_or(false)
++    }
++
++    /// N2-S：上一次「用 Shizuku 开全盘访问」的结果（空串=没跑过；`pending`=进行中）。
++    pub fn shizuku_grant_result() -> String {
++        with_env(|env| {
++            let cls = app_class(env, KOTLIN_CLASS)?;
++            let ret = env
++                .call_static_method(&cls, "shizukuGrantResult", "()Ljava/lang/String;", &[])
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("调用 shizukuGrantResult 失败: {e}")
++                })?;
++            let obj = ret.l().map_err(|e| format!("取返回值失败: {e}"))?;
++            if obj.is_null() {
++                return Ok(String::new());
++            }
++            env.get_string(&JString::from(obj))
++                .map(|v| String::from(v))
++                .map_err(|e| {
++                    let _ = env.exception_clear();
++                    format!("读字符串失败: {e}")
++                })
++        })
++        .unwrap_or_default()
 +    }
 +
 +    /// N2-S：用 Shizuku 的 shell 身份执行 `appops set <pkg> MANAGE_EXTERNAL_STORAGE allow`。

@@ -1,0 +1,24 @@
+﻿import { execSync } from "node:child_process";
+import { Cdp } from "./lib/cdp.mjs";
+const serial = "221deeb";
+const adb = (c) => execSync(`adb -s ${serial} ${c}`, { stdio: "pipe" }).toString();
+const pid = adb("shell pidof com.arounder.hifishifter").trim();
+adb("forward tcp:9222 localabstract:webview_devtools_remote_" + pid);
+const cdp = await Cdp.attach({ host: "127.0.0.1", port: 9222 });
+await cdp.send("Runtime.enable");
+const st = await cdp.call(() => window.__TAURI_INTERNALS__.invoke("shizuku_state").catch((e) => ({ err: String(e) })));
+console.log("shizuku_state = " + JSON.stringify(st));
+const clicked = await cdp.call(() => {
+  const b = document.querySelector("[data-hs-shizuku]");
+  if (!b) return "no-button";
+  b.click();
+  return "clicked:" + b.getAttribute("data-hs-shizuku");
+});
+console.log("点击 = " + clicked);
+await new Promise((r) => setTimeout(r, 3000));
+const alive = adb("shell pidof com.arounder.hifishifter").trim();
+console.log("3s 后 pid = " + (alive || "(进程没了 ⇒ 闪退)"));
+console.log("---- logcat 崩溃相关 ----");
+const log = adb("logcat -d -t 300");
+console.log(log.split("\n").filter((l) => /FATAL|AndroidRuntime|panic|HS-SAF|Shizuku|shizuku|abort|SIGSEGV|libhifi|rust/i.test(l)).slice(-30).join("\n"));
+cdp.close();
