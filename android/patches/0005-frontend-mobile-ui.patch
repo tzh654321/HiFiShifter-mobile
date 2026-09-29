@@ -60368,10 +60368,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..0ea0e031 100644
+index c0db2221..e42838d9 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2800 @@
+@@ -1,2297 +1,2808 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -64156,6 +64156,14 @@ index c0db2221..0ea0e031 100644
 +            onVolumeUiChange(trackId, dbToGain(nextDb));
 +        };
 +        const onTouchEnd = () => {
++            /* 🔴 E11-b **真根因**（真机日志 + 实测确认）：
++               WebView 的指针序列里 pointerup 可能**早于** 	ouchmove（实测序列：
++               pointerdown → pointermove×2 → pointerup → touchmove×6 → touchend）。
++               于是 onEnd 在 pointerup 时就置了 inished=true 并提交了**尚未拖动**的值（0dB），
++               随后这里因 inished 已 true 直接 return ⇒ **拖动后的最新值永不提交**
++               （表现：UI 跟着手指变、后端 volume 恒为 1）。
++               修法：touch 收尾**无条件**按最新 lastDb 提交一次（覆盖那次 0dB 的早提交）。*/
++            onVolumeCommit(trackId, dbToGain(lastDb));
 +            if (finished) return;
 +            finished = true;
 +            setVolumeHoveredTrackId(null);
@@ -99821,6 +99829,43 @@ index f0ab3991..bd6ef3b1 100644
 +    saveUiSettings: (settings: Partial<UiSettings>) =>
 +        invoke<{ ok: boolean }>("save_ui_settings", { settings }),
 +};
+diff --git a/frontend/src/services/frontendErrorLog.ts b/frontend/src/services/frontendErrorLog.ts
+index b03d5b0d..7cbc70f2 100644
+--- a/frontend/src/services/frontendErrorLog.ts
++++ b/frontend/src/services/frontendErrorLog.ts
+@@ -46,9 +46,32 @@ function toDetailText(detail: unknown): string {
+     return text;
+ }
+ 
++/**
++ * 规范明确"**无害、可忽略**"的浏览器噪音：**一律不上报**。
++ * 这类消息（尤其 ResizeObserver loop）会在布局抖动时**每帧**触发，
++ * 上报等于把 logcat 当水管用（实测一次采样 2548 条，且经 JNI 写双份）。
++ */
++const IGNORED_NOISE: RegExp[] = [/ResizeObserver loop/i];
++
++/** 同一条 message 的上报间隔下限（毫秒）：挡住任何成因的错误洪水。 */
++const DEDUP_WINDOW_MS = 30_000;
++/** message → 上次上报时间。 */
++const lastReportedAt = new Map<string, number>();
++/** 限流表自身的上界（防止被随机 message 撑爆）。 */
++const DEDUP_MAX_KEYS = 200;
++
+ /** 把一条前端错误写入后端日志（fire-and-forget，永不抛出）。 */
+ export function reportFrontendError(message: string, detail?: unknown): void {
+     try {
++        // ① 已知无害噪音：直接丢弃。
++        if (IGNORED_NOISE.some((re) => re.test(message))) return;
++        // ② 限流：同一条 message 30 秒内只上报一次。
++        const now = Date.now();
++        const prev = lastReportedAt.get(message);
++        if (prev !== undefined && now - prev < DEDUP_WINDOW_MS) return;
++        if (lastReportedAt.size >= DEDUP_MAX_KEYS) lastReportedAt.clear();
++        lastReportedAt.set(message, now);
++
+         const detailText = toDetailText(detail);
+         const result = tauriInvokeRaw("log_frontend_error", {
+             message,
 diff --git a/frontend/src/services/invoke.ts b/frontend/src/services/invoke.ts
 index 4da31e42..39b35520 100644
 --- a/frontend/src/services/invoke.ts
