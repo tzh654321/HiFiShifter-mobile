@@ -35016,10 +35016,10 @@ index 00000000..ccf42cee
 +    );
 +}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..ecc274e6 100644
+index 242997f5..d4323a75 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7155 @@
+@@ -1,6438 +1,7161 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -40838,8 +40838,14 @@ index 242997f5..ecc274e6 100644
 +               所以前端 store 的 `selectedClipId` 可能仍是 null（实测就是这么"发事件没反应"）。
 +               浮条本来就知道自己那一块的 id ⇒ 直接带过来最可靠。 */
 +            const id = d.clipId ?? session.selectedClipId;
-+            if (!id) return;
-+            if (!session.clips.some((c) => c.id === id)) return;
++            /* 放宽查找：`clipId` 对不上时回退到**第一个块**。
++               理由：用户点的是浮条上的「更多」，意图明确就是"给当前这一块开菜单"；
++               而前后端的选中/块列表在手机上未必严格同步（后端 `select_clip` 不更新前端 store，
++               前端也可能还没拿到新块）。只要轨道上**有块**就该让菜单出来，
++               而不是静默什么都不发生（这正是之前"点了没反应"的观感）。 */
++            const target =
++                (id ? session.clips.find((c) => c.id === id) : undefined) ?? session.clips[0];
++            if (!target) return;
              setTrackAreaMenu(null);
 -            requestOpenFadeContextMenu(request);
 -        },
@@ -41096,7 +41102,7 @@ index 242997f5..ecc274e6 100644
 +            setContextMenu({
 +                x: Math.round(d.x ?? window.innerWidth / 2),
 +                y: Math.round(d.y ?? window.innerHeight / 2),
-+                clipId: id,
++                clipId: target.id,
              });
 -            // 拖动中的实时浮标（旧实现 `ClipHeader` 的 `gainTooltip` 拖动变体）：
 -            // 普通悬停只显示当前值，拖动时还要显示**本次拖动的增量**。内容逐帧
@@ -60208,10 +60214,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..57c68fcb 100644
+index c0db2221..a0237707 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2797 @@
+@@ -1,2297 +1,2799 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -62811,10 +62817,12 @@ index c0db2221..57c68fcb 100644
 +            >
 +                0
 +            </Text>
-+            /* E2：**秒数用小一号字体**（用户口径：「轨道界面左上角 拍数/秒数 的秒数调小字体」）。
-+               原来是 `formatted.combined` 一整个字符串（"8.3.2 / 12.345"）⇒ 两段同字号。
-+               现在拆成两段：主读数原字号、次级读数 **0.72em** 且淡一档。
-+               盒宽仍由 `boxWidth`（按 `maxLabel` 实测）撑着 ⇒ 数字跳动/布局不会变。 */
++            {/* E2：**秒数用小一号字体**（用户口径：「轨道界面左上角 拍数/秒数 的秒数调小字体」）。
++                原来是 `formatted.combined` 一整个字符串（"8.3.2 / 12.345"）⇒ 两段同字号。
++                现在拆成两段：主读数原字号、次级读数 **0.72em** 且淡一档。
++                盒宽仍由 `boxWidth`（按 maxLabel 实测）撑着 ⇒ 数字跳动/布局不会变。
++                ⚠️ JSX 里的注释必须**用花括号包起来**：写成裸的块注释会被 React 当作文本节点渲染出来
++                （实测页面上真的出现了这几行中文注释）。 */}
 +            <span
 +                className="flex items-baseline gap-0.5 shrink-0 tabular-nums text-right leading-none"
 +                style={boxWidth != null ? { minWidth: boxWidth, justifyContent: "flex-end" } : undefined}

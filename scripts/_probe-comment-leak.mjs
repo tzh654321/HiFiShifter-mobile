@@ -1,0 +1,13 @@
+﻿import { execSync } from "node:child_process";
+import { Cdp } from "./lib/cdp.mjs";
+const serial = "221deeb";
+const adb = (c) => execSync(`adb -s ${serial} ${c}`, { stdio: "pipe" }).toString();
+const pid = adb("shell pidof com.arounder.hifishifter").trim();
+adb("forward tcp:9222 localabstract:webview_devtools_remote_" + pid);
+const cdp = await Cdp.attach({ host: "127.0.0.1", port: 9222 });
+await cdp.send("Runtime.enable");
+const t = await cdp.call(() => (document.body.innerText || "").replace(/\s+/g, " "));
+const leaked = (t.match(/E2：|用户口径|注释必须/g) || []).length;
+console.log("页面里是否还有注释文本泄漏：" + (leaked ? "❌ 有 " + leaked + " 处" : "✅ 无"));
+console.log("片段：" + t.slice(0, 150));
+cdp.close();
