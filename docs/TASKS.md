@@ -2446,3 +2446,28 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 （很多 crate 用 2s 轮询实现"剪贴板变化通知"），以及 `App.tsx` 的三个 `setInterval`（L675 / L3487 / L3527）
 是否间接触发系统剪贴板读取。定位手段已有：`_dbg-clipboard-poll.mjs`（静置计数）
 + `logcat -s ClipboardService`（带调用方包名）。
+
+### 🔬 E10-③ 剪贴板节拍：更正为"间歇性、条件待定"（2026-09-29 深夜）
+
+上一轮我写成"应用**无条件**每 2 秒读一次系统剪贴板"，**这个措辞不准确**，撤回。两次后续实验：
+
+| 实验 | 条件 | 14 秒内 native 访问次数 | JS 侧调用 |
+| :--- | :--- | :--- | :--- |
+| A（`_dbg-clipboard-origin.mjs`）| hook 掉 `navigator.clipboard.readText/writeText` + `execCommand`，静置 | **0** | **0** |
+| B（`_dbg-clipboard-state.mjs`）| 参数面板可见，静置 12s ×2 轮 | **0 / 0** | — |
+
+⇒ 那 2 秒节拍**不是常驻**：它只在**某个 UI 状态**下出现，目前还无法稳定复现。
+**唯一一次观测到它时的上下文**（可作下次复现线索）：刚跑完 E10 复现探针（参数面板全屏）+
+此前 dump 过「视图」菜单；当时读数 12 秒内 3 次、间隔精确 2s。
+
+**已排除**（逐个查过源码/线程）：
+
+* 前端 `setInterval` 里的 `hasTimelineClipboard`（读**内部**剪贴板，不碰系统）；
+* `clipboard_kind` 的三处调用（MenuBar / MobileTopBar / MobileBottomBar —— 都在点「粘贴」时按需）；
+* `KernelUnavailableNotice` 的"复制诊断"（需点击）；
+* `system_clipboard.rs`（Windows 专用，Android 不编译）；
+* 进程线程表里没有 clipboard/watcher 类线程。
+
+**下次复现建议**：`logcat -c` 后依次试 ① 打开「剪贴板预览」/「弹出展示参数」开关；
+② 进入参数界面并触发一次"粘贴"；③ 复现 E10-②（反复切全屏）—— 三种状态下各静置 12s 计数。
+工具：`scripts/_dbg-clipboard-origin.mjs`（定性：JS or native）、`scripts/_dbg-clipboard-state.mjs`（按状态计数）。
