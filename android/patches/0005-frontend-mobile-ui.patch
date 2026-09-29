@@ -60368,10 +60368,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..a0237707 100644
+index c0db2221..0ea0e031 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2799 @@
+@@ -1,2297 +1,2800 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -64044,6 +64044,7 @@ index c0db2221..a0237707 100644
 +        /* 数位笔 / 触摸原先**一律不拖增益旋钮**（"零阈值按下即生效，滑动画线时极易误触"）。
 +           但那让手机用户**根本拖不动** —— 这正是用户报「轨道头增益划不动了」的真因。
 +           现在只拒绝"未经长按"的路径；长按门槛本身已保证防误触。 */
++        console.log("[e11] startDrag fromLongPress=", fromLongPress);
 +        if (!fromLongPress && shouldSuppressHoverSideEffects(e.nativeEvent)) return;
 +        e.preventDefault();
 +        e.stopPropagation();

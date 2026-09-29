@@ -2880,3 +2880,42 @@ a5ba4641 test(e5/e6/g1/f2): 全部验收通过（真机）—— 关键是改用
 （例如同一帧内反复更新、或 `yDragEnabled`/`currentDragDir` 让拖动被当作 x-only、
 或触摸路径没进这段 —— 手机是 pointer 事件，理论应进）。
 ⇒ 需要**真机复现**：用还原工具拖动，观察提交的帧范围（或加临时日志打印 `st.points.length` 与 `minF..maxF`）。
+
+---
+
+## 🔬 E11-b / E19a 临时日志诊断结果（真机，2026-09-30 01:1x–01:3x）
+
+加了两处临时日志（诊断后已移除，提交 `b52bb9b8`），一次性把两件事**都查清了**。
+
+### E11-b「长按拖增益」—— **交互完全正常，问题在"提交"这一环**
+
+关键日志（`logcat -s Tauri/Console`）：
+
+```
+[e11][diag] touchmove finished= false touches= 1     ← 触摸路径进来了、没被 finished 挡
+[e11][diag] touchend  finished= true  lastDb= 12     ← 拖动累积到 +12dB（上限）
+```
+
+配合实测：
+
+| 观测 | 结果 |
+| :--- | :--- |
+| UI 标签（拖动前后）| `-29.2 dB` → **`-23.2 dB`** ⇒ 与拖动量（5×6px × 0.2dB/px = 6dB）**精确吻合** |
+| 后端 `track.volume` | **恒为 1**（= 0 dB）⇒ **提交没落库** |
+| 直接调后端命令 `set_track_state({trackId:"track_main", volume:0.5})` | ✅ **成功**（1 → 0.5）|
+
+⇒ 结论：
+* **拖动交互、放大/图标/门槛全部正常**（此前四层排查的修复都生效了，`touchmove finished=false` 就是证据）；
+* 真正的问题在 **`setTrackStateRemote` 这条 thunk 链** —— 后端命令直接调没问题，
+  但经 `handleTrackVolumeCommit → dispatch(setTrackStateRemote(...))` 却**没落到后端**。
+  这也解释了用户观感"改了不生效/不持久"。
+* **下一层要查**：`setTrackStateRemote` 的 pending/fulfilled 逻辑（是否被
+  `enqueueTransportCommand` 之类的串行闸门吞掉、或 payload 形态被拒），
+  以及它所属 slice 的 `addCase` 是否把 `rejected` 静默吞了。
+
+### E19a「还原画笔只能点一个点」—— 日志一条没出
+
+`[e19a][diag]` **完全没出现** ⇒ `st.points.push(...)` 与 `commitStroke(...)` 那两段**都没走到**。
+结合"「还原」项 = null"（工具菜单里没点到"还原"），最可能是**探针没成功切到还原工具**
+（而不是画笔逻辑本身有问题）。⇒ 下一轮：先把"切到还原工具"这一步做可靠（例如直接 dispatch
+`setToolMode("restore")` 而非点菜单），再看日志。
