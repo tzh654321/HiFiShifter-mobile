@@ -48997,7 +48997,7 @@ index 87fcc4b0..5534f0b1 100644
      const vMax = view.center + span / 2;
      const start = Math.ceil(vMin / spec.step) * spec.step;
 diff --git a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-index 08455bfd..151a1f40 100644
+index 08455bfd..8d0fd48f 100644
 --- a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
 +++ b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
 @@ -1,4435 +1,4913 @@
@@ -57736,7 +57736,7 @@ index 08455bfd..151a1f40 100644
 +                const startValue = value;
 +                // 橡皮端（button 5）在 buttons 位掩码里是位 32，不是右键的位 2。
 +                const requiredButtonMask =
-+                    mode === "restore" ? (penEraserDown ? PEN_ERASER_BUTTONS_MASK : 2) : 1;
++                    mode === "restore" ? (penEraserDown ? PEN_ERASER_BUTTONS_MASK : 1 | 2) : 1;
 +                let currentDragDir: "free" | "x-only" =
 +                    dragDirection === "x-only" ? "x-only" : "free";
 +                const canCycleDragDirection = e.button === 0;
@@ -58021,7 +58021,7 @@ index 08455bfd..151a1f40 100644
 +                // Draw tool: freehand drawing with interpolation between points
 +                // 橡皮端（button 5）在 buttons 位掩码里是位 32，不是右键的位 2。
 +                const requiredButtonMask =
-+                    mode === "restore" ? (penEraserDown ? PEN_ERASER_BUTTONS_MASK : 2) : 1;
++                    mode === "restore" ? (penEraserDown ? PEN_ERASER_BUTTONS_MASK : 1 | 2) : 1;
 +                let currentDragDir: "free" | "x-only" =
 +                    dragDirection === "x-only" ? "x-only" : "free";
 +                const canCycleDragDirection = e.button === 0;

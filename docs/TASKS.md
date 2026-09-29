@@ -3286,3 +3286,48 @@ if (!st || st.pointerId !== e.pointerId) return;      // ← move 全部被丢�
 `e.pointerId` 与 `strokeRef.current?.pointerId`，两者一比就知道。
 
 > 临时日志 `[e19a2] down …` **保留**在代码里（下轮验证还要用），验证完一并移除。
+
+---
+
+# 🎯 E19a 真根因找到并修复（2026-09-30 06:3x）
+
+## 根因（代码级，确定性）
+
+`usePianoRollInteractions.ts`（两处，L~4300 与 L~4585）：
+
+```ts
+const requiredButtonMask =
+    mode === "restore" ? (penEraserDown ? PEN_ERASER_BUTTONS_MASK : 2) : 1;
+```
+
+* 「还原」（`mode === "restore"`）要求 `buttons` 含**右键位（2）**；
+* 而**触摸 / 左键拖动**给出的 `buttons` 是 **1**；
+* ⇒ `pointermove` 的按钮掩码检查不通过 ⇒ **每一次移动都被丢弃**。
+
+⇒ 表现正是用户口径：「还原画笔**无法拖动使用**，只能**一次点一个点**」
+—— **按下有效（brush down 生效，画一个点）、移动无效**。手机上更没有右键可用。
+
+## 修法
+
+restore 模式的必需位掩码放宽为 `1 | 2`：
+
+* 手机：触摸给 `1` ⇒ **现在能拖**；
+* 电脑：右键给 `2` ⇒ **语义不变**（左键在还原模式也生效 —— 这正是"还原画笔可用"的本意）；
+* 笔杆橡皮端 `PEN_ERASER_BUTTONS_MASK`(32) 行为不变。
+
+已改 **2 处**（正则兜底替换，残留 `: 2) : 1;` 为 0），`tsc` 干净，APK 构建通过。
+
+## 本轮验证：命中一半
+
+```
+第 1 次长按 → 「还原」= {x:74, y:199}   ✅ 工具切换成功（此前要试 3 次）
+参数画布：{x:132, y:134, w:1252, h:80}  🔴 ← 又是"面积最大"，不是真宿主
+拖动后：非零帧 1199 → 1199（Δ0）        ⇒ 不可判读（拖在了错误的元素上）
+```
+
+⇒ **探针的老毛病又犯了**：真宿主是 `canvas[data-piano-roll-canvas]`（304×288），
+而"面积最大"选中的是 1252×80 的另一层。**下一轮最后一步**：用
+`document.querySelector("[data-piano-roll-canvas]")` 取宿主 → 拖动 → 期望 `Δ > 10`。
+
+> 这一条（选元素必须按 `data-piano-roll-canvas` / 按 `pointer-events` 过滤，不能按面积）
+> 已经在本项目里坑了我三次，板子里重复记了三遍。
