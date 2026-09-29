@@ -3104,3 +3104,34 @@ WebView 的指针序列是
 > 附带确认：`binary` 参数在这条后端路径上**没有回显字段**，前端 `webApi.getParamFrames`
 > 里的"解码分支"实际上从未触发（`res.binary` 恒为 undefined）—— 这是一条值得回头核对的**上游可疑点**
 > （不是本次 E19a 的阻塞，但记下来）。
+
+---
+
+## ❗ 修正上一轮结论 + 新发现（2026-09-30 03:5x）
+
+**上一轮我写的"参数读取恒空是因为轨道上没有音频块"——被本轮实测推翻。**
+
+| 检查 | 上一轮 | 本轮 |
+| :--- | :--- | :--- |
+| 轨道上有块吗 | 无（clips=0）| **有**（`import_audio_item` 返回 `{ok:true}`、`clips=1`）|
+| `set_param_frames` 写入 | `{ok:true}` | `{ok:true}` |
+| `get_param_frames` 的 `orig`/`edit` | 长度 0 | **仍然长度 0** |
+| `pitch_edit_backend_available` | true | true |
+
+⇒ **结论修正**：`get_param_frames` 返回空与"有没有音频块"**无关** ——
+**这是一个独立的后端/参数问题**（`ok:true` 但两个数组都空），需要单独查。
+
+**已排除的怀疑点**（本轮一并做掉）：
+
+* `root_track_id` 回显与传入一致（都是 `track_main`）⇒ 不是传错轨道；
+* `binary` 传 `true` / `false` / 省略，结果都一样，且响应里**没有 `binary` 字段**
+  ⇒ 前端 `webApi.getParamFrames` 的解码分支**从未触发**（上游可疑点，记下）；
+* `applyPostStrokeSmoothing` 开头是 `if (mode !== "draw") return;`
+  ⇒ **restore 模式被正确跳过**（"还原被平滑抹回"这个假设**排除**）。
+
+**E19a 现状**：入口/打法/写入通道都已确认，**卡在"读不到参数"** ——
+只有先让 `get_param_frames` 返回数据，"还原是否连续擦除"才有判据。
+因此把「`get_param_frames` 恒空」**单列为待查项**，它同时是 E19a 的解锁条件。
+
+**另外**：前端拖拽造块在本轮**失败**（`clips` 仍为 0，未找到音频行 —— 文件面板里的文件列表
+与之前不同），而后端造块成功。两者不一致本身也值得记一笔（前端文件面板的列表来源）。
