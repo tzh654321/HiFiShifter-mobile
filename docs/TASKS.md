@@ -2919,3 +2919,46 @@ a5ba4641 test(e5/e6/g1/f2): 全部验收通过（真机）—— 关键是改用
 结合"「还原」项 = null"（工具菜单里没点到"还原"），最可能是**探针没成功切到还原工具**
 （而不是画笔逻辑本身有问题）。⇒ 下一轮：先把"切到还原工具"这一步做可靠（例如直接 dispatch
 `setToolMode("restore")` 而非点菜单），再看日志。
+
+---
+
+## ✅ E11-b 修复完成并真机验证（2026-09-30 01:3x）
+
+**真根因（此前四层排查都没找到，靠临时日志 + 事件序列分析定位）**：
+
+WebView 的指针序列是
+`pointerdown → pointermove×2 → pointerup → touchmove×6 → touchend`
+——**`pointerup` 早于 `touchmove`**。于是：
+
+1. `onEnd`（pointerup）先跑 ⇒ 置 `finished = true` 并 `tearDown()` ⇒ **提交的是"尚未拖动"的 0 dB**；
+2. 随后 `onTouchEnd` 因 `finished` 已 true **直接 return** ⇒ **拖动后的最新值永不提交**；
+3. 表现：**UI 跟着手指变、后端 `volume` 恒为 1**（与用户"改了不生效"的观感一致）。
+
+**修法**：`onTouchEnd` 里**无条件**按最新 `lastDb` 提交一次（覆盖那次 0 dB 的早提交）。
+
+**真机验证**：
+
+```
+拖前：volume=1           label=0.0 dB
+拖后：volume=1.9952623   label=+6.0 dB     ← 10^(6/20)=1.9953，后端与 UI 完全一致 ✅
+```
+
+## ✅ I-4 第三刀 / 性能：日志洪水消除（2548 → 0）
+
+真机 logcat 里 `ResizeObserver loop completed with undelivered notifications`
+**一次采样 2548 条**，而且它不是普通控制台输出 —— 它被 `installGlobalErrorReporting`
+当作 **uncaught error 上报给后端**（`[frontend] Uncaught error: …`），经 JNI 写进 logcat（双份）。
+这是持续的主线程/Renderer I/O 压力，与"反复切面板后白屏"同类。
+
+**修法**（`frontendErrorLog.ts`）：
+① 过滤规范明确"无害、可忽略"的噪音（`ResizeObserver loop`）；
+② 其余错误按 message 做 **30 秒限流** + 限流表上界（挡住任何成因的洪水）。
+**真机验证：条数 2548 → 0** ✅
+
+## 🔍 E19a 定位进展
+
+* 手机端「还原」工具**确实存在**：`MobileBottomBar` 的 `DrawToolMenu`（`mobile_tool_restore = "还原"`），
+  由**长按绘制按钮**打开（不是 `^` 浮层、也不是参数面板的绘制菜单 —— 那个只有 draw/vibrato）；
+* 它与"电脑右键拖动"走**同一条服务端路径**（`mode: "restore"` ⇒ `restoreParamFrames`）；
+* 探针用**合成 PointerEvent** 长按**打不开**该菜单（React 的手势需要真实事件），
+  ⇒ 下一步改用 **CDP 真实触摸长按**（`touchStart` + 保持 500ms + `touchEnd`）再验证拖动。
