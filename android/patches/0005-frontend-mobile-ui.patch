@@ -79208,10 +79208,10 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..f2ca9121
+index 00000000..94bbfd87
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,163 @@
+@@ -0,0 +1,167 @@
 +/**
 + * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
@@ -79238,8 +79238,8 @@ index 00000000..f2ca9121
 +
 +/** 圆点半径（直径 14），比旧版竖条更接近 flm 的抓手观感。 */
 +const DOT_R = 7;
-+/** 手指按在**块外侧**多少像素内算"抓住控制点"。 */
-+const OUTSIDE_GRAB_PX = 22;
++/** 手指按在**圆点**周围多少像素内算"抓住控制点"（放宽到 40：手机手指落点本来就粗）。 */
++const OUTSIDE_GRAB_PX = 40;
 +/** 纵向移动超过这个距离才算"选了功能"（避免手抖就换图标）。 */
 +const MODE_THRESHOLD_PX = 18;
 +/** 判定为"左右拖动"的横向位移。 */
@@ -79285,9 +79285,13 @@ index 00000000..f2ca9121
 +            if (!e.isPrimary) return;
 +            const yTop = geo.edgeBandTop;
 +            const yBottom = yTop + Math.max(8, geo.edgeBandHeight);
-+            if (e.clientY < yTop - 12 || e.clientY > yBottom + 12) return;
-+            const nearLeft = Math.abs(e.clientX - geo.left) <= OUTSIDE_GRAB_PX;
-+            const nearRight = Math.abs(e.clientX - (geo.left + geo.width)) <= OUTSIDE_GRAB_PX;
++            if (e.clientY < yTop - 40 || e.clientY > yBottom + 40) return;   /* 手指导点粗，纵向也给容差 */
++            /* 以**圆点中心**为基准（圆点画在块外侧 `DOT_R + 3` 处）——
++               原先以"块边界"为基准，实测手指按在圆点正中时仍差 ~10px 落空。 */
++            const dotLeftX = geo.left - DOT_R - 3;
++            const dotRightX = geo.left + geo.width + DOT_R + 3;
++            const nearLeft = Math.abs(e.clientX - dotLeftX) <= OUTSIDE_GRAB_PX;
++            const nearRight = Math.abs(e.clientX - dotRightX) <= OUTSIDE_GRAB_PX;
 +            if (!nearLeft && !nearRight) return;
 +            const side: "left" | "right" = nearLeft ? "left" : "right";
 +            setGrab({ side, x: e.clientX, y: e.clientY, mode: "none", dragging: false });
