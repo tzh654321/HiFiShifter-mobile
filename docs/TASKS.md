@@ -3216,3 +3216,37 @@ if param == "pitch" && !compose_enabled {
 > 这条线索本身就是**用户报的"还原画笔无法拖动"最可能的真因**：
 > 如果参数画布上的拖动整体不生效，那么"还原"当然也拖不动 ——
 > 而"只能点一个点"的观感恰好对应"点了有反应、拖了没反应"。
+
+---
+
+## 🎯 参数编辑器的真交互宿主（2026-09-30 05:1x）—— 重要修正
+
+**实测 canvas 清单**（参数面板内）：
+
+```
+[ { w:56,  h:230, pe:none }, { w:300, h:150, pe:auto }, { w:304, h:230, pe:none },
+  { w:300, h:150, pe:none }, { w:304, h:230, pe:none },
+  { w:304, h:230, pe:auto, isHost:true },   ← ★ 真交互宿主
+  { w:304, h:230, pe:none } ]
+```
+
+* **真交互宿主 = `canvas[data-piano-roll-canvas]`**（`pointer-events: auto`，
+  代码里 `onPointerDown/Move/Leave` 都挂在它身上，见 `PianoRollPanel.tsx` L7755-7766）；
+* 而"**面积最大的 canvas**"（我此前探针的选法）拿到的是其中 **`pointer-events: none`** 的那层
+  ⇒ **此前"参数画布上的拖动不生效"的结论作废**（我一直在往不接事件的那层派发）。
+
+### 但仍未打通
+
+在**真宿主**上派发合成 `PointerEvent`（pointerdown → 26×pointermove → pointerup）**仍然 Δ0**
+（非零帧 1199 → 1199，`head` 完全未变）⇒ 合成事件**没能触发**参数编辑逻辑。
+
+**下一轮第一件事（按顺序试）**：
+
+1. 用 **CDP 真实触摸**（`Input.dispatchTouchEvent`）打在**真宿主 `[data-piano-roll-canvas]` 的中心坐标**
+   —— 之前它也打偏了（同样选中 `pe:none` 的层）；
+2. 若仍 Δ0：在宿主或其 `onCanvasPointerDown` 入口加**一行日志**（logcat 可读），
+   确认事件到底有没有到达 —— 只有"到达了却没生效"才说明拖动逻辑本身有问题。
+
+> 教训（写给后续所有参数面板的验证）：**参数面板里有多层同尺寸 canvas 叠加**，
+> 选元素必须用 `[data-piano-roll-canvas]` 或按 `pointer-events` 过滤，
+> **绝不能按"面积最大"来选**。
