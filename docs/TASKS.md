@@ -3135,3 +3135,47 @@ WebView 的指针序列是
 
 **另外**：前端拖拽造块在本轮**失败**（`clips` 仍为 0，未找到音频行 —— 文件面板里的文件列表
 与之前不同），而后端造块成功。两者不一致本身也值得记一笔（前端文件面板的列表来源）。
+
+---
+
+# 🎯 E19a 根因确认（2026-09-30 04:1x）—— `compose_enabled` 开关
+
+**根因 100% 确认**，证据链完整：
+
+```
+before: { compose: false, algo: "nsf_hifigan_onnx", clips: 1 }
+after : { compose: true }              ← set_track_state({composeEnabled:true}) 返回 ok:true
+write : { ok: true }                   ← set_param_frames 写 1200 帧
+read  : editLen=1200, editNonZero=1199 ✅   origLen=1200
+```
+
+**后端代码位置**：`upstream-src/backend/src-tauri/src/commands/params.rs` **L257-273**
+
+```rust
+if param == "pitch" && !compose_enabled {
+    return ParamFramesPayload {
+        ok: true,          // ⚠️ 仍然报 ok —— 误导性极强
+        orig: vec![],      // ⚠️ 空
+        edit: vec![],      // ⚠️ 空
+        ...
+    };
+}
+```
+
+⇒ **未启用合成（`compose_enabled = false`）时，pitch 参数的读取一律返回空数组** ——
+这是上游设计（"没开合成就没有 pitch 曲线"），但 **`ok: true` + 两个空数组** 让调用方
+完全看不出原因，我为此白白排查了两轮（先误判"缺音频块"，再怀疑轨道 ID / binary / 平滑）。
+
+### 对 E19a 的意义
+
+用户报「还原画笔**无法拖动使用**，只能一次点一个点」——
+真正的原因很可能就是**该轨道的「合成」开关没打开** ⇒ pitch 曲线根本不存在 ⇒ 没有可还原的内容。
+（"只能点一个点"的观感，也可能是"擦一下什么都没变化"。）
+
+### 下一步（两条，都可做）
+
+1. **E19a 收口**：在 `compose_enabled = true` 的状态下重跑"长按绘制 → 选还原 → 拖动擦除 →
+   比对 `edit` 非零帧"，这条现在**已经具备可判读的数据通道**；
+2. **体验改进（建议实施）**：`ParamFramesPayload` 增加一个明确字段（如 `compose_enabled: bool`，
+   或让 `ok` 反映真实可用性），前端据此提示「请先打开『合成』」——
+   否则任何调用方都会像这次一样撞进"ok:true 但空数组"。
