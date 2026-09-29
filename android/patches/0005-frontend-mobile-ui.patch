@@ -12889,10 +12889,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..c18cb953 100644
+index 3ebf39a9..19c896f1 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1391 @@
+@@ -1,1026 +1,1400 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -14589,6 +14589,15 @@ index 3ebf39a9..c18cb953 100644
 +            longPressTimerRef.current = window.setTimeout(() => {
 +                longPressTimerRef.current = null;
 +                dragArmedRef.current = true;
++                /* E12（用户口径）：「长按并划动的操作都在识别到长按后**震动一下**」——
++                   与增益旋钮、控制点等长按手势保持一致。失败静默（部分 WebView 无振动权限）。 */
++                try {
++                    (
++                        navigator as unknown as { vibrate?: (p: number) => boolean }
++                    ).vibrate?.(12);
++                } catch {
++                    /* 忽略 */
++                }
 +            }, LONG_PRESS_MS);
 +            // 不拦截 pointer，让 click 事件仍能触发预览
 +            setDragState({

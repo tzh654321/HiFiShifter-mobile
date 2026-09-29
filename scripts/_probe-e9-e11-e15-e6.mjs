@@ -258,11 +258,16 @@ const main = async () => {
         const clip = (st.clips || [])[0];
         if (!clip || !vp) return null;
         const start = clip.start_sec ?? 0;
+        const dur = Math.max(0.5, clip.duration_sec ?? 1);
         const xLeft = tr.left + (start - (vp.scrollLeft ?? 0)) * vp.pxPerSec;
-        return {
-            x: Math.round(Math.min(Math.max(xLeft + 24, tr.left + 6), tr.right - 6)),
-            y: Math.round(tr.top + (vp.rowHeight ?? 48) * 0.5),
-        };
+        const xRight = tr.left + (start + dur - (vp.scrollLeft ?? 0)) * vp.pxPerSec;
+        /* ⚠️ 必须点块的**可见区间**：测试用的音源很长（140s），块宽远超屏宽 ⇒ 若按其
+           "中心"点会落到屏外，而 `ClipQuickActions` 的门控要求"块在可视区内" ⇒ 浮条
+           根本不会渲染（这正是前几轮 E6 "浮条不出现"的原因）。取可见区间的中点。 */
+        const visLeft = Math.max(xLeft, tr.left + 8);
+        const visRight = Math.min(xRight, tr.right - 8);
+        const x = visRight > visLeft ? Math.round((visLeft + visRight) / 2) : Math.round(visLeft);
+        return { x, y: Math.round(tr.top + (vp.rowHeight ?? 48) * 0.5) };
     });
     console.log('▸ 块点击坐标：' + JSON.stringify(clipTap));
     if (clipTap) {
