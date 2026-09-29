@@ -2775,3 +2775,29 @@ console.log("[g1] ctxClip found", session.clips.some(c => c.id === (d.clipId ?? 
 
 > 白屏**本体**仍需要一次专项复现（用户口径"反复切换全屏/分屏后出现"）：
 > 下一轮按 `logcat -s chromium`（关注 `WebGL`/`RenderProcessGone`/`Context Lost`）+ 反复切换来做。
+
+---
+
+## 🔬 I-4 白屏专项复现（模拟器，2026-09-30 00:2x）—— 第一刀效果**可量化**
+
+**方法**：`scripts/_probe-i4-white-screen.mjs` —— 反复切换「全屏 ⇄ 分屏」12 轮
+（每轮 = 参数全屏 → 切回带轨道），同时量化三项：
+
+| 指标 | 结果 | 说明 |
+| :--- | :--- | :--- |
+| ① **空渲染警告** `Render count or primcount is 0` | **0 条** | 修前真机 logcat 是**每帧多条**（且每条经 JNI 写 logcat 双份）⇒ **第一刀（`count<=0` 不调 draw）效果可量化** |
+| ② WebGL context 丢失相关 | 0 条 | 未触发 ⇒ 第二刀（自愈）在模拟器上没机会验证（无害）|
+| ③ 渲染进程崩溃 / GPU 相关（`RenderProcessGone`/`gralloc`/`SIGSEGV`） | 0 条 | — |
+| 页面响应 | **12/12 轮正常** | `Runtime.evaluate` 全部成功 |
+| 内核不可用页 | **0 轮** | 未出现「时间轴无法渲染」 |
+| 进程 | 存活 | — |
+| `canvas` 数 | **稳定 11** | 12 轮切换后无累积 ⇒ 也再次证明"面板切换不泄漏 canvas"（早前我一度误判为累积）|
+
+**结论**：
+
+* 第一刀**确实消除了**那批每帧刷屏的空渲染警告 —— 这是白屏问题里**唯一可量化**的诱因，现已归零；
+* **白屏本体在模拟器上复现不出来**（12 轮高频切换、页面全程正常）。
+  用户口径是"真机上**有概率**出现"，而真机 GPU/显存条件与模拟器差别大
+  （模拟器走 SwiftShader/宿主 GPU 路径，反而不容易丢 context）。
+  ⇒ 这条仍需**真机**复现；届时要抓的是 `logcat -s chromium` 里的
+  `CONTEXT_LOST_WEBGL` / `RenderProcessGone`（第二刀是否触发、是否恢复成功）。
