@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..eed285c7 100644
+index 3802022a..d0366848 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4587 @@
+@@ -1,4006 +1,4592 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -446,6 +446,7 @@ index 3802022a..eed285c7 100644
 +import { ClipQuickActions } from "./components/mobile/ClipQuickActions";
 +import { ProjectSettingsDialog } from "./components/layout/ProjectSettingsDialog";
 +import { SnapGridSettingsDialog } from "./components/layout/SnapGridSettingsDialog";
++import { MetronomeSettingsOverlay } from "./components/layout/MetronomeSettingsOverlay";
 +import { SplitTransitionSettingsDialog } from "./components/layout/SplitTransitionSettingsDialog";
 +import { StorageSettingsDialog } from "./components/layout/StorageSettingsDialog";
 +import { ClipEdgeLongPressHint } from "./components/mobile/ClipEdgeLongPressHint";
@@ -5046,6 +5047,8 @@ index 3802022a..eed285c7 100644
 +    /* G-2：^ 菜单里「吸附网格…」「分割过渡…」的长按 ⇒ 打开**原版那套**设置对话框。 */
 +    const [snapGridOpen, setSnapGridOpen] = useState(false);
 +    const [splitTransitionOpen, setSplitTransitionOpen] = useState(false);
++    /** 节拍器长按菜单（音量/细分/音色/强调重拍）。 */
++    const [metronomeOpen, setMetronomeOpen] = useState(false);
      useEffect(() => {
 -        ignoredSourcePathsRef.current = new Set();
 -    }, [projectPath]);
@@ -5615,6 +5618,7 @@ index 3802022a..eed285c7 100644
 +            else if (which === "storage") setStorageOpen(true);
 +            else if (which === "snap-grid") setSnapGridOpen(true);
 +            else if (which === "split-transition") setSplitTransitionOpen(true);
++            else if (which === "metronome") setMetronomeOpen(true);
          };
 +        window.addEventListener("hs-open-settings", onOpen);
 +        return () => window.removeEventListener("hs-open-settings", onOpen);
@@ -8406,6 +8410,7 @@ index 3802022a..eed285c7 100644
 +            <ProjectSettingsDialog open={projectOpen} onOpenChange={setProjectOpen} />
 +            <StorageSettingsDialog open={storageOpen} onOpenChange={setStorageOpen} />
 +            <SnapGridSettingsDialog open={snapGridOpen} onOpenChange={setSnapGridOpen} />
++            <MetronomeSettingsOverlay open={metronomeOpen} onOpenChange={setMetronomeOpen} />
 +            <SplitTransitionSettingsDialog
 +                open={splitTransitionOpen}
 +                onOpenChange={setSplitTransitionOpen}
@@ -18807,6 +18812,222 @@ index 0b402382..05fc77b5 100644
 +        </Flex>
 +    );
 +};
+diff --git a/frontend/src/components/layout/MetronomeSettingsOverlay.tsx b/frontend/src/components/layout/MetronomeSettingsOverlay.tsx
+new file mode 100644
+index 00000000..86f8d97a
+--- /dev/null
++++ b/frontend/src/components/layout/MetronomeSettingsOverlay.tsx
+@@ -0,0 +1,210 @@
++/**
++ * MetronomeSettingsOverlay —— 节拍器长按菜单。
++ *
++ * 用户口径（2026-09-30）：「节拍器的菜单打不开，且需要的内容原软件有给出，按原软件制作：
++ *   音量 / 细分 / 跟随网格 / 仅每拍 / 仅小节首 / 音色 / 嗒声 / 木鱼 / 蜂鸣 / 强调重拍」。
++ *
++ * 这些项与 store 字段**一一对应**（不是我新造的）：
++ *   · 音量      ⇒ `metronomeGain`（0..1）
++ *   · 细分      ⇒ `metronomeMode`「grid(跟随网格) / beat(仅每拍) / bar(仅小节首)」
++ *   · 音色      ⇒ `metronomeSound`「click(嗒声) / woodblock(木鱼) / beep(蜂鸣)」
++ *   · 强调重拍  ⇒ `metronomeAccent`
++ *   · 另有「启用」⇒ `metronomeEnabled`（菜单里得能开关，否则长按菜单没法用）
++ *
++ * 一律走 `updateMetronome` thunk（它会同步引擎 + 持久化），不直接改 store。
++ * 形态沿用本项目自绘浮层（fixed 背板 + 内容自适应高度），无 portal / 无滚动锁。
++ */
++import React from "react";
++import { Button, Flex, Text } from "@radix-ui/themes";
++import { shallowEqual } from "react-redux";
++import { useAppDispatch, useAppSelector } from "../../app/hooks";
++import { useI18n } from "../../i18n/I18nProvider";
++import { updateMetronome } from "../../features/session/thunks/transportThunks";
++
++interface Props {
++    open: boolean;
++    onOpenChange: (open: boolean) => void;
++}
++
++const MODES = [
++    { key: "grid" as const, labelKey: "hs_mn_mode_grid" },
++    { key: "beat" as const, labelKey: "hs_mn_mode_beat" },
++    { key: "bar" as const, labelKey: "hs_mn_mode_bar" },
++];
++const SOUNDS = [
++    { key: "click" as const, labelKey: "hs_mn_sound_click" },
++    { key: "woodblock" as const, labelKey: "hs_mn_sound_woodblock" },
++    { key: "beep" as const, labelKey: "hs_mn_sound_beep" },
++];
++
++export function MetronomeSettingsOverlay({ open, onOpenChange }: Props) {
++    const { t } = useI18n();
++    const tAny = t as (key: string) => string;
++    const dispatch = useAppDispatch();
++    const s = useAppSelector(
++        (st) => ({
++            enabled: st.session.metronomeEnabled,
++            gain: st.session.metronomeGain,
++            mode: st.session.metronomeMode,
++            sound: st.session.metronomeSound,
++            accent: st.session.metronomeAccent,
++        }),
++        shallowEqual,
++    );
++    if (!open) return null;
++
++    /** 更新节拍器配置：只传要改的字段，其余沿用当前值（走 thunk ⇒ 同步引擎 + 持久化）。 */
++    const patch = (p: {
++        enabled?: boolean;
++        gain?: number;
++        mode?: "grid" | "beat" | "bar";
++        sound?: "click" | "woodblock" | "beep";
++        accent?: boolean;
++    }) => {
++        void dispatch(
++            /* ⚠️ `updateMetronome` 的入参用的是 **store 字段名**（metronomeEnabled / metronomeGain …），
++               不是简写 —— 第一版写成 `enabled/gain/...` 直接被类型系统挡下。 */
++            updateMetronome({
++                metronomeEnabled: p.enabled ?? s.enabled,
++                metronomeGain: p.gain ?? s.gain,
++                metronomeMode: p.mode ?? s.mode,
++                metronomeSound: p.sound ?? s.sound,
++                metronomeAccent: p.accent ?? s.accent,
++            }),
++        );
++    };
++
++    const row = (label: string, children: React.ReactNode) => (
++        <Flex direction="column" gap="1">
++            <Text size="2" weight="bold">
++                {label}
++            </Text>
++            {children}
++        </Flex>
++    );
++
++    return (
++        <>
++            <div
++                data-hs-metronome-backdrop
++                className="fixed border-0 cursor-pointer"
++                style={{ inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 60 }}
++                onClick={() => onOpenChange(false)}
++            />
++            <div
++                data-hs-metronome-settings
++                role="dialog"
++                aria-label={tAny("mobile_metronome")}
++                className="fixed bg-qt-window border border-qt-border text-qt-text"
++                style={{
++                    left: 8,
++                    right: 8,
++                    top: 64,
++                    maxHeight: "calc(100vh - 140px)",
++                    zIndex: 61,
++                    borderRadius: 12,
++                    padding: 12,
++                    overflowY: "auto",
++                }}
++            >
++                <Text size="4" weight="bold" style={{ display: "block" }}>
++                    {tAny("mobile_metronome")}
++                </Text>
++
++                <Flex direction="column" gap="3" mt="3">
++                    {/* 启用 */}
++                    <Flex align="center" justify="between" gap="2">
++                        <Text size="2" weight="bold">
++                            {tAny("hs_mn_enabled")}
++                        </Text>
++                        <Button
++                            size="1"
++                            variant={s.enabled ? "solid" : "soft"}
++                            onClick={() => patch({ enabled: !s.enabled })}
++                        >
++                            {s.enabled ? tAny("storage_state_on") : tAny("storage_state_off")}
++                        </Button>
++                    </Flex>
++
++                    {/* 音量 */}
++                    {row(
++                        tAny("hs_mn_volume"),
++                        <Flex align="center" gap="2">
++                            <Button
++                                size="1"
++                                variant="soft"
++                                onClick={() => patch({ gain: Math.max(0, Math.round((s.gain - 0.1) * 100) / 100) })}
++                            >
++                                −
++                            </Button>
++                            <Text size="2" data-hs-mn-gain>
++                                {`${Math.round((s.gain ?? 0) * 100)}%`}
++                            </Text>
++                            <Button
++                                size="1"
++                                variant="soft"
++                                onClick={() => patch({ gain: Math.min(1, Math.round((s.gain + 0.1) * 100) / 100) })}
++                            >
++                                +
++                            </Button>
++                        </Flex>,
++                    )}
++
++                    {/* 细分 */}
++                    {row(
++                        tAny("hs_mn_mode"),
++                        <Flex gap="1" wrap="wrap" data-hs-mn-mode>
++                            {MODES.map((m) => (
++                                <Button
++                                    key={m.key}
++                                    size="1"
++                                    variant={s.mode === m.key ? "solid" : "soft"}
++                                    onClick={() => patch({ mode: m.key })}
++                                >
++                                    {tAny(m.labelKey)}
++                                </Button>
++                            ))}
++                        </Flex>,
++                    )}
++
++                    {/* 音色 */}
++                    {row(
++                        tAny("hs_mn_sound"),
++                        <Flex gap="1" wrap="wrap" data-hs-mn-sound>
++                            {SOUNDS.map((v) => (
++                                <Button
++                                    key={v.key}
++                                    size="1"
++                                    variant={s.sound === v.key ? "solid" : "soft"}
++                                    onClick={() => patch({ sound: v.key })}
++                                >
++                                    {tAny(v.labelKey)}
++                                </Button>
++                            ))}
++                        </Flex>,
++                    )}
++
++                    {/* 强调重拍 */}
++                    <Flex align="center" justify="between" gap="2">
++                        <Text size="2" weight="bold">
++                            {tAny("hs_mn_accent")}
++                        </Text>
++                        <Button
++                            size="1"
++                            variant={s.accent ? "solid" : "soft"}
++                            onClick={() => patch({ accent: !s.accent })}
++                        >
++                            {s.accent ? tAny("storage_state_on") : tAny("storage_state_off")}
++                        </Button>
++                    </Flex>
++                </Flex>
++
++                <Flex justify="end" mt="4">
++                    <Button variant="soft" onClick={() => onOpenChange(false)}>
++                        {tAny("close")}
++                    </Button>
++                </Flex>
++            </div>
++        </>
++    );
++}
 diff --git a/frontend/src/components/layout/ModelManagerDialog.tsx b/frontend/src/components/layout/ModelManagerDialog.tsx
 new file mode 100644
 index 00000000..e932247d
@@ -79408,10 +79629,10 @@ index 00000000..9bd9c623
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..e58f809d
+index 00000000..9ccfc5f1
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1950 @@
+@@ -0,0 +1,1955 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -80440,6 +80661,11 @@ index 00000000..e58f809d
 +            act: () => {
 +                void dispatch(updateMetronome({ metronomeEnabled: !s.metronomeEnabled }));
 +            },
++            /* 长按 = 节拍器设置菜单（音量/细分/跟随网格/仅每拍/仅小节首/音色/嗒声/木鱼/蜂鸣/强调重拍 —— 按原软件口径）。 */
++            longPress: () =>
++                window.dispatchEvent(
++                    new CustomEvent("hs-open-settings", { detail: { which: "metronome" } }),
++                ),
 +        },
 +        {
 +            id: "snap",
@@ -96230,10 +96456,10 @@ index 59e658ed..3939ddf1 100644
          const anchorSec = state.session.playheadSec;
  
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..a4ea6d5f 100644
+index 858bca55..f397d1af 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
-@@ -2,8 +2,42 @@ export const enUS = {
+@@ -2,8 +2,53 @@ export const enUS = {
      menu_file: "File",
      menu_edit: "Edit",
      menu_view: "View",
@@ -96243,6 +96469,17 @@ index 858bca55..a4ea6d5f 100644
      menu_options: "Options",
 +    menu_project_settings: "Project Settings…",
 +    menu_snap_grid_settings: "Snap/grid settings…",
++    hs_mn_enabled: "Enabled",
++    hs_mn_volume: "Volume",
++    hs_mn_mode: "Subdivision",
++    hs_mn_mode_grid: "Follow grid",
++    hs_mn_mode_beat: "Beat only",
++    hs_mn_mode_bar: "Bar start only",
++    hs_mn_sound: "Sound",
++    hs_mn_sound_click: "Click",
++    hs_mn_sound_woodblock: "Woodblock",
++    hs_mn_sound_beep: "Beep",
++    hs_mn_accent: "Accent downbeat",
 +    menu_storage_settings: "Storage Settings…",
 +    proj_grid_label: "Grid",
 +    proj_undo_label: "Save undo history",
@@ -96276,7 +96513,7 @@ index 858bca55..a4ea6d5f 100644
      menu_help: "Help",
      menu_new_project: "New Project",
      menu_open_project: "Open Project...",
-@@ -330,6 +364,7 @@ export const enUS = {
+@@ -330,6 +375,7 @@ export const enUS = {
      panel_editor: "Editor",
      panel_timeline: "Timeline",
      panel_io: "I/O",
@@ -96284,7 +96521,7 @@ index 858bca55..a4ea6d5f 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1514,69 @@ export const enUS = {
+@@ -1479,4 +1525,69 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -96355,10 +96592,10 @@ index 858bca55..a4ea6d5f 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..06e6b3b4 100644
+index ef08ef81..bc880bfb 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
-@@ -2,8 +2,42 @@ export const jaJP = {
+@@ -2,8 +2,53 @@ export const jaJP = {
      menu_file: "ファイル",
      menu_edit: "編集",
      menu_view: "表示",
@@ -96368,6 +96605,17 @@ index ef08ef81..06e6b3b4 100644
      menu_options: "オプション",
 +    menu_project_settings: "プロジェクト設定…",
 +    menu_snap_grid_settings: "スナップ/グリッド設定…",
++    hs_mn_enabled: "有効",
++    hs_mn_volume: "音量",
++    hs_mn_mode: "細分",
++    hs_mn_mode_grid: "グリッドに追従",
++    hs_mn_mode_beat: "拍のみ",
++    hs_mn_mode_bar: "小節頭のみ",
++    hs_mn_sound: "音色",
++    hs_mn_sound_click: "クリック",
++    hs_mn_sound_woodblock: "木魚",
++    hs_mn_sound_beep: "ビープ",
++    hs_mn_accent: "強拍を強調",
 +    menu_storage_settings: "ストレージ設定…",
 +    proj_grid_label: "グリッド",
 +    proj_undo_label: "undo 履歴を保存",
@@ -96401,7 +96649,7 @@ index ef08ef81..06e6b3b4 100644
      menu_help: "ヘルプ",
      menu_new_project: "新規プロジェクト",
      menu_open_project: "プロジェクトを開く...",
-@@ -192,6 +226,7 @@ export const jaJP = {
+@@ -192,6 +237,7 @@ export const jaJP = {
      panel_editor: "エディタ",
      panel_timeline: "タイムライン",
      panel_io: "入出力",
@@ -96409,7 +96657,7 @@ index ef08ef81..06e6b3b4 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1527,61 @@ export const jaJP = {
+@@ -1492,4 +1538,61 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -96472,10 +96720,10 @@ index ef08ef81..06e6b3b4 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..8a12f054 100644
+index 508fcb25..31791651 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
-@@ -2,8 +2,42 @@ export const koKR = {
+@@ -2,8 +2,53 @@ export const koKR = {
      menu_file: "파일",
      menu_edit: "편집",
      menu_view: "보기",
@@ -96485,6 +96733,17 @@ index 508fcb25..8a12f054 100644
      menu_options: "옵션",
 +    menu_project_settings: "프로젝트 설정…",
 +    menu_snap_grid_settings: "스냅/그리드 설정…",
++    hs_mn_enabled: "사용",
++    hs_mn_volume: "볼륨",
++    hs_mn_mode: "세분",
++    hs_mn_mode_grid: "그리드 따르기",
++    hs_mn_mode_beat: "박자만",
++    hs_mn_mode_bar: "마디 첫박만",
++    hs_mn_sound: "음색",
++    hs_mn_sound_click: "클릭",
++    hs_mn_sound_woodblock: "목어",
++    hs_mn_sound_beep: "비프",
++    hs_mn_accent: "강박 강조",
 +    menu_storage_settings: "저장소 설정…",
 +    proj_grid_label: "그리드",
 +    proj_undo_label: "undo 기록 저장",
@@ -96518,7 +96777,7 @@ index 508fcb25..8a12f054 100644
      menu_help: "도움말",
      menu_new_project: "새 프로젝트",
      menu_open_project: "프로젝트 열기...",
-@@ -269,6 +303,7 @@ export const koKR = {
+@@ -269,6 +314,7 @@ export const koKR = {
      panel_editor: "에디터",
      panel_timeline: "타임라인",
      panel_io: "입출력",
@@ -96526,7 +96785,7 @@ index 508fcb25..8a12f054 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1504,61 @@ export const koKR = {
+@@ -1469,4 +1515,61 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -96589,10 +96848,10 @@ index 508fcb25..8a12f054 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..2a5233dd 100644
+index 8bcc3071..21235a64 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
-@@ -2,8 +2,42 @@ export const zhCN = {
+@@ -2,8 +2,53 @@ export const zhCN = {
      menu_file: "文件",
      menu_edit: "编辑",
      menu_view: "视图",
@@ -96602,6 +96861,17 @@ index 8bcc3071..2a5233dd 100644
      menu_options: "选项",
 +    menu_project_settings: "工程设置…",
 +    menu_snap_grid_settings: "吸附/网格设置…",
++    hs_mn_enabled: "启用",
++    hs_mn_volume: "音量",
++    hs_mn_mode: "细分",
++    hs_mn_mode_grid: "跟随网格",
++    hs_mn_mode_beat: "仅每拍",
++    hs_mn_mode_bar: "仅小节首",
++    hs_mn_sound: "音色",
++    hs_mn_sound_click: "嗒声",
++    hs_mn_sound_woodblock: "木鱼",
++    hs_mn_sound_beep: "蜂鸣",
++    hs_mn_accent: "强调重拍",
 +    menu_storage_settings: "存储设置…",
 +    proj_grid_label: "网格",
 +    proj_undo_label: "保存撤销历史",
@@ -96635,7 +96905,7 @@ index 8bcc3071..2a5233dd 100644
      menu_help: "帮助",
      menu_new_project: "新建工程",
      menu_open_project: "打开工程...",
-@@ -182,6 +216,7 @@ export const zhCN = {
+@@ -182,6 +227,7 @@ export const zhCN = {
      panel_editor: "编辑器",
      panel_timeline: "时间轴",
      panel_io: "输入输出",
@@ -96643,7 +96913,7 @@ index 8bcc3071..2a5233dd 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1479,69 @@ export const zhCN = {
+@@ -1444,4 +1490,69 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -96714,10 +96984,10 @@ index 8bcc3071..2a5233dd 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..d957098b 100644
+index 176638e2..a9b2b8d9 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
-@@ -3,8 +3,42 @@ export const zhTW = {
+@@ -3,8 +3,53 @@ export const zhTW = {
      menu_file: "檔案",
      menu_edit: "編輯",
      menu_view: "檢視",
@@ -96727,6 +96997,17 @@ index 176638e2..d957098b 100644
      menu_options: "選項",
 +    menu_project_settings: "專案設定…",
 +    menu_snap_grid_settings: "吸附/格線設定…",
++    hs_mn_enabled: "啟用",
++    hs_mn_volume: "音量",
++    hs_mn_mode: "細分",
++    hs_mn_mode_grid: "跟隨格線",
++    hs_mn_mode_beat: "僅每拍",
++    hs_mn_mode_bar: "僅小節首",
++    hs_mn_sound: "音色",
++    hs_mn_sound_click: "嗒聲",
++    hs_mn_sound_woodblock: "木魚",
++    hs_mn_sound_beep: "蜂鳴",
++    hs_mn_accent: "強調重拍",
 +    menu_storage_settings: "儲存設定…",
 +    proj_grid_label: "格線",
 +    proj_undo_label: "儲存復原歷史",
@@ -96760,7 +97041,7 @@ index 176638e2..d957098b 100644
      menu_help: "說明",
      menu_new_project: "新建專案",
      menu_open_project: "開啟專案...",
-@@ -183,6 +217,7 @@ export const zhTW = {
+@@ -183,6 +228,7 @@ export const zhTW = {
      panel_editor: "編輯器",
      panel_timeline: "時間軸",
      panel_io: "輸入輸出",
@@ -96768,7 +97049,7 @@ index 176638e2..d957098b 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1481,61 @@ export const zhTW = {
+@@ -1446,4 +1492,61 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
