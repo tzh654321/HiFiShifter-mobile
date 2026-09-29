@@ -15311,10 +15311,10 @@ index 3ebf39a9..c18cb953 100644
 +
 +FileEntryRow.displayName = "FileEntryRow";
 diff --git a/frontend/src/components/layout/MenuBar.tsx b/frontend/src/components/layout/MenuBar.tsx
-index 0b402382..335e2a93 100644
+index 0b402382..05fc77b5 100644
 --- a/frontend/src/components/layout/MenuBar.tsx
 +++ b/frontend/src/components/layout/MenuBar.tsx
-@@ -1,1612 +1,1820 @@
+@@ -1,1612 +1,1844 @@
 -import React, { useCallback, useEffect, useMemo, useState } from "react";
 -import { Flex, DropdownMenu } from "@radix-ui/themes";
 -import { useI18n } from "../../i18n/I18nProvider";
@@ -15942,15 +15942,1130 @@ index 0b402382..335e2a93 100644
 -                <DropdownMenu.Content variant="soft" color="gray">
 -                    {/* 无可撤销/可重做状态时置灰（不发请求、不刷新界面）：
 -                        深度镜像由后端 history_state 广播实时维护。 */}
--                    <DropdownMenu.Item
++import React, { useCallback, useEffect, useMemo, useState } from "react";
++import { Flex, DropdownMenu } from "@radix-ui/themes";
++import { useI18n } from "../../i18n/I18nProvider";
++import { useAppDispatch, useAppSelector } from "../../app/hooks";
++import { shallowEqual } from "react-redux";
++import type { RootState } from "../../app/store";
++import {    openReaperFromDialog,
++    openVocalShifterFromDialog,
++    addTrackRemote,
++    removeTrackRemote,
++    duplicateTrackRemote,
++    refreshRuntime,
++    clearWaveformCacheRemote,
++    persistUiSettings,
++    undoRemote,
++    redoRemote,
++    saveProjectRemote,
++    saveProjectAsRemote,
++    setDefaultHifiganMelStretch,
++    setDefaultStretchAlgorithm,
++    setOrtEp,
++    setOrtDeviceId,
++    setPrimaryTimeUnit,
++    setSecondaryTimeUnit,
++    toggleAutoBackgroundRender,
++    toggleShowAllTakes,
++    toggleSyncEditsAcrossTakes,
++    toggleClipboardPreview,
++    toggleParamValuePopup,
++    toggleTempoMapVisible,
++    toggleShortcutHints,
++    setProjectStretchSettingsRemote,
++    toggleMobilePanel,
++} from "../../features/session/sessionSlice";
++import type { TimeUnit } from "../../features/session/sessionTypes";
++import { TIME_UNITS, TIME_UNIT_CHOICES } from "./timeline/timeFormat";
++import { TimelineDisplaySettingsDialog } from "./TimelineDisplaySettingsDialog";
++import { SnapGridSettingsDialog } from "./SnapGridSettingsDialog";
++import { scaleChangesInRange, scaleLikeEquals } from "../../utils/tempoMap";
++import type { ScaleLike } from "../../utils/musicalScales";
++import {
++    getPianoRollSelection,
++    subscribePianoRollSelection,
++} from "../../utils/pianoRollSelectionBus";
++import { computeInsertBelowPlacement } from "../../features/session/trackUtils";
++
++import {
++    importAudioAtPosition,
++    importAudioFromDialog,
++    importMultipleAudioAtPosition,
++} from "../../features/session/thunks/importThunks";
++import type { MediaAudioStream } from "../../services/api/fileBrowser";
++import { useAppTheme } from "../../theme/AppThemeProvider";
++import { GlobeIcon } from "@radix-ui/react-icons";
++import {
++    selectMergedKeybindings,
++    formatKeybinding,
++    isNoneBinding,
++} from "../../features/keybindings/keybindingsSlice";
++import type { ActionId } from "../../features/keybindings/types";
++import {
++    resolveCopyCutRoute,
++    resolveEditOpRoute,
++    resolvePasteRoute,
++} from "../../features/keybindings/focusRouting";
++import { getActiveSurface } from "../../features/uiFocus/focusSurface";
++import { webApi } from "../../services/webviewApi";
++import { KeybindingsDialog } from "./KeybindingsDialog";
++import { AppearanceSettingsDialog } from "./AppearanceSettingsDialog";
++import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
++import { StorageSettingsDialog } from "./StorageSettingsDialog";
++import {
++    TransposeCentsDialog,
++    TransposeDegreesDialog,
++    SetPitchDialog,
++    AverageDialog,
++    SmoothDialog,
++    VibratoDialog,
++    QuantizeDialog,
++    MeanQuantizeDialog,
++} from "../editDialogs/EditDialogs";
++import { SCALE_LABELS } from "../../utils/musicalScales";
++import { ExportAudioDialog } from "./ExportAudioDialog";
++import { AutoBackupDialog } from "./AutoBackupDialog";
++import { RecordingSettingsDialog } from "./RecordingSettingsDialog";
++import { BenchmarkDialog } from "./BenchmarkDialog";
++import { ModelManagerDialog } from "./ModelManagerDialog";
++
++/** #4：模型是否全部随包（true ⇒ 隐藏「模型管理」入口）。 */
++const HS_MODELS_BUNDLED = true;
++import { AboutDialog } from "./AboutDialog";
++
++import {
++    isChildPitchOffsetCentsParam,
++    isChildPitchOffsetDegreesParam,
++} from "./pianoRoll/childPitchOffsetParams";
++import type { AutoBackupSettings } from "../../services/api/project";
++// import type { VibratoParams } from "../editDialogs/EditDialogs"; // 已移除无效导入
++
++interface MenuBarProps {
++    onNewProject: () => void;
++    onOpenProject: () => void;
++    onOpenRecentProject: (projectPath: string) => void;
++    onRecaptureMissingMedia: () => void;
++    onExit: () => void;
++    onImportMidiFromMenu: () => void;
++    onImportProject: () => void;
++    autoBackupSettings: AutoBackupSettings;
++    onAutoBackupSettingsSaved: (settings: AutoBackupSettings) => void;
++    autoReloadModifiedMedia: boolean;
++    onAutoReloadModifiedMediaChange: (value: boolean) => void;
++    /** 为新的音频块启用循环（Loop / 循环源，默认开启）。 */
++    loopNewClips: boolean;
++    onLoopNewClipsChange: (value: boolean) => void;
++}
++
++function timeUnitLabelKey(unit: TimeUnit): string {
++    switch (unit) {
++        case "barBeats":
++            return "time_unit_bar_beats";
++        case "barDivisions":
++            return "time_unit_bar_divisions";
++        case "seconds":
++            return "time_unit_seconds";
++        case "clock":
++            return "time_unit_clock";
++    }
++}
++
++/** MenuBar 实际消费的 session 字段子集（配合 shallowEqual 阻断播放轮询的重渲染）。
++ *  新增消费字段时必须同步补充到这里。 */
++const selectMenuBarSession = (state: RootState) => {
++    const session = state.session;
++    return {
++        autoBackgroundRender: session.autoBackgroundRender,
++        defaultHifiganMelStretch: session.defaultHifiganMelStretch,
++        defaultStretchAlgorithm: session.defaultStretchAlgorithm,
++        edgeSmoothnessPercent: session.edgeSmoothnessPercent,
++        editParam: session.editParam,
++        historyRedoDepth: session.historyRedoDepth,
++        historyUndoDepth: session.historyUndoDepth,
++        multiSelectedClipIds: session.multiSelectedClipIds,
++        ortDeviceId: session.ortDeviceId,
++        ortEp: session.ortEp,
++        paramSelectionActive: session.paramSelectionActive,
++        pitchSnapToleranceCents: session.pitchSnapToleranceCents,
++        playheadSec: session.playheadSec,
++        primaryTimeUnit: session.primaryTimeUnit,
++        project: session.project,
++        projectSec: session.projectSec,
++        secondaryTimeUnit: session.secondaryTimeUnit,
++        selectedClipId: session.selectedClipId,
++        selectedTrackId: session.selectedTrackId,
++        selectionContext: session.selectionContext,
++        showAllTakes: session.showAllTakes,
++        showClipboardPreview: session.showClipboardPreview,
++        showShortcutHints: session.showShortcutHints,
++        showParamValuePopup: session.showParamValuePopup,
++        syncEditsAcrossTakes: session.syncEditsAcrossTakes,
++        tempoMap: session.tempoMap,
++        /* C（#17）：视图菜单的面板显隐勾选项需要它 */
++        mobilePanels: session.mobilePanels,
++        tempoMapVisible: session.tempoMapVisible,
++        toolMode: session.toolMode,
++        tracks: session.tracks,
++    };
++};
++
++export const MenuBar: React.FC<MenuBarProps> = ({
++    onNewProject,
++    onOpenProject,
++    onOpenRecentProject,
++    onRecaptureMissingMedia,
++    onExit,
++    onImportMidiFromMenu,
++    onImportProject,
++    autoBackupSettings,
++    onAutoBackupSettingsSaved,
++    autoReloadModifiedMedia,
++    onAutoReloadModifiedMediaChange,
++    loopNewClips,
++    onLoopNewClipsChange,
++}) => {
++    const { t, setLocale } = useI18n();
++    const tAny = t as (key: string) => string;
++    const dispatch = useAppDispatch();
++    // 只选取本组件实际消费的字段子集并以 shallowEqual 比较：播放期间
++    // runtime.playbackPositionSec 每 ~33ms 变一次，整片 session 的对象引用
++    // 随之失效，若直接订阅 state.session，全部菜单定义会以 ≥30Hz 重建。
++    const s = useAppSelector(selectMenuBarSession, shallowEqual);
++    const gpuBackend = useAppSelector((state: RootState) => state.session.runtime.gpuBackend);
++    const theme = useAppTheme();
++    const keybindings = useAppSelector(selectMergedKeybindings);
++    const [kbDialogOpen, setKbDialogOpen] = useState(false);
++    const [appearanceDialogOpen, setAppearanceDialogOpen] = useState(false);
++    /** E1：工程设置（文件菜单）。 */
++    const [projectSettingsOpen, setProjectSettingsOpen] = useState(false);
++    /** E21：存储设置（选项菜单）。 */
++    const [storageSettingsOpen, setStorageSettingsOpen] = useState(false);
++    const [timeDisplaySettingsOpen, setTimeDisplaySettingsOpen] = useState(false);
++    const [snapSettingsOpen, setSnapSettingsOpen] = useState(false);
++    const [exportDialogOpen, setExportDialogOpen] = useState(false);
++    const [autoBackupDialogOpen, setAutoBackupDialogOpen] = useState(false);
++    const [recordingDialogOpen, setRecordingDialogOpen] = useState(false);
++    const [benchmarkDialogOpen, setBenchmarkDialogOpen] = useState(false);
++    const [modelManagerOpen, setModelManagerOpen] = useState(false);
++    const [aboutDialogOpen, setAboutDialogOpen] = useState(false);
++    const [dmlAdapters, setDmlAdapters] = useState<
++        { deviceId: number; name: string; memoryMb: number }[]
++    >([]);
++
++    // Fetch DML adapters on mount for GPU device selector
++    useEffect(() => {
++        import("../../services/api/core")
++            .then(({ coreApi }) => coreApi.getDmlAdapters())
++            .then((result) => {
++                if (result.adapters && result.adapters.length > 0) {
++                    setDmlAdapters(
++                        result.adapters.map((a) => ({
++                            deviceId: a.deviceId,
++                            name: a.name,
++                            memoryMb: a.dedicatedVideoMemoryMb,
++                        })),
++                    );
++                }
++            })
++            .catch(() => {
++                // DML adapters unavailable — device selector won't show
++            });
++    }, []);
++
++    // Edit dialog states
++    const [transposeCentsOpen, setTransposeCentsOpen] = useState(false);
++    const [transposeDegreesOpen, setTransposeDegreesOpen] = useState(false);
++    const [setPitchOpen, setSetPitchOpen] = useState(false);
++    const [averageOpen, setAverageOpen] = useState(false);
++    const [smoothOpen, setSmoothOpen] = useState(false);
++    const [vibratoOpen, setVibratoOpen] = useState(false);
++    const [vibratoParamRange, setVibratoParamRange] = useState<
++        { min: number; max: number } | undefined
++    >(undefined);
++    const [quantizeOpen, setQuantizeOpen] = useState(false);
++    const [meanQuantizeOpen, setMeanQuantizeOpen] = useState(false);
++    const [menuImportMode, setMenuImportMode] = useState<{
++        audioPaths: string[];
++        trackId: string | null;
++        startSec: number;
++    } | null>(null);
++    const [mediaStreamImport, setMediaStreamImport] = useState<{
++        path: string;
++        streams: MediaAudioStream[];
++        trackId: string | null;
++        startSec: number;
++    } | null>(null);
++
++    const isPitchParam = s.editParam === "pitch";
++    const isChildCentsParam = isChildPitchOffsetCentsParam(s.editParam);
++    const isChildDegreesParam = isChildPitchOffsetDegreesParam(s.editParam);
++    const setToDefaultValue =
++        s.editParam === "pitch"
++            ? 60
++            : isChildCentsParam || isChildDegreesParam
++              ? 0
++              : s.editParam === "volume" || s.editParam === "dyn_edit"
++                ? 1
++                : 0;
++    const setToValueLabel = s.editParam === "pitch" ? tAny("dlg_midi_note") : tAny("dlg_value");
++    const quantizeDefaultUnit = (() => {
++        if (isChildCentsParam) return 100;
++        if (isChildDegreesParam) return 1;
++        switch (s.editParam) {
++            case "volume":
++            case "dyn_edit":
++                return 0.05;
++            case "formant_shift_cents":
++                return 100;
++            case "breath_gain":
++            case "hifigan_tension":
++                return 0.05;
++            case "pan":
++                return 0.1;
++            case "breathiness":
++                return 250;
++            default:
++                return 1;
++        }
++    })();
++    const projectScaleLabel =
++        s.project.useCustomScale && s.project.customScale
++            ? `${tAny("project_scale_prefix")} (${tAny("custom_scale_short")})`
++            : `${tAny("project_scale_prefix")} (${SCALE_LABELS[s.project.baseScale]})`;
++
++    // ── “工程音阶”选项受 Tempo Map 影响的提示 ─────────────────────────
++    // 读取参数编辑器当前选区（帧范围）判断是否跨过音阶变化点；
++    // 无选区时按整个工程判断（存在音阶变化点即提示）。
++    const [selectionVersion, setSelectionVersion] = useState(0);
++    useEffect(
++        () =>
++            subscribePianoRollSelection(() => {
++                setSelectionVersion((v) => v + 1);
++            }),
++        [],
++    );
++    const tempoMapScaleHint = useMemo(() => {
++        if (!s.tempoMap) return null;
++        const sel = getPianoRollSelection();
++        const startSec = sel ? (sel.startFrame * sel.framePeriodMs) / 1000 : 0;
++        const endSec = sel
++            ? ((sel.startFrame + Math.max(0, sel.frameCount)) * sel.framePeriodMs) / 1000
++            : Math.max(1, s.projectSec);
++        const projectScale: ScaleLike | null =
++            s.project.useCustomScale && s.project.customScale
++                ? s.project.customScale.notes
++                : s.project.baseScale;
++        // 仅当范围内存在“与工程音阶不同”的音阶变化（或管辖范围起点的
++        // 变化与工程音阶不同）时才提示 —— 变化点音阶等于工程音阶时
++        // 选区并未真正受到影响。
++        const changes = scaleChangesInRange(s.tempoMap, startSec, endSec);
++        if (changes.length === 0) return null;
++        if (changes.every((c) => scaleLikeEquals(c.scale, projectScale))) {
++            return null;
++        }
++        return tAny("project_scale_tempo_map_hint");
++        // eslint-disable-next-line react-hooks/exhaustive-deps
++    }, [s.tempoMap, s.projectSec, s.project, tAny, selectionVersion]);
++    const projectScaleLabelWithHint = tempoMapScaleHint
++        ? `${projectScaleLabel} ${tempoMapScaleHint}`
++        : projectScaleLabel;
++    const effectiveProjectStretchAlgorithm =
++        s.project.stretchAlgorithmOverride ?? s.defaultStretchAlgorithm;
++    const effectiveProjectHifiganMelStretch =
++        s.project.hifiganMelStretchOverride ?? s.defaultHifiganMelStretch;
++
++    const stretchAlgorithmLabel = (value: "linear" | "signalsmith" | "soundtouch") => {
++        switch (value) {
++            case "linear":
++                return tAny("stretch_option_linear");
++            case "signalsmith":
++                return tAny("stretch_option_signalsmith");
++            case "soundtouch":
++            default:
++                return tAny("stretch_option_soundtouch");
++        }
++    };
++
++    const withCheck = (active: boolean, label: string) => `${active ? "●" : "○"} ${label}`;
++
++    const resolveScaleToken = (scaleValue: string) =>
++        scaleValue === "__project__" ? "__project__" : scaleValue;
++
++    // Listen for context menu → open dialog requests
++    useEffect(() => {
++        const handler = (e: Event) => {
++            const dialog = (e as CustomEvent).detail?.dialog as string;
++            switch (dialog) {
++                case "transposeCents":
++                    setTransposeCentsOpen(true);
++                    break;
++                case "transposeDegrees":
++                    setTransposeDegreesOpen(true);
++                    break;
++                case "setPitch":
++                    setSetPitchOpen(true);
++                    break;
++                case "average":
++                    setAverageOpen(true);
++                    break;
++                case "smooth":
++                    setSmoothOpen(true);
++                    break;
++                case "addVibrato":
++                    setVibratoParamRange((e as CustomEvent).detail?.paramRange);
++                    setVibratoOpen(true);
++                    break;
++                case "quantize":
++                    setQuantizeOpen(true);
++                    break;
++                case "meanQuantize":
++                    setMeanQuantizeOpen(true);
++                    break;
++                case "exportAudio":
++                    setExportDialogOpen(true);
++                    break;
++            }
++        };
++        window.addEventListener("hifi:openEditDialog", handler);
++        return () => window.removeEventListener("hifi:openEditDialog", handler);
++    }, []);
++
++    /** 获取某个操作的快捷键显示文本（"None" 绑定时返回空字符串，不显示） */
++    /** #15：菜单水平对齐方向 —— 放得下用 start（左对齐母菜单文字），放不下用 end（靠右上角）。 */
++    const [menuAlign, setMenuAlign] = React.useState<"start" | "end">("start");
++
++    /**
++     * #15：打开菜单前把触发器的左边界写进 CSS 变量，供 `.rt-DropdownMenuContent` 算 max-width。
++     * Radix 的 Content 渲染在 Portal 里，但 CSS 变量定义在 `:root` 上照样能继承到。
++     */
++    /**
++     * #15：菜单锚点。
++     *
++     * ⚠️ 2026-09-24 实测教训：把 `onPointerDown={openMenuAt}` 直接挂在
++     * `DropdownMenu.Trigger` 上**拿不到** —— Radix 对 Trigger 的指针事件有自己的一套
++     * 处理，实测 `--hs-menu-anchor` 一直是空串（于是 max-width 没生效，Radix 仍按
++     * 内容的自然宽度判溢出，把菜单推到 `left=4`）。
++     * ⇒ 改用**document 捕获阶段的原生监听** + `data-hs-menu-trigger` 标记，绕开这层。
++     */
++    React.useEffect(() => {
++        const onDown = (ev: Event) => {
++            const t = (ev.target as HTMLElement | null)?.closest?.("[data-hs-menu-trigger]");
++            if (!t) return;
++            const r = (t as HTMLElement).getBoundingClientRect();
++            const left = Math.max(0, r.left);
++            document.documentElement.style.setProperty("--hs-menu-anchor", `${left}px`);
++            /* 🔴 #42：**固定左对齐**。
++             *
++             * 演进史：原来是 `left + 460 > innerWidth`（桌面最宽菜单的粗估，
++             * 注释写明"宁可估大"）⇒ **手机屏宽才 360 ⇒ 恒成立 ⇒ 每个菜单都靠右**。
++             * 按屏宽自适应改小后**实测仍靠右**（`menuLeft=188` 贴右边）——
++             * 真凶是 **Radix 自己的 `avoidCollisions`**：它按**内容自然宽度**判"放不下"
++             * 就翻转，而 `--hs-menu-anchor` 的 `max-width` 是**渲染后**才压窄的，
++             * 翻转判定发生在压窄之前 ⇒ 永远判"放不下"。
++             *
++             * ⇒ 既然 CSS 已保证菜单**永不溢出**（上面那条 max-width），
++             *   就不需要 Radix 再避让 ⇒ `align="start"` + `avoidCollisions={false}`。
++             */
++            setMenuAlign("start");
++        };
++        document.addEventListener("pointerdown", onDown, true);
++        return () => document.removeEventListener("pointerdown", onDown, true);
++    }, []);
++
++    function shortcutLabel(actionId: ActionId): string {
++        // 🔴 2026-09-24 用户口径：快捷键提示可关，**默认关**。
++        // 这里是**唯一**的渲染入口（全文件 25 处调用都走它），所以只改这一处即可全覆盖。
++        if (!s.showShortcutHints) return "";
++        const kb = keybindings[actionId];
++        if (!kb || isNoneBinding(kb)) return "";
++        return formatKeybinding(kb, "");
++    }
++
++    /**
++     * 派发编辑操作事件：与键盘快捷键共用同一裁决（focusRouting）。
++     * copy/cut 按"当前选中了什么"路由（resolveCopyCutRoute，双选区并存时
++     * 按 selectionContext 仲裁）；paste 按剪贴板载荷类型路由
++     * （last-copy-wins，resolvePasteRoute），槽位为空/外来数据时才退回活动
++     * 表面兜底。未收录的操作（参数编辑器专有：对话框确认、pasteVocalShifter
++     * 等）落回参数编辑器通道，与既有行为一致。
++     */
++    const dispatchEditOp = useCallback(
++        (op: string, data?: Record<string, unknown>) => {
++            if (op === "copy" || op === "cut") {
++                const channel = resolveCopyCutRoute({
++                    surface: getActiveSurface(),
++                    clipSelectionActive: s.multiSelectedClipIds.length > 0 || !!s.selectedClipId,
++                    paramSelectionActive: s.paramSelectionActive,
++                    selectionContext: s.selectionContext,
++                });
++                if (channel) {
++                    window.dispatchEvent(new CustomEvent(channel, { detail: { op, ...data } }));
++                }
++                return;
++            }
++            if (op === "paste") {
++                void (async () => {
++                    let kind: string | null = null;
++                    try {
++                        kind = (await webApi.clipboardKind()).kind ?? null;
++                    } catch {
++                        // 探测失败不阻塞粘贴。
++                    }
++                    const channel = resolvePasteRoute(kind, getActiveSurface());
++                    if (channel) {
++                        window.dispatchEvent(new CustomEvent(channel, { detail: { op, ...data } }));
++                    }
++                })();
++                return;
++            }
++            const channel = resolveEditOpRoute(getActiveSurface(), op, s.toolMode) ?? "hifi:editOp";
++            window.dispatchEvent(new CustomEvent(channel, { detail: { op, ...data } }));
++        },
++        [s],
++    );
++
++    const handleImportAudioFromMenu = useCallback(async () => {
++        try {
++            const res = (await dispatch(importAudioFromDialog()).unwrap()) as {
++                canceled?: boolean;
++                requiresModeChoice?: boolean;
++                requiresStreamChoice?: boolean;
++                audioPaths?: string[];
++                mediaAudioStreams?: MediaAudioStream[];
++                path?: string;
++                trackId?: string | null;
++                startSec?: number;
++            };
++            if (res?.canceled) {
++                return;
++            }
++            if (res?.requiresStreamChoice && res.path) {
++                setMediaStreamImport({
++                    path: res.path,
++                    streams: res.mediaAudioStreams ?? [],
++                    trackId: res.trackId ?? s.selectedTrackId ?? null,
++                    startSec:
++                        typeof res.startSec === "number" ? res.startSec : (s.playheadSec ?? 0),
++                });
++                return;
++            }
++            if (!res?.requiresModeChoice) {
++                return;
++            }
++            if (!Array.isArray(res.audioPaths) || res.audioPaths.length <= 1) {
++                return;
++            }
++            setMenuImportMode({
++                audioPaths: res.audioPaths,
++                trackId: res.trackId ?? s.selectedTrackId ?? null,
++                startSec: typeof res.startSec === "number" ? res.startSec : (s.playheadSec ?? 0),
++            });
++        } catch {
++            // Error state is already handled by session thunk reducers.
++        }
++    }, [dispatch, s.playheadSec, s.selectedTrackId]);
++
++    const handleImportMidiFromMenu = useCallback(() => {
++        onImportMidiFromMenu();
++    }, [onImportMidiFromMenu]);
++
++    // 快捷键「导入媒体文件」→ 复用文件菜单的导入流程（多文件/多音轨选择）。
++    useEffect(() => {
++        const handler = () => {
++            void handleImportAudioFromMenu();
++        };
++        window.addEventListener("hifi:importMediaFromMenu", handler);
++        return () => window.removeEventListener("hifi:importMediaFromMenu", handler);
++    }, [handleImportAudioFromMenu]);
++
++    return (
++        <Flex
++            align="center"
++            className="h-8 bg-qt-panel border-b border-qt-border px-1 select-none z-50 flex-nowrap gap-1 overflow-x-auto overflow-y-hidden min-w-0 custom-scrollbar"
++        >
++            {/**
++             * Note: @radix-ui/themes DropdownMenu.Trigger does not support asChild.
++             * Use Trigger as the actual button element to avoid nesting <button>.
++             */}
++            {/* File Menu */}
++            <DropdownMenu.Root>
++                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
++                    <span>{t("menu_file")}</span>
++                </DropdownMenu.Trigger>
++                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
++                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
++                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
++                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
++                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
++                <DropdownMenu.Content
++                    align={menuAlign}
++                    alignOffset={-8}
++                    collisionPadding={8}
++                    sticky="always"
++                    variant="soft"
++                    color="gray"
++                    avoidCollisions={false}
++                    style={{
++                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
++                    }}
++                >
++                    {/* E1：工程设置（用户口径：放在**菜单栏-文件**的选项中）。 */}
++                    <DropdownMenu.Item
++                        data-hs-menu-project-settings
++                        onSelect={() => setProjectSettingsOpen(true)}
++                    >
++                        {t("menu_project_settings")}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    <DropdownMenu.Item onSelect={onNewProject}>
++                        {t("menu_new_project")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("project.new")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item onSelect={onOpenProject}>
++                        {t("menu_open_project")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("project.open")}
++                        </div>
++                    </DropdownMenu.Item>
++
++                    <DropdownMenu.Sub>
++                        <DropdownMenu.SubTrigger>
++                            {t("menu_recent_projects")}
++                        </DropdownMenu.SubTrigger>
++                        <DropdownMenu.SubContent collisionPadding={8} sticky="always">
++                            {s.project.recent.length ? (
++                                s.project.recent.slice(0, 12).map((p) => (
++                                    <DropdownMenu.Item
++                                        key={p}
++                                        onSelect={() => onOpenRecentProject(p)}
++                                    >
++                                        {p}
++                                    </DropdownMenu.Item>
++                                ))
++                            ) : (
++                                <DropdownMenu.Item disabled>
++                                    {t("menu_recent_empty")}
++                                </DropdownMenu.Item>
++                            )}
++                        </DropdownMenu.SubContent>
++                    </DropdownMenu.Sub>
++
++                    <DropdownMenu.Item onSelect={onRecaptureMissingMedia}>
++                        {t("menu_recapture_missing_media")}
++                    </DropdownMenu.Item>
++
++                    <DropdownMenu.Separator />
++
++                    <DropdownMenu.Item onSelect={() => void dispatch(saveProjectRemote())}>
++                        {t("menu_save_project")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("project.save")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item onSelect={() => void dispatch(saveProjectAsRemote())}>
++                        {t("menu_save_project_as")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("project.saveAs")}
++                        </div>
++                    </DropdownMenu.Item>
++
++                    <DropdownMenu.Separator />
++
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            void handleImportAudioFromMenu();
++                        }}
++                    >
++                        {t("menu_import_media")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("project.importMedia")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            void handleImportMidiFromMenu();
++                        }}
++                    >
++                        {t("menu_import_midi")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("project.importMidi")}
++                        </div>
++                    </DropdownMenu.Item>
++                    {/* 导入外部工程（HiFiShifter / Reaper / VocalShifter）*/}
++                    <DropdownMenu.Sub>
++                        <DropdownMenu.SubTrigger>
++                            {tAny("menu_import_external_project")}
++                        </DropdownMenu.SubTrigger>
++                        <DropdownMenu.SubContent collisionPadding={8} sticky="always">
++                            <DropdownMenu.Item onSelect={onImportProject}>
++                                {t("menu_import_hifishifter")}
++                                <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                                    {shortcutLabel("project.importHifishifter")}
++                                </div>
++                            </DropdownMenu.Item>
++                            <DropdownMenu.Item
++                                onSelect={() => void dispatch(openReaperFromDialog())}
++                            >
++                                {t("menu_import_reaper")}
++                                <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                                    {shortcutLabel("project.importReaper")}
++                                </div>
++                            </DropdownMenu.Item>
++                            <DropdownMenu.Item
++                                onSelect={() => void dispatch(openVocalShifterFromDialog())}
++                            >
++                                {t("menu_import_vocalshifter")}
++                                <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                                    {shortcutLabel("project.importVocalShifter")}
++                                </div>
++                            </DropdownMenu.Item>
++                        </DropdownMenu.SubContent>
++                    </DropdownMenu.Sub>
++                    <DropdownMenu.Item onSelect={() => setExportDialogOpen(true)}>
++                        {t("menu_export_audio")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("project.export")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    <DropdownMenu.Item onSelect={() => setAutoBackupDialogOpen(true)}>
++                        {tAny("menu_auto_backup")}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item onSelect={() => setRecordingDialogOpen(true)}>
++                        {tAny("menu_recording_settings")}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    <DropdownMenu.Item onSelect={onExit} color="red">
++                        {t("menu_exit")}
++                    </DropdownMenu.Item>
++                </DropdownMenu.Content>
++            </DropdownMenu.Root>
++
++            {/* Edit Menu */}
++            <DropdownMenu.Root>
++                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
++                    <span>{t("menu_edit")}</span>
++                </DropdownMenu.Trigger>
++                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
++                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
++                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
++                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
++                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
++                <DropdownMenu.Content
++                    align={menuAlign}
++                    alignOffset={-8}
++                    collisionPadding={8}
++                    sticky="always"
++                    variant="soft"
++                    color="gray"
++                    avoidCollisions={false}
++                    style={{
++                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
++                    }}
++                >
++                    {/* 无可撤销/可重做状态时置灰（不发请求、不刷新界面）：
++                        深度镜像由后端 history_state 广播实时维护。 */}
++                    <DropdownMenu.Item
++                        disabled={s.historyUndoDepth <= 0}
++                        onSelect={() => void dispatch(undoRemote())}
++                    >
++                        {t("menu_undo")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("edit.undo")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        disabled={s.historyRedoDepth <= 0}
++                        onSelect={() => void dispatch(redoRemote())}
++                    >
++                        {t("menu_redo")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("edit.redo")}
++                        </div>
++                    </DropdownMenu.Item>
++                    {/* 「操作记录」窗口：非模态浮动面板（经事件交由 ActionBar 打开） */}
++                    <DropdownMenu.Item
++                        onSelect={() =>
++                            window.dispatchEvent(new CustomEvent("hifi:open-undo-history"))
++                        }
++                    >
++                        {tAny("undo_history_title")}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    {/* 剪贴板：剪切 / 复制 */}
++                    <DropdownMenu.Item onSelect={() => dispatchEditOp("cut")}>
++                        {tAny("menu_cut")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("clip.cut")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item onSelect={() => dispatchEditOp("copy")}>
++                        {tAny("menu_copy")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("pianoRoll.copy")}
++                        </div>
++                    </DropdownMenu.Item>
++                    {/* 剪贴板：粘贴 */}
++                    <DropdownMenu.Item onSelect={() => dispatchEditOp("paste")}>
++                        {tAny("menu_paste")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("pianoRoll.paste")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item onSelect={() => dispatchEditOp("pasteTracks")}>
++                        {t("menu_paste_new_tracks")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("edit.pasteTracks")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    {/* 外部剪贴板交换 */}
++                    <DropdownMenu.Item onSelect={() => dispatchEditOp("pasteVocalShifter")}>
++                        {t("menu_paste_vocalshifter_clipboard")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("edit.pasteVocalShifter")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    {/* 选择 */}
++                    <DropdownMenu.Item onSelect={() => dispatchEditOp("selectAll")}>
++                        {tAny("menu_select_all")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("edit.selectAll")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item onSelect={() => dispatchEditOp("deselect")}>
++                        {tAny("menu_deselect")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("edit.deselect")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    {/* 音频块范围 → 参数编辑器选区（批量入口）。标签直接复用
++                        快捷键设置里的动作名：菜单与设置面板共用同一份文案，
++                        避免两处翻译漂移。 */}
++                    <DropdownMenu.Item onSelect={() => dispatchEditOp("addClipsToParamSelection")}>
++                        {tAny("kb_edit_add_clips_to_param_selection")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("edit.addClipsToParamSelection")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        onSelect={() => dispatchEditOp("removeClipsFromParamSelection")}
++                    >
++                        {tAny("kb_edit_remove_clips_from_param_selection")}{" "}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("edit.removeClipsFromParamSelection")}
++                        </div>
++                    </DropdownMenu.Item>
++                </DropdownMenu.Content>
++            </DropdownMenu.Root>
++
++            {/* Track Menu */}
++            <DropdownMenu.Root>
++                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
++                    <span>{t("menu_track")}</span>
++                </DropdownMenu.Trigger>
++                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
++                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
++                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
++                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
++                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
++                <DropdownMenu.Content
++                    align={menuAlign}
++                    alignOffset={-8}
++                    collisionPadding={8}
++                    sticky="always"
++                    variant="soft"
++                    color="gray"
++                    avoidCollisions={false}
++                    style={{
++                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
++                    }}
++                >
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            // 新建轨道继承选中轨道的层级，并紧跟在选中轨道下方插入。
++                            const placement = computeInsertBelowPlacement(
++                                s.tracks,
++                                s.selectedTrackId,
++                            );
++                            dispatch(
++                                addTrackRemote({
++                                    parentTrackId: placement.parentTrackId,
++                                    index: placement.index,
++                                }),
++                            );
++                        }}
++                    >
++                        {t("track_add")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("track.add")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        disabled={!s.selectedTrackId}
++                        onSelect={() =>
++                            s.selectedTrackId && dispatch(duplicateTrackRemote(s.selectedTrackId))
++                        }
++                    >
++                        {tAny("menu_clone_selected_track")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("track.clone")}
++                        </div>
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        disabled={
++                            !s.selectedTrackId ||
++                            // 只剩最后一个根轨道时，禁止删除根轨道
++                            (s.tracks.filter((t) => !t.parentId).length <= 1 &&
++                                !s.tracks.find((t) => t.id === s.selectedTrackId)?.parentId)
++                        }
++                        onSelect={() =>
++                            s.selectedTrackId && dispatch(removeTrackRemote(s.selectedTrackId))
++                        }
++                    >
++                        {t("track_remove_selected")}
++                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
++                            {shortcutLabel("track.delete")}
++                        </div>
++                    </DropdownMenu.Item>
++                </DropdownMenu.Content>
++            </DropdownMenu.Root>
++
++            {/* View Menu */}
++            <DropdownMenu.Root>
++                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
++                    <span>{t("menu_view")}</span>
++                </DropdownMenu.Trigger>
++                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
++                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
++                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
++                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
++                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
++                <DropdownMenu.Content
++                    align={menuAlign}
++                    alignOffset={-8}
++                    collisionPadding={8}
++                    sticky="always"
++                    variant="soft"
++                    color="gray"
++                    avoidCollisions={false}
++                    style={{
++                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
++                    }}
++                >
++                    <DropdownMenu.Item onSelect={() => dispatch(refreshRuntime())}>
++                        {t("action_refresh")}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item onSelect={() => void dispatch(clearWaveformCacheRemote())}>
++                        {t("menu_clear_waveform_cache")}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleClipboardPreview());
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(s.showClipboardPreview, t("clipboard_preview"))}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleParamValuePopup());
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(s.showParamValuePopup, t("param_value_popup"))}
++                    </DropdownMenu.Item>
++                    {/* C（#17）：手机端四个面板的显隐（取代底栏页签）。
++                        勾几个就垂直分几块；`toggleMobilePanel` 保证至少留一个。 */}
++                    <DropdownMenu.Separator />
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleMobilePanel("timeline"));
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(Boolean(s.mobilePanels?.timeline), tAny("menu_view_panel_timeline"))}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleMobilePanel("params"));
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(Boolean(s.mobilePanels?.params), tAny("menu_view_panel_params"))}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleMobilePanel("files"));
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(Boolean(s.mobilePanels?.files), tAny("menu_view_panel_files"))}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleMobilePanel("notes"));
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(Boolean(s.mobilePanels?.notes), tAny("menu_view_panel_notes"))}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleTempoMapVisible());
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(s.tempoMapVisible, tAny("menu_view_tempo_map"))}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleShortcutHints());
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(s.showShortcutHints, tAny("options_show_shortcut_hints"))}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Item
++                        onSelect={() => {
++                            dispatch(toggleShowAllTakes());
++                            void dispatch(persistUiSettings());
++                        }}
++                    >
++                        {withCheck(s.showAllTakes, tAny("options_show_all_takes"))}
++                    </DropdownMenu.Item>
++                    <DropdownMenu.Separator />
++
++                    {/* Time Display */}
++                    <DropdownMenu.Sub>
++                        <DropdownMenu.SubTrigger>{tAny("time_display")}</DropdownMenu.SubTrigger>
++                        <DropdownMenu.SubContent collisionPadding={8} sticky="always">
++                            <DropdownMenu.Sub>
++                                <DropdownMenu.SubTrigger>
++                                    {tAny("time_unit_primary")}:{" "}
++                                    {tAny(timeUnitLabelKey(s.primaryTimeUnit))}
++                                </DropdownMenu.SubTrigger>
++                                <DropdownMenu.SubContent collisionPadding={8} sticky="always">
++                                    {TIME_UNITS.map((unit) => (
++                                        <DropdownMenu.Item
++                                            key={unit}
++                                            onSelect={() => {
++                                                dispatch(setPrimaryTimeUnit(unit));
++                                                void dispatch(persistUiSettings());
++                                            }}
++                                        >
++                                            {withCheck(
++                                                s.primaryTimeUnit === unit,
++                                                tAny(timeUnitLabelKey(unit)),
++                                            )}
++                                        </DropdownMenu.Item>
++                                    ))}
++                                </DropdownMenu.SubContent>
++                            </DropdownMenu.Sub>
++                            <DropdownMenu.Sub>
++                                <DropdownMenu.SubTrigger>
++                                    {tAny("time_unit_secondary")}:{" "}
++                                    {s.secondaryTimeUnit === "none"
++                                        ? tAny("time_unit_none")
++                                        : tAny(timeUnitLabelKey(s.secondaryTimeUnit as TimeUnit))}
++                                </DropdownMenu.SubTrigger>
++                                <DropdownMenu.SubContent collisionPadding={8} sticky="always">
++                                    {TIME_UNIT_CHOICES.map((unit) => (
++                                        <DropdownMenu.Item
++                                            key={unit}
++                                            onSelect={() => {
++                                                dispatch(setSecondaryTimeUnit(unit));
++                                                void dispatch(persistUiSettings());
++                                            }}
++                                        >
++                                            {withCheck(
++                                                s.secondaryTimeUnit === unit,
++                                                unit === "none"
++                                                    ? tAny("time_unit_none")
++                                                    : tAny(timeUnitLabelKey(unit as TimeUnit)),
++                                            )}
++                                        </DropdownMenu.Item>
++                                    ))}
++                                </DropdownMenu.SubContent>
++                            </DropdownMenu.Sub>
++                            <DropdownMenu.Separator />
++                            <DropdownMenu.Item onSelect={() => setTimeDisplaySettingsOpen(true)}>
++                                {tAny("timeline_display_settings")}
++                            </DropdownMenu.Item>
++                        </DropdownMenu.SubContent>
++                    </DropdownMenu.Sub>
++                    <DropdownMenu.Separator />
++                    <DropdownMenu.Sub>
++                        <DropdownMenu.SubTrigger>
++                            {`${t("theme")}: ${tAny(`theme_${theme.modeSetting}`)}`}
++                        </DropdownMenu.SubTrigger>
++                        <DropdownMenu.SubContent collisionPadding={8} sticky="always">
++                            {(["auto", "dark", "light"] as const).map((mode) => (
++                                <DropdownMenu.Item
++                                    key={mode}
++                                    onSelect={() => {
++                                        theme.applySettings({
++                                            mode,
++                                            accentColor: theme.accentColor,
++                                            grayColor: theme.grayColor,
++                                            radius: theme.radius,
++                                            fontFamily: theme.fontFamily,
++                                            activeCustomThemeId: theme.activeCustomThemeId,
++                                        });
++                                    }}
++                                >
++                                    {withCheck(theme.modeSetting === mode, tAny(`theme_${mode}`))}
++                                </DropdownMenu.Item>
++                            ))}
++                        </DropdownMenu.SubContent>
++                    </DropdownMenu.Sub>
++                    <DropdownMenu.Item onSelect={() => setAppearanceDialogOpen(true)}>
++                        {tAny("menu_appearance_settings")}
++                    </DropdownMenu.Item>
++                </DropdownMenu.Content>
++            </DropdownMenu.Root>
++
++            <DropdownMenu.Root>
++                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
++                    <span>{t("menu_options")}</span>
++                </DropdownMenu.Trigger>
++                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
++                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
++                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
++                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
++                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
++                <DropdownMenu.Content
++                    align={menuAlign}
++                    alignOffset={-8}
++                    collisionPadding={8}
++                    sticky="always"
++                    variant="soft"
++                    color="gray"
++                    avoidCollisions={false}
++                    style={{
++                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
++                    }}
++                >
++                    {/* E21：存储设置（默认存储位置 + 三种授权生效情况 + 跳转）。 */}
+                     <DropdownMenu.Item
 -                        disabled={s.historyUndoDepth <= 0}
 -                        onSelect={() => void dispatch(undoRemote())}
--                    >
++                        data-hs-menu-storage-settings
++                        onSelect={() => setStorageSettingsOpen(true)}
+                     >
 -                        {t("menu_undo")}{" "}
 -                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
 -                            {shortcutLabel("edit.undo")}
 -                        </div>
--                    </DropdownMenu.Item>
++                        {t("menu_storage_settings")}
+                     </DropdownMenu.Item>
 -                    <DropdownMenu.Item
 -                        disabled={s.historyRedoDepth <= 0}
 -                        onSelect={() => void dispatch(redoRemote())}
@@ -16927,1103 +18042,7 @@ index 0b402382..335e2a93 100644
 -        </Flex>
 -    );
 -};
-+import React, { useCallback, useEffect, useMemo, useState } from "react";
-+import { Flex, DropdownMenu } from "@radix-ui/themes";
-+import { useI18n } from "../../i18n/I18nProvider";
-+import { useAppDispatch, useAppSelector } from "../../app/hooks";
-+import { shallowEqual } from "react-redux";
-+import type { RootState } from "../../app/store";
-+import {    openReaperFromDialog,
-+    openVocalShifterFromDialog,
-+    addTrackRemote,
-+    removeTrackRemote,
-+    duplicateTrackRemote,
-+    refreshRuntime,
-+    clearWaveformCacheRemote,
-+    persistUiSettings,
-+    undoRemote,
-+    redoRemote,
-+    saveProjectRemote,
-+    saveProjectAsRemote,
-+    setDefaultHifiganMelStretch,
-+    setDefaultStretchAlgorithm,
-+    setOrtEp,
-+    setOrtDeviceId,
-+    setPrimaryTimeUnit,
-+    setSecondaryTimeUnit,
-+    toggleAutoBackgroundRender,
-+    toggleShowAllTakes,
-+    toggleSyncEditsAcrossTakes,
-+    toggleClipboardPreview,
-+    toggleParamValuePopup,
-+    toggleTempoMapVisible,
-+    toggleShortcutHints,
-+    setProjectStretchSettingsRemote,
-+    toggleMobilePanel,
-+} from "../../features/session/sessionSlice";
-+import type { TimeUnit } from "../../features/session/sessionTypes";
-+import { TIME_UNITS, TIME_UNIT_CHOICES } from "./timeline/timeFormat";
-+import { TimelineDisplaySettingsDialog } from "./TimelineDisplaySettingsDialog";
-+import { SnapGridSettingsDialog } from "./SnapGridSettingsDialog";
-+import { scaleChangesInRange, scaleLikeEquals } from "../../utils/tempoMap";
-+import type { ScaleLike } from "../../utils/musicalScales";
-+import {
-+    getPianoRollSelection,
-+    subscribePianoRollSelection,
-+} from "../../utils/pianoRollSelectionBus";
-+import { computeInsertBelowPlacement } from "../../features/session/trackUtils";
-+
-+import {
-+    importAudioAtPosition,
-+    importAudioFromDialog,
-+    importMultipleAudioAtPosition,
-+} from "../../features/session/thunks/importThunks";
-+import type { MediaAudioStream } from "../../services/api/fileBrowser";
-+import { useAppTheme } from "../../theme/AppThemeProvider";
-+import { GlobeIcon } from "@radix-ui/react-icons";
-+import {
-+    selectMergedKeybindings,
-+    formatKeybinding,
-+    isNoneBinding,
-+} from "../../features/keybindings/keybindingsSlice";
-+import type { ActionId } from "../../features/keybindings/types";
-+import {
-+    resolveCopyCutRoute,
-+    resolveEditOpRoute,
-+    resolvePasteRoute,
-+} from "../../features/keybindings/focusRouting";
-+import { getActiveSurface } from "../../features/uiFocus/focusSurface";
-+import { webApi } from "../../services/webviewApi";
-+import { KeybindingsDialog } from "./KeybindingsDialog";
-+import { AppearanceSettingsDialog } from "./AppearanceSettingsDialog";
-+import {
-+    TransposeCentsDialog,
-+    TransposeDegreesDialog,
-+    SetPitchDialog,
-+    AverageDialog,
-+    SmoothDialog,
-+    VibratoDialog,
-+    QuantizeDialog,
-+    MeanQuantizeDialog,
-+} from "../editDialogs/EditDialogs";
-+import { SCALE_LABELS } from "../../utils/musicalScales";
-+import { ExportAudioDialog } from "./ExportAudioDialog";
-+import { AutoBackupDialog } from "./AutoBackupDialog";
-+import { RecordingSettingsDialog } from "./RecordingSettingsDialog";
-+import { BenchmarkDialog } from "./BenchmarkDialog";
-+import { ModelManagerDialog } from "./ModelManagerDialog";
-+
-+/** #4：模型是否全部随包（true ⇒ 隐藏「模型管理」入口）。 */
-+const HS_MODELS_BUNDLED = true;
-+import { AboutDialog } from "./AboutDialog";
-+
-+import {
-+    isChildPitchOffsetCentsParam,
-+    isChildPitchOffsetDegreesParam,
-+} from "./pianoRoll/childPitchOffsetParams";
-+import type { AutoBackupSettings } from "../../services/api/project";
-+// import type { VibratoParams } from "../editDialogs/EditDialogs"; // 已移除无效导入
-+
-+interface MenuBarProps {
-+    onNewProject: () => void;
-+    onOpenProject: () => void;
-+    onOpenRecentProject: (projectPath: string) => void;
-+    onRecaptureMissingMedia: () => void;
-+    onExit: () => void;
-+    onImportMidiFromMenu: () => void;
-+    onImportProject: () => void;
-+    autoBackupSettings: AutoBackupSettings;
-+    onAutoBackupSettingsSaved: (settings: AutoBackupSettings) => void;
-+    autoReloadModifiedMedia: boolean;
-+    onAutoReloadModifiedMediaChange: (value: boolean) => void;
-+    /** 为新的音频块启用循环（Loop / 循环源，默认开启）。 */
-+    loopNewClips: boolean;
-+    onLoopNewClipsChange: (value: boolean) => void;
-+}
-+
-+function timeUnitLabelKey(unit: TimeUnit): string {
-+    switch (unit) {
-+        case "barBeats":
-+            return "time_unit_bar_beats";
-+        case "barDivisions":
-+            return "time_unit_bar_divisions";
-+        case "seconds":
-+            return "time_unit_seconds";
-+        case "clock":
-+            return "time_unit_clock";
-+    }
-+}
-+
-+/** MenuBar 实际消费的 session 字段子集（配合 shallowEqual 阻断播放轮询的重渲染）。
-+ *  新增消费字段时必须同步补充到这里。 */
-+const selectMenuBarSession = (state: RootState) => {
-+    const session = state.session;
-+    return {
-+        autoBackgroundRender: session.autoBackgroundRender,
-+        defaultHifiganMelStretch: session.defaultHifiganMelStretch,
-+        defaultStretchAlgorithm: session.defaultStretchAlgorithm,
-+        edgeSmoothnessPercent: session.edgeSmoothnessPercent,
-+        editParam: session.editParam,
-+        historyRedoDepth: session.historyRedoDepth,
-+        historyUndoDepth: session.historyUndoDepth,
-+        multiSelectedClipIds: session.multiSelectedClipIds,
-+        ortDeviceId: session.ortDeviceId,
-+        ortEp: session.ortEp,
-+        paramSelectionActive: session.paramSelectionActive,
-+        pitchSnapToleranceCents: session.pitchSnapToleranceCents,
-+        playheadSec: session.playheadSec,
-+        primaryTimeUnit: session.primaryTimeUnit,
-+        project: session.project,
-+        projectSec: session.projectSec,
-+        secondaryTimeUnit: session.secondaryTimeUnit,
-+        selectedClipId: session.selectedClipId,
-+        selectedTrackId: session.selectedTrackId,
-+        selectionContext: session.selectionContext,
-+        showAllTakes: session.showAllTakes,
-+        showClipboardPreview: session.showClipboardPreview,
-+        showShortcutHints: session.showShortcutHints,
-+        showParamValuePopup: session.showParamValuePopup,
-+        syncEditsAcrossTakes: session.syncEditsAcrossTakes,
-+        tempoMap: session.tempoMap,
-+        /* C（#17）：视图菜单的面板显隐勾选项需要它 */
-+        mobilePanels: session.mobilePanels,
-+        tempoMapVisible: session.tempoMapVisible,
-+        toolMode: session.toolMode,
-+        tracks: session.tracks,
-+    };
-+};
-+
-+export const MenuBar: React.FC<MenuBarProps> = ({
-+    onNewProject,
-+    onOpenProject,
-+    onOpenRecentProject,
-+    onRecaptureMissingMedia,
-+    onExit,
-+    onImportMidiFromMenu,
-+    onImportProject,
-+    autoBackupSettings,
-+    onAutoBackupSettingsSaved,
-+    autoReloadModifiedMedia,
-+    onAutoReloadModifiedMediaChange,
-+    loopNewClips,
-+    onLoopNewClipsChange,
-+}) => {
-+    const { t, setLocale } = useI18n();
-+    const tAny = t as (key: string) => string;
-+    const dispatch = useAppDispatch();
-+    // 只选取本组件实际消费的字段子集并以 shallowEqual 比较：播放期间
-+    // runtime.playbackPositionSec 每 ~33ms 变一次，整片 session 的对象引用
-+    // 随之失效，若直接订阅 state.session，全部菜单定义会以 ≥30Hz 重建。
-+    const s = useAppSelector(selectMenuBarSession, shallowEqual);
-+    const gpuBackend = useAppSelector((state: RootState) => state.session.runtime.gpuBackend);
-+    const theme = useAppTheme();
-+    const keybindings = useAppSelector(selectMergedKeybindings);
-+    const [kbDialogOpen, setKbDialogOpen] = useState(false);
-+    const [appearanceDialogOpen, setAppearanceDialogOpen] = useState(false);
-+    const [timeDisplaySettingsOpen, setTimeDisplaySettingsOpen] = useState(false);
-+    const [snapSettingsOpen, setSnapSettingsOpen] = useState(false);
-+    const [exportDialogOpen, setExportDialogOpen] = useState(false);
-+    const [autoBackupDialogOpen, setAutoBackupDialogOpen] = useState(false);
-+    const [recordingDialogOpen, setRecordingDialogOpen] = useState(false);
-+    const [benchmarkDialogOpen, setBenchmarkDialogOpen] = useState(false);
-+    const [modelManagerOpen, setModelManagerOpen] = useState(false);
-+    const [aboutDialogOpen, setAboutDialogOpen] = useState(false);
-+    const [dmlAdapters, setDmlAdapters] = useState<
-+        { deviceId: number; name: string; memoryMb: number }[]
-+    >([]);
-+
-+    // Fetch DML adapters on mount for GPU device selector
-+    useEffect(() => {
-+        import("../../services/api/core")
-+            .then(({ coreApi }) => coreApi.getDmlAdapters())
-+            .then((result) => {
-+                if (result.adapters && result.adapters.length > 0) {
-+                    setDmlAdapters(
-+                        result.adapters.map((a) => ({
-+                            deviceId: a.deviceId,
-+                            name: a.name,
-+                            memoryMb: a.dedicatedVideoMemoryMb,
-+                        })),
-+                    );
-+                }
-+            })
-+            .catch(() => {
-+                // DML adapters unavailable — device selector won't show
-+            });
-+    }, []);
-+
-+    // Edit dialog states
-+    const [transposeCentsOpen, setTransposeCentsOpen] = useState(false);
-+    const [transposeDegreesOpen, setTransposeDegreesOpen] = useState(false);
-+    const [setPitchOpen, setSetPitchOpen] = useState(false);
-+    const [averageOpen, setAverageOpen] = useState(false);
-+    const [smoothOpen, setSmoothOpen] = useState(false);
-+    const [vibratoOpen, setVibratoOpen] = useState(false);
-+    const [vibratoParamRange, setVibratoParamRange] = useState<
-+        { min: number; max: number } | undefined
-+    >(undefined);
-+    const [quantizeOpen, setQuantizeOpen] = useState(false);
-+    const [meanQuantizeOpen, setMeanQuantizeOpen] = useState(false);
-+    const [menuImportMode, setMenuImportMode] = useState<{
-+        audioPaths: string[];
-+        trackId: string | null;
-+        startSec: number;
-+    } | null>(null);
-+    const [mediaStreamImport, setMediaStreamImport] = useState<{
-+        path: string;
-+        streams: MediaAudioStream[];
-+        trackId: string | null;
-+        startSec: number;
-+    } | null>(null);
-+
-+    const isPitchParam = s.editParam === "pitch";
-+    const isChildCentsParam = isChildPitchOffsetCentsParam(s.editParam);
-+    const isChildDegreesParam = isChildPitchOffsetDegreesParam(s.editParam);
-+    const setToDefaultValue =
-+        s.editParam === "pitch"
-+            ? 60
-+            : isChildCentsParam || isChildDegreesParam
-+              ? 0
-+              : s.editParam === "volume" || s.editParam === "dyn_edit"
-+                ? 1
-+                : 0;
-+    const setToValueLabel = s.editParam === "pitch" ? tAny("dlg_midi_note") : tAny("dlg_value");
-+    const quantizeDefaultUnit = (() => {
-+        if (isChildCentsParam) return 100;
-+        if (isChildDegreesParam) return 1;
-+        switch (s.editParam) {
-+            case "volume":
-+            case "dyn_edit":
-+                return 0.05;
-+            case "formant_shift_cents":
-+                return 100;
-+            case "breath_gain":
-+            case "hifigan_tension":
-+                return 0.05;
-+            case "pan":
-+                return 0.1;
-+            case "breathiness":
-+                return 250;
-+            default:
-+                return 1;
-+        }
-+    })();
-+    const projectScaleLabel =
-+        s.project.useCustomScale && s.project.customScale
-+            ? `${tAny("project_scale_prefix")} (${tAny("custom_scale_short")})`
-+            : `${tAny("project_scale_prefix")} (${SCALE_LABELS[s.project.baseScale]})`;
-+
-+    // ── “工程音阶”选项受 Tempo Map 影响的提示 ─────────────────────────
-+    // 读取参数编辑器当前选区（帧范围）判断是否跨过音阶变化点；
-+    // 无选区时按整个工程判断（存在音阶变化点即提示）。
-+    const [selectionVersion, setSelectionVersion] = useState(0);
-+    useEffect(
-+        () =>
-+            subscribePianoRollSelection(() => {
-+                setSelectionVersion((v) => v + 1);
-+            }),
-+        [],
-+    );
-+    const tempoMapScaleHint = useMemo(() => {
-+        if (!s.tempoMap) return null;
-+        const sel = getPianoRollSelection();
-+        const startSec = sel ? (sel.startFrame * sel.framePeriodMs) / 1000 : 0;
-+        const endSec = sel
-+            ? ((sel.startFrame + Math.max(0, sel.frameCount)) * sel.framePeriodMs) / 1000
-+            : Math.max(1, s.projectSec);
-+        const projectScale: ScaleLike | null =
-+            s.project.useCustomScale && s.project.customScale
-+                ? s.project.customScale.notes
-+                : s.project.baseScale;
-+        // 仅当范围内存在“与工程音阶不同”的音阶变化（或管辖范围起点的
-+        // 变化与工程音阶不同）时才提示 —— 变化点音阶等于工程音阶时
-+        // 选区并未真正受到影响。
-+        const changes = scaleChangesInRange(s.tempoMap, startSec, endSec);
-+        if (changes.length === 0) return null;
-+        if (changes.every((c) => scaleLikeEquals(c.scale, projectScale))) {
-+            return null;
-+        }
-+        return tAny("project_scale_tempo_map_hint");
-+        // eslint-disable-next-line react-hooks/exhaustive-deps
-+    }, [s.tempoMap, s.projectSec, s.project, tAny, selectionVersion]);
-+    const projectScaleLabelWithHint = tempoMapScaleHint
-+        ? `${projectScaleLabel} ${tempoMapScaleHint}`
-+        : projectScaleLabel;
-+    const effectiveProjectStretchAlgorithm =
-+        s.project.stretchAlgorithmOverride ?? s.defaultStretchAlgorithm;
-+    const effectiveProjectHifiganMelStretch =
-+        s.project.hifiganMelStretchOverride ?? s.defaultHifiganMelStretch;
-+
-+    const stretchAlgorithmLabel = (value: "linear" | "signalsmith" | "soundtouch") => {
-+        switch (value) {
-+            case "linear":
-+                return tAny("stretch_option_linear");
-+            case "signalsmith":
-+                return tAny("stretch_option_signalsmith");
-+            case "soundtouch":
-+            default:
-+                return tAny("stretch_option_soundtouch");
-+        }
-+    };
-+
-+    const withCheck = (active: boolean, label: string) => `${active ? "●" : "○"} ${label}`;
-+
-+    const resolveScaleToken = (scaleValue: string) =>
-+        scaleValue === "__project__" ? "__project__" : scaleValue;
-+
-+    // Listen for context menu → open dialog requests
-+    useEffect(() => {
-+        const handler = (e: Event) => {
-+            const dialog = (e as CustomEvent).detail?.dialog as string;
-+            switch (dialog) {
-+                case "transposeCents":
-+                    setTransposeCentsOpen(true);
-+                    break;
-+                case "transposeDegrees":
-+                    setTransposeDegreesOpen(true);
-+                    break;
-+                case "setPitch":
-+                    setSetPitchOpen(true);
-+                    break;
-+                case "average":
-+                    setAverageOpen(true);
-+                    break;
-+                case "smooth":
-+                    setSmoothOpen(true);
-+                    break;
-+                case "addVibrato":
-+                    setVibratoParamRange((e as CustomEvent).detail?.paramRange);
-+                    setVibratoOpen(true);
-+                    break;
-+                case "quantize":
-+                    setQuantizeOpen(true);
-+                    break;
-+                case "meanQuantize":
-+                    setMeanQuantizeOpen(true);
-+                    break;
-+                case "exportAudio":
-+                    setExportDialogOpen(true);
-+                    break;
-+            }
-+        };
-+        window.addEventListener("hifi:openEditDialog", handler);
-+        return () => window.removeEventListener("hifi:openEditDialog", handler);
-+    }, []);
-+
-+    /** 获取某个操作的快捷键显示文本（"None" 绑定时返回空字符串，不显示） */
-+    /** #15：菜单水平对齐方向 —— 放得下用 start（左对齐母菜单文字），放不下用 end（靠右上角）。 */
-+    const [menuAlign, setMenuAlign] = React.useState<"start" | "end">("start");
-+
-+    /**
-+     * #15：打开菜单前把触发器的左边界写进 CSS 变量，供 `.rt-DropdownMenuContent` 算 max-width。
-+     * Radix 的 Content 渲染在 Portal 里，但 CSS 变量定义在 `:root` 上照样能继承到。
-+     */
-+    /**
-+     * #15：菜单锚点。
-+     *
-+     * ⚠️ 2026-09-24 实测教训：把 `onPointerDown={openMenuAt}` 直接挂在
-+     * `DropdownMenu.Trigger` 上**拿不到** —— Radix 对 Trigger 的指针事件有自己的一套
-+     * 处理，实测 `--hs-menu-anchor` 一直是空串（于是 max-width 没生效，Radix 仍按
-+     * 内容的自然宽度判溢出，把菜单推到 `left=4`）。
-+     * ⇒ 改用**document 捕获阶段的原生监听** + `data-hs-menu-trigger` 标记，绕开这层。
-+     */
-+    React.useEffect(() => {
-+        const onDown = (ev: Event) => {
-+            const t = (ev.target as HTMLElement | null)?.closest?.("[data-hs-menu-trigger]");
-+            if (!t) return;
-+            const r = (t as HTMLElement).getBoundingClientRect();
-+            const left = Math.max(0, r.left);
-+            document.documentElement.style.setProperty("--hs-menu-anchor", `${left}px`);
-+            /* 🔴 #42：**固定左对齐**。
-+             *
-+             * 演进史：原来是 `left + 460 > innerWidth`（桌面最宽菜单的粗估，
-+             * 注释写明"宁可估大"）⇒ **手机屏宽才 360 ⇒ 恒成立 ⇒ 每个菜单都靠右**。
-+             * 按屏宽自适应改小后**实测仍靠右**（`menuLeft=188` 贴右边）——
-+             * 真凶是 **Radix 自己的 `avoidCollisions`**：它按**内容自然宽度**判"放不下"
-+             * 就翻转，而 `--hs-menu-anchor` 的 `max-width` 是**渲染后**才压窄的，
-+             * 翻转判定发生在压窄之前 ⇒ 永远判"放不下"。
-+             *
-+             * ⇒ 既然 CSS 已保证菜单**永不溢出**（上面那条 max-width），
-+             *   就不需要 Radix 再避让 ⇒ `align="start"` + `avoidCollisions={false}`。
-+             */
-+            setMenuAlign("start");
-+        };
-+        document.addEventListener("pointerdown", onDown, true);
-+        return () => document.removeEventListener("pointerdown", onDown, true);
-+    }, []);
-+
-+    function shortcutLabel(actionId: ActionId): string {
-+        // 🔴 2026-09-24 用户口径：快捷键提示可关，**默认关**。
-+        // 这里是**唯一**的渲染入口（全文件 25 处调用都走它），所以只改这一处即可全覆盖。
-+        if (!s.showShortcutHints) return "";
-+        const kb = keybindings[actionId];
-+        if (!kb || isNoneBinding(kb)) return "";
-+        return formatKeybinding(kb, "");
-+    }
-+
-+    /**
-+     * 派发编辑操作事件：与键盘快捷键共用同一裁决（focusRouting）。
-+     * copy/cut 按"当前选中了什么"路由（resolveCopyCutRoute，双选区并存时
-+     * 按 selectionContext 仲裁）；paste 按剪贴板载荷类型路由
-+     * （last-copy-wins，resolvePasteRoute），槽位为空/外来数据时才退回活动
-+     * 表面兜底。未收录的操作（参数编辑器专有：对话框确认、pasteVocalShifter
-+     * 等）落回参数编辑器通道，与既有行为一致。
-+     */
-+    const dispatchEditOp = useCallback(
-+        (op: string, data?: Record<string, unknown>) => {
-+            if (op === "copy" || op === "cut") {
-+                const channel = resolveCopyCutRoute({
-+                    surface: getActiveSurface(),
-+                    clipSelectionActive: s.multiSelectedClipIds.length > 0 || !!s.selectedClipId,
-+                    paramSelectionActive: s.paramSelectionActive,
-+                    selectionContext: s.selectionContext,
-+                });
-+                if (channel) {
-+                    window.dispatchEvent(new CustomEvent(channel, { detail: { op, ...data } }));
-+                }
-+                return;
-+            }
-+            if (op === "paste") {
-+                void (async () => {
-+                    let kind: string | null = null;
-+                    try {
-+                        kind = (await webApi.clipboardKind()).kind ?? null;
-+                    } catch {
-+                        // 探测失败不阻塞粘贴。
-+                    }
-+                    const channel = resolvePasteRoute(kind, getActiveSurface());
-+                    if (channel) {
-+                        window.dispatchEvent(new CustomEvent(channel, { detail: { op, ...data } }));
-+                    }
-+                })();
-+                return;
-+            }
-+            const channel = resolveEditOpRoute(getActiveSurface(), op, s.toolMode) ?? "hifi:editOp";
-+            window.dispatchEvent(new CustomEvent(channel, { detail: { op, ...data } }));
-+        },
-+        [s],
-+    );
-+
-+    const handleImportAudioFromMenu = useCallback(async () => {
-+        try {
-+            const res = (await dispatch(importAudioFromDialog()).unwrap()) as {
-+                canceled?: boolean;
-+                requiresModeChoice?: boolean;
-+                requiresStreamChoice?: boolean;
-+                audioPaths?: string[];
-+                mediaAudioStreams?: MediaAudioStream[];
-+                path?: string;
-+                trackId?: string | null;
-+                startSec?: number;
-+            };
-+            if (res?.canceled) {
-+                return;
-+            }
-+            if (res?.requiresStreamChoice && res.path) {
-+                setMediaStreamImport({
-+                    path: res.path,
-+                    streams: res.mediaAudioStreams ?? [],
-+                    trackId: res.trackId ?? s.selectedTrackId ?? null,
-+                    startSec:
-+                        typeof res.startSec === "number" ? res.startSec : (s.playheadSec ?? 0),
-+                });
-+                return;
-+            }
-+            if (!res?.requiresModeChoice) {
-+                return;
-+            }
-+            if (!Array.isArray(res.audioPaths) || res.audioPaths.length <= 1) {
-+                return;
-+            }
-+            setMenuImportMode({
-+                audioPaths: res.audioPaths,
-+                trackId: res.trackId ?? s.selectedTrackId ?? null,
-+                startSec: typeof res.startSec === "number" ? res.startSec : (s.playheadSec ?? 0),
-+            });
-+        } catch {
-+            // Error state is already handled by session thunk reducers.
-+        }
-+    }, [dispatch, s.playheadSec, s.selectedTrackId]);
-+
-+    const handleImportMidiFromMenu = useCallback(() => {
-+        onImportMidiFromMenu();
-+    }, [onImportMidiFromMenu]);
-+
-+    // 快捷键「导入媒体文件」→ 复用文件菜单的导入流程（多文件/多音轨选择）。
-+    useEffect(() => {
-+        const handler = () => {
-+            void handleImportAudioFromMenu();
-+        };
-+        window.addEventListener("hifi:importMediaFromMenu", handler);
-+        return () => window.removeEventListener("hifi:importMediaFromMenu", handler);
-+    }, [handleImportAudioFromMenu]);
-+
-+    return (
-+        <Flex
-+            align="center"
-+            className="h-8 bg-qt-panel border-b border-qt-border px-1 select-none z-50 flex-nowrap gap-1 overflow-x-auto overflow-y-hidden min-w-0 custom-scrollbar"
-+        >
-+            {/**
-+             * Note: @radix-ui/themes DropdownMenu.Trigger does not support asChild.
-+             * Use Trigger as the actual button element to avoid nesting <button>.
-+             */}
-+            {/* File Menu */}
-+            <DropdownMenu.Root>
-+                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
-+                    <span>{t("menu_file")}</span>
-+                </DropdownMenu.Trigger>
-+                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
-+                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
-+                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
-+                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
-+                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
-+                <DropdownMenu.Content
-+                    align={menuAlign}
-+                    alignOffset={-8}
-+                    collisionPadding={8}
-+                    sticky="always"
-+                    variant="soft"
-+                    color="gray"
-+                    avoidCollisions={false}
-+                    style={{
-+                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
-+                    }}
-+                >
-+                    <DropdownMenu.Item onSelect={onNewProject}>
-+                        {t("menu_new_project")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("project.new")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item onSelect={onOpenProject}>
-+                        {t("menu_open_project")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("project.open")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+
-+                    <DropdownMenu.Sub>
-+                        <DropdownMenu.SubTrigger>
-+                            {t("menu_recent_projects")}
-+                        </DropdownMenu.SubTrigger>
-+                        <DropdownMenu.SubContent collisionPadding={8} sticky="always">
-+                            {s.project.recent.length ? (
-+                                s.project.recent.slice(0, 12).map((p) => (
-+                                    <DropdownMenu.Item
-+                                        key={p}
-+                                        onSelect={() => onOpenRecentProject(p)}
-+                                    >
-+                                        {p}
-+                                    </DropdownMenu.Item>
-+                                ))
-+                            ) : (
-+                                <DropdownMenu.Item disabled>
-+                                    {t("menu_recent_empty")}
-+                                </DropdownMenu.Item>
-+                            )}
-+                        </DropdownMenu.SubContent>
-+                    </DropdownMenu.Sub>
-+
-+                    <DropdownMenu.Item onSelect={onRecaptureMissingMedia}>
-+                        {t("menu_recapture_missing_media")}
-+                    </DropdownMenu.Item>
-+
 +                    <DropdownMenu.Separator />
-+
-+                    <DropdownMenu.Item onSelect={() => void dispatch(saveProjectRemote())}>
-+                        {t("menu_save_project")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("project.save")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item onSelect={() => void dispatch(saveProjectAsRemote())}>
-+                        {t("menu_save_project_as")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("project.saveAs")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+
-+                    <DropdownMenu.Separator />
-+
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            void handleImportAudioFromMenu();
-+                        }}
-+                    >
-+                        {t("menu_import_media")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("project.importMedia")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            void handleImportMidiFromMenu();
-+                        }}
-+                    >
-+                        {t("menu_import_midi")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("project.importMidi")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    {/* 导入外部工程（HiFiShifter / Reaper / VocalShifter）*/}
-+                    <DropdownMenu.Sub>
-+                        <DropdownMenu.SubTrigger>
-+                            {tAny("menu_import_external_project")}
-+                        </DropdownMenu.SubTrigger>
-+                        <DropdownMenu.SubContent collisionPadding={8} sticky="always">
-+                            <DropdownMenu.Item onSelect={onImportProject}>
-+                                {t("menu_import_hifishifter")}
-+                                <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                                    {shortcutLabel("project.importHifishifter")}
-+                                </div>
-+                            </DropdownMenu.Item>
-+                            <DropdownMenu.Item
-+                                onSelect={() => void dispatch(openReaperFromDialog())}
-+                            >
-+                                {t("menu_import_reaper")}
-+                                <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                                    {shortcutLabel("project.importReaper")}
-+                                </div>
-+                            </DropdownMenu.Item>
-+                            <DropdownMenu.Item
-+                                onSelect={() => void dispatch(openVocalShifterFromDialog())}
-+                            >
-+                                {t("menu_import_vocalshifter")}
-+                                <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                                    {shortcutLabel("project.importVocalShifter")}
-+                                </div>
-+                            </DropdownMenu.Item>
-+                        </DropdownMenu.SubContent>
-+                    </DropdownMenu.Sub>
-+                    <DropdownMenu.Item onSelect={() => setExportDialogOpen(true)}>
-+                        {t("menu_export_audio")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("project.export")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+                    <DropdownMenu.Item onSelect={() => setAutoBackupDialogOpen(true)}>
-+                        {tAny("menu_auto_backup")}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item onSelect={() => setRecordingDialogOpen(true)}>
-+                        {tAny("menu_recording_settings")}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+                    <DropdownMenu.Item onSelect={onExit} color="red">
-+                        {t("menu_exit")}
-+                    </DropdownMenu.Item>
-+                </DropdownMenu.Content>
-+            </DropdownMenu.Root>
-+
-+            {/* Edit Menu */}
-+            <DropdownMenu.Root>
-+                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
-+                    <span>{t("menu_edit")}</span>
-+                </DropdownMenu.Trigger>
-+                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
-+                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
-+                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
-+                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
-+                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
-+                <DropdownMenu.Content
-+                    align={menuAlign}
-+                    alignOffset={-8}
-+                    collisionPadding={8}
-+                    sticky="always"
-+                    variant="soft"
-+                    color="gray"
-+                    avoidCollisions={false}
-+                    style={{
-+                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
-+                    }}
-+                >
-+                    {/* 无可撤销/可重做状态时置灰（不发请求、不刷新界面）：
-+                        深度镜像由后端 history_state 广播实时维护。 */}
-+                    <DropdownMenu.Item
-+                        disabled={s.historyUndoDepth <= 0}
-+                        onSelect={() => void dispatch(undoRemote())}
-+                    >
-+                        {t("menu_undo")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("edit.undo")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        disabled={s.historyRedoDepth <= 0}
-+                        onSelect={() => void dispatch(redoRemote())}
-+                    >
-+                        {t("menu_redo")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("edit.redo")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    {/* 「操作记录」窗口：非模态浮动面板（经事件交由 ActionBar 打开） */}
-+                    <DropdownMenu.Item
-+                        onSelect={() =>
-+                            window.dispatchEvent(new CustomEvent("hifi:open-undo-history"))
-+                        }
-+                    >
-+                        {tAny("undo_history_title")}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+                    {/* 剪贴板：剪切 / 复制 */}
-+                    <DropdownMenu.Item onSelect={() => dispatchEditOp("cut")}>
-+                        {tAny("menu_cut")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("clip.cut")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item onSelect={() => dispatchEditOp("copy")}>
-+                        {tAny("menu_copy")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("pianoRoll.copy")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    {/* 剪贴板：粘贴 */}
-+                    <DropdownMenu.Item onSelect={() => dispatchEditOp("paste")}>
-+                        {tAny("menu_paste")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("pianoRoll.paste")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item onSelect={() => dispatchEditOp("pasteTracks")}>
-+                        {t("menu_paste_new_tracks")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("edit.pasteTracks")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+                    {/* 外部剪贴板交换 */}
-+                    <DropdownMenu.Item onSelect={() => dispatchEditOp("pasteVocalShifter")}>
-+                        {t("menu_paste_vocalshifter_clipboard")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("edit.pasteVocalShifter")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+                    {/* 选择 */}
-+                    <DropdownMenu.Item onSelect={() => dispatchEditOp("selectAll")}>
-+                        {tAny("menu_select_all")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("edit.selectAll")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item onSelect={() => dispatchEditOp("deselect")}>
-+                        {tAny("menu_deselect")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("edit.deselect")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+                    {/* 音频块范围 → 参数编辑器选区（批量入口）。标签直接复用
-+                        快捷键设置里的动作名：菜单与设置面板共用同一份文案，
-+                        避免两处翻译漂移。 */}
-+                    <DropdownMenu.Item onSelect={() => dispatchEditOp("addClipsToParamSelection")}>
-+                        {tAny("kb_edit_add_clips_to_param_selection")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("edit.addClipsToParamSelection")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        onSelect={() => dispatchEditOp("removeClipsFromParamSelection")}
-+                    >
-+                        {tAny("kb_edit_remove_clips_from_param_selection")}{" "}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("edit.removeClipsFromParamSelection")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                </DropdownMenu.Content>
-+            </DropdownMenu.Root>
-+
-+            {/* Track Menu */}
-+            <DropdownMenu.Root>
-+                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
-+                    <span>{t("menu_track")}</span>
-+                </DropdownMenu.Trigger>
-+                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
-+                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
-+                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
-+                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
-+                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
-+                <DropdownMenu.Content
-+                    align={menuAlign}
-+                    alignOffset={-8}
-+                    collisionPadding={8}
-+                    sticky="always"
-+                    variant="soft"
-+                    color="gray"
-+                    avoidCollisions={false}
-+                    style={{
-+                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
-+                    }}
-+                >
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            // 新建轨道继承选中轨道的层级，并紧跟在选中轨道下方插入。
-+                            const placement = computeInsertBelowPlacement(
-+                                s.tracks,
-+                                s.selectedTrackId,
-+                            );
-+                            dispatch(
-+                                addTrackRemote({
-+                                    parentTrackId: placement.parentTrackId,
-+                                    index: placement.index,
-+                                }),
-+                            );
-+                        }}
-+                    >
-+                        {t("track_add")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("track.add")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        disabled={!s.selectedTrackId}
-+                        onSelect={() =>
-+                            s.selectedTrackId && dispatch(duplicateTrackRemote(s.selectedTrackId))
-+                        }
-+                    >
-+                        {tAny("menu_clone_selected_track")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("track.clone")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        disabled={
-+                            !s.selectedTrackId ||
-+                            // 只剩最后一个根轨道时，禁止删除根轨道
-+                            (s.tracks.filter((t) => !t.parentId).length <= 1 &&
-+                                !s.tracks.find((t) => t.id === s.selectedTrackId)?.parentId)
-+                        }
-+                        onSelect={() =>
-+                            s.selectedTrackId && dispatch(removeTrackRemote(s.selectedTrackId))
-+                        }
-+                    >
-+                        {t("track_remove_selected")}
-+                        <div className="ml-auto pl-4 text-xs text-qt-text-muted">
-+                            {shortcutLabel("track.delete")}
-+                        </div>
-+                    </DropdownMenu.Item>
-+                </DropdownMenu.Content>
-+            </DropdownMenu.Root>
-+
-+            {/* View Menu */}
-+            <DropdownMenu.Root>
-+                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
-+                    <span>{t("menu_view")}</span>
-+                </DropdownMenu.Trigger>
-+                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
-+                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
-+                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
-+                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
-+                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
-+                <DropdownMenu.Content
-+                    align={menuAlign}
-+                    alignOffset={-8}
-+                    collisionPadding={8}
-+                    sticky="always"
-+                    variant="soft"
-+                    color="gray"
-+                    avoidCollisions={false}
-+                    style={{
-+                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
-+                    }}
-+                >
-+                    <DropdownMenu.Item onSelect={() => dispatch(refreshRuntime())}>
-+                        {t("action_refresh")}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item onSelect={() => void dispatch(clearWaveformCacheRemote())}>
-+                        {t("menu_clear_waveform_cache")}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleClipboardPreview());
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(s.showClipboardPreview, t("clipboard_preview"))}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleParamValuePopup());
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(s.showParamValuePopup, t("param_value_popup"))}
-+                    </DropdownMenu.Item>
-+                    {/* C（#17）：手机端四个面板的显隐（取代底栏页签）。
-+                        勾几个就垂直分几块；`toggleMobilePanel` 保证至少留一个。 */}
-+                    <DropdownMenu.Separator />
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleMobilePanel("timeline"));
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(Boolean(s.mobilePanels?.timeline), tAny("menu_view_panel_timeline"))}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleMobilePanel("params"));
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(Boolean(s.mobilePanels?.params), tAny("menu_view_panel_params"))}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleMobilePanel("files"));
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(Boolean(s.mobilePanels?.files), tAny("menu_view_panel_files"))}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleMobilePanel("notes"));
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(Boolean(s.mobilePanels?.notes), tAny("menu_view_panel_notes"))}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleTempoMapVisible());
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(s.tempoMapVisible, tAny("menu_view_tempo_map"))}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleShortcutHints());
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(s.showShortcutHints, tAny("options_show_shortcut_hints"))}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Item
-+                        onSelect={() => {
-+                            dispatch(toggleShowAllTakes());
-+                            void dispatch(persistUiSettings());
-+                        }}
-+                    >
-+                        {withCheck(s.showAllTakes, tAny("options_show_all_takes"))}
-+                    </DropdownMenu.Item>
-+                    <DropdownMenu.Separator />
-+
-+                    {/* Time Display */}
-+                    <DropdownMenu.Sub>
-+                        <DropdownMenu.SubTrigger>{tAny("time_display")}</DropdownMenu.SubTrigger>
-+                        <DropdownMenu.SubContent collisionPadding={8} sticky="always">
-+                            <DropdownMenu.Sub>
-+                                <DropdownMenu.SubTrigger>
-+                                    {tAny("time_unit_primary")}:{" "}
-+                                    {tAny(timeUnitLabelKey(s.primaryTimeUnit))}
-+                                </DropdownMenu.SubTrigger>
-+                                <DropdownMenu.SubContent collisionPadding={8} sticky="always">
-+                                    {TIME_UNITS.map((unit) => (
-+                                        <DropdownMenu.Item
-+                                            key={unit}
-+                                            onSelect={() => {
-+                                                dispatch(setPrimaryTimeUnit(unit));
-+                                                void dispatch(persistUiSettings());
-+                                            }}
-+                                        >
-+                                            {withCheck(
-+                                                s.primaryTimeUnit === unit,
-+                                                tAny(timeUnitLabelKey(unit)),
-+                                            )}
-+                                        </DropdownMenu.Item>
-+                                    ))}
-+                                </DropdownMenu.SubContent>
-+                            </DropdownMenu.Sub>
-+                            <DropdownMenu.Sub>
-+                                <DropdownMenu.SubTrigger>
-+                                    {tAny("time_unit_secondary")}:{" "}
-+                                    {s.secondaryTimeUnit === "none"
-+                                        ? tAny("time_unit_none")
-+                                        : tAny(timeUnitLabelKey(s.secondaryTimeUnit as TimeUnit))}
-+                                </DropdownMenu.SubTrigger>
-+                                <DropdownMenu.SubContent collisionPadding={8} sticky="always">
-+                                    {TIME_UNIT_CHOICES.map((unit) => (
-+                                        <DropdownMenu.Item
-+                                            key={unit}
-+                                            onSelect={() => {
-+                                                dispatch(setSecondaryTimeUnit(unit));
-+                                                void dispatch(persistUiSettings());
-+                                            }}
-+                                        >
-+                                            {withCheck(
-+                                                s.secondaryTimeUnit === unit,
-+                                                unit === "none"
-+                                                    ? tAny("time_unit_none")
-+                                                    : tAny(timeUnitLabelKey(unit as TimeUnit)),
-+                                            )}
-+                                        </DropdownMenu.Item>
-+                                    ))}
-+                                </DropdownMenu.SubContent>
-+                            </DropdownMenu.Sub>
-+                            <DropdownMenu.Separator />
-+                            <DropdownMenu.Item onSelect={() => setTimeDisplaySettingsOpen(true)}>
-+                                {tAny("timeline_display_settings")}
-+                            </DropdownMenu.Item>
-+                        </DropdownMenu.SubContent>
-+                    </DropdownMenu.Sub>
-+                    <DropdownMenu.Separator />
-+                    <DropdownMenu.Sub>
-+                        <DropdownMenu.SubTrigger>
-+                            {`${t("theme")}: ${tAny(`theme_${theme.modeSetting}`)}`}
-+                        </DropdownMenu.SubTrigger>
-+                        <DropdownMenu.SubContent collisionPadding={8} sticky="always">
-+                            {(["auto", "dark", "light"] as const).map((mode) => (
-+                                <DropdownMenu.Item
-+                                    key={mode}
-+                                    onSelect={() => {
-+                                        theme.applySettings({
-+                                            mode,
-+                                            accentColor: theme.accentColor,
-+                                            grayColor: theme.grayColor,
-+                                            radius: theme.radius,
-+                                            fontFamily: theme.fontFamily,
-+                                            activeCustomThemeId: theme.activeCustomThemeId,
-+                                        });
-+                                    }}
-+                                >
-+                                    {withCheck(theme.modeSetting === mode, tAny(`theme_${mode}`))}
-+                                </DropdownMenu.Item>
-+                            ))}
-+                        </DropdownMenu.SubContent>
-+                    </DropdownMenu.Sub>
-+                    <DropdownMenu.Item onSelect={() => setAppearanceDialogOpen(true)}>
-+                        {tAny("menu_appearance_settings")}
-+                    </DropdownMenu.Item>
-+                </DropdownMenu.Content>
-+            </DropdownMenu.Root>
-+
-+            <DropdownMenu.Root>
-+                <DropdownMenu.Trigger data-hs-menu-trigger className="shrink-0 rounded px-2 py-1 text-xs text-qt-text hover:bg-qt-highlight hover:text-white">
-+                    <span>{t("menu_options")}</span>
-+                </DropdownMenu.Trigger>
-+                {/* #42：**宽度必须写成内联 style** —— Radix 的碰撞检测在 CSS 生效
-+                        之前、按元素**自然宽度**判"放不下"：菜单约 320px、母菜单在 x≈96
-+                        ⇒ 96+320 > 360 判溢出 ⇒ 面板被推到右贴边；等 CSS 的 max-width
-+                        压窄时定位已定完。内联样式**在测量之前**就在元素上 ⇒ 量到的就是
-+                        窄宽度 ⇒ 不再推。式子与 CSS 里那条保持一致。 */}
-+                <DropdownMenu.Content
-+                    align={menuAlign}
-+                    alignOffset={-8}
-+                    collisionPadding={8}
-+                    sticky="always"
-+                    variant="soft"
-+                    color="gray"
-+                    avoidCollisions={false}
-+                    style={{
-+                        maxWidth: "calc(100vw - var(--hs-menu-anchor, 0px) - 8px)",
-+                    }}
-+                >
 +                    <DropdownMenu.Sub>
 +                        <DropdownMenu.SubTrigger>
 +                            {tAny("stretch_project_override")}
@@ -18429,6 +18448,8 @@ index 0b402382..335e2a93 100644
 +            <KeybindingsDialog open={kbDialogOpen} onOpenChange={setKbDialogOpen} />
 +
 +            {/* 外观设置对话框 */}
++            <ProjectSettingsDialog open={projectSettingsOpen} onOpenChange={setProjectSettingsOpen} />
++            <StorageSettingsDialog open={storageSettingsOpen} onOpenChange={setStorageSettingsOpen} />
 +            <AppearanceSettingsDialog
 +                open={appearanceDialogOpen}
 +                onOpenChange={setAppearanceDialogOpen}
@@ -34238,6 +34259,348 @@ index 613ea89d..91fbcd9a 100644
 +        </Flex>
 +    );
 +};
+diff --git a/frontend/src/components/layout/ProjectSettingsDialog.tsx b/frontend/src/components/layout/ProjectSettingsDialog.tsx
+new file mode 100644
+index 00000000..73752e53
+--- /dev/null
++++ b/frontend/src/components/layout/ProjectSettingsDialog.tsx
+@@ -0,0 +1,143 @@
++/**
++ * ProjectSettingsDialog —— E1：「菜单栏-文件 → 工程设置…」。
++ *
++ * 用户口径（TASKS.md E1）：「加入**工程设置界面**，放在菜单栏-文件的选项中」。
++ *
++ * ⚠️ 实现上**刻意只用 `Dialog` + `Text` + `Button`**（不引入 Select/Switch 等受控控件）：
++ *    第一版用了 `useAppSelector` 返回新对象而没带 `shallowEqual` ⇒ 点开即无限重渲、
++ *    页面卡死（CDP 求值全超时）。此外 radix 的 Dialog/Select **不透传 `data-*`**，
++ *    用属性做验收也不可靠。现在的形态：**读出当前工程设置并展示**，
++ *    修改通过按钮走**已有的**后端命令（`setProjectTimelineSettings`），
++ *    数据只在按钮回调里更新 ⇒ 没有重渲循环的土壤。
++ *
++ * 展示项：工程名 / 工程路径（只读；改名走「另存为」—— 工程名即文件名，上游口径）、
++ *        基础音阶、拍号（每小节拍数 / 分母）、网格、保存撤销历史。
++ */
++import React from "react";
++import { Button, Dialog, Flex, Text } from "@radix-ui/themes";
++import { shallowEqual } from "react-redux";
++import { useAppSelector } from "../../app/hooks";
++import { useI18n } from "../../i18n/I18nProvider";
++import { webApi } from "../../services/webviewApi";
++
++interface Props {
++    open: boolean;
++    onOpenChange: (open: boolean) => void;
++}
++
++const GRID_SIZES = ["1/1", "1/2", "1/4", "1/8", "1/16", "1/32"] as const;
++
++export function ProjectSettingsDialog({ open, onOpenChange }: Props) {
++    const { t } = useI18n();
++    const tAny = t as (key: string) => string;
++    /* ⚠️ 复合选择器**必须**带 `shallowEqual`（默认是引用比较 ⇒ 每次 dispatch 都判"变了"
++       ⇒ 无限重渲）。这是第一版"点开即卡死"的直接原因。 */
++    const s = useAppSelector(
++        (st) => ({
++            name: st.session.project.name,
++            path: st.session.project.path,
++            baseScale: st.session.project.baseScale,
++            saveUndoHistory: st.session.project.saveUndoHistory,
++            denominator: st.session.project.timeSignatureDenominator,
++            gridSize: st.session.project.gridSize,
++            beats: st.session.beats,
++        }),
++        shallowEqual,
++    );
++    const [busy, setBusy] = React.useState(false);
++
++    const setGrid = (gridSize: string) => {
++        setBusy(true);
++        void (webApi.setProjectTimelineSettings(
++            Math.max(1, Math.round(s.beats || 4)),
++            s.denominator || 4,
++            gridSize,
++        ) as Promise<unknown>).finally(() => setBusy(false));
++    };
++    const setBeats = (beats: number) => {
++        setBusy(true);
++        void (webApi.setProjectTimelineSettings(
++            beats,
++            s.denominator || 4,
++            s.gridSize || "1/4",
++        ) as Promise<unknown>).finally(() => setBusy(false));
++    };
++
++    const infoRow = (label: string, value: string) => (
++        <Flex align="center" justify="between" gap="3">
++            <Text size="2" color="gray">
++                {label}
++            </Text>
++            <Text size="2" style={{ wordBreak: "break-all", textAlign: "right" }}>
++                {value}
++            </Text>
++        </Flex>
++    );
++
++    return (
++        <Dialog.Root open={open} onOpenChange={onOpenChange}>
++            <Dialog.Content maxWidth="480px">
++                <Dialog.Title>{tAny("menu_project_settings")}</Dialog.Title>
++                <Dialog.Description size="2" color="gray">
++                    {tAny("project_settings_desc")}
++                </Dialog.Description>
++
++                <Flex direction="column" gap="2" mt="3">
++                    {infoRow(tAny("project_name_label"), s.name || "Untitled")}
++                    {infoRow(tAny("project_path_label"), s.path ?? tAny("project_unsaved_hint"))}
++                    {infoRow(tAny("base_scale"), s.baseScale || "C")}
++                    {infoRow(tAny("beats_per_bar"), String(Math.max(1, Math.round(s.beats || 4))))}
++                    {infoRow(tAny("time_signature_denominator"), String(s.denominator || 4))}
++                    {infoRow(tAny("grid_size"), s.gridSize || "1/4")}
++                    {infoRow(
++                        tAny("save_undo_history"),
++                        s.saveUndoHistory ? tAny("storage_state_on") : tAny("storage_state_off"),
++                    )}
++                </Flex>
++
++                <Flex direction="column" gap="1" mt="3">
++                    <Text size="2" weight="bold">
++                        {tAny("grid_size")}
++                    </Text>
++                    <Flex gap="1" wrap="wrap">
++                        {GRID_SIZES.map((g) => (
++                            <Button
++                                key={g}
++                                size="1"
++                                variant={s.gridSize === g ? "solid" : "soft"}
++                                disabled={busy}
++                                onClick={() => setGrid(g)}
++                            >
++                                {g}
++                            </Button>
++                        ))}
++                    </Flex>
++                    <Text size="1" weight="bold" mt="2">
++                        {tAny("beats_per_bar")}
++                    </Text>
++                    <Flex gap="1" wrap="wrap">
++                        {[2, 3, 4, 5, 6, 7, 8, 9, 12].map((n) => (
++                            <Button
++                                key={n}
++                                size="1"
++                                variant={
++                                    Math.max(1, Math.round(s.beats || 4)) === n ? "solid" : "soft"
++                                }
++                                disabled={busy}
++                                onClick={() => setBeats(n)}
++                            >
++                                {String(n)}
++                            </Button>
++                        ))}
++                    </Flex>
++                </Flex>
++
++                <Flex justify="end" mt="4">
++                    <Button variant="soft" onClick={() => onOpenChange(false)}>
++                        {tAny("close")}
++                    </Button>
++                </Flex>
++            </Dialog.Content>
++        </Dialog.Root>
++    );
++}
+diff --git a/frontend/src/components/layout/StorageSettingsDialog.tsx b/frontend/src/components/layout/StorageSettingsDialog.tsx
+new file mode 100644
+index 00000000..7d09092d
+--- /dev/null
++++ b/frontend/src/components/layout/StorageSettingsDialog.tsx
+@@ -0,0 +1,187 @@
++/**
++ * StorageSettingsDialog —— E21：「选项 → 存储设置」。
++ *
++ * 用户口径（TASKS.md E21）：
++ *   · 默认存储目录 = `storage/emulated/0/HiFiShifter`（录音、工程等），未授权时回退 android/data；
++ *   · 这一栏要能**查看并跳转三种授权的生效情况**。
++ *
++ * ⚠️ 实现上**刻意只用 `Dialog` + `Text` + `Button`**，不引入 Select/Switch/TextField 等
++ *    受控表单控件：第一版用 `useAppSelector` 返回新对象却没带 `shallowEqual`，
++ *    点开对话框直接把页面拖进无限重渲（CDP 全部超时）。改成纯展示 + 按钮后，
++ *    数据只在 `useState` 里、只在按钮回调里更新，没有重渲循环的土壤。
++ *    自定义根目录的**输入**暂时从后端命令走（`set_storage_root`），UI 先提供"用默认"。
++ */
++import React from "react";
++import { Button, Dialog, Flex, Text } from "@radix-ui/themes";
++import { useI18n } from "../../i18n/I18nProvider";
++import { useAppDispatch } from "../../app/hooks";
++import { fileBrowserApi } from "../../services/api/fileBrowser";
++import { loadDirectory } from "../../features/fileBrowser/fileBrowserSlice";
++import { showMobilePanel } from "../../features/session/sessionSlice";
++
++interface StorageReport {
++    ok: boolean;
++    customRoot: string;
++    defaultRoot: string;
++    effectiveRoot: string;
++    fallbackRoot: string;
++    usingFallback: boolean;
++    access: { allFiles: boolean; safTree: boolean; safPrefix: string; shizuku: boolean };
++}
++
++interface Props {
++    open: boolean;
++    onOpenChange: (open: boolean) => void;
++}
++
++export function StorageSettingsDialog({ open, onOpenChange }: Props) {
++    const { t } = useI18n();
++    const tAny = t as (key: string) => string;
++    const dispatch = useAppDispatch();
++    const [report, setReport] = React.useState<StorageReport | null>(null);
++    const [busy, setBusy] = React.useState(false);
++
++    const refresh = React.useCallback(async () => {
++        const r = (await fileBrowserApi
++            .storageSettingsState()
++            .catch(() => null)) as StorageReport | null;
++        setReport(r);
++    }, []);
++
++    React.useEffect(() => {
++        if (!open) return;
++        void refresh();
++    }, [open, refresh]);
++
++    /** 「跳转」= 在**应用内**文件浏览器打开该目录（不依赖各 ROM 的文件管理器 Intent）。 */
++    const openInApp = (path: string) => {
++        if (!path) return;
++        void dispatch(loadDirectory(path));
++        dispatch(showMobilePanel("files"));
++        onOpenChange(false);
++    };
++
++    const row = (label: string, ok: boolean, detail: string, actionLabel: string, action: () => void) => (
++        <Flex align="center" justify="between" gap="2" className="w-full">
++            <Flex direction="column" gap="0" className="min-w-0">
++                <Text size="2">{label}</Text>
++                <Text size="1" color="gray" style={{ wordBreak: "break-all" }}>
++                    {detail}
++                </Text>
++            </Flex>
++            <Button size="1" variant="soft" onClick={action} style={{ flexShrink: 0 }}>
++                {ok ? tAny("storage_state_on") : actionLabel}
++            </Button>
++        </Flex>
++    );
++
++    return (
++        <Dialog.Root open={open} onOpenChange={onOpenChange}>
++            <Dialog.Content maxWidth="520px">
++                <Dialog.Title>{tAny("menu_storage_settings")}</Dialog.Title>
++                <Dialog.Description size="2" color="gray">
++                    {tAny("storage_settings_desc")}
++                </Dialog.Description>
++
++                <Flex direction="column" gap="3" mt="3">
++                    <Flex direction="column" gap="1">
++                        <Text size="2" weight="bold">
++                            {tAny("storage_effective_root")}
++                        </Text>
++                        <Text size="1" style={{ wordBreak: "break-all" }}>
++                            {report?.effectiveRoot ?? "…"}
++                        </Text>
++                        {report?.usingFallback ? (
++                            <Text size="1" color="orange">
++                                {tAny("storage_using_fallback")}
++                            </Text>
++                        ) : null}
++                        <Text size="1" color="gray" style={{ wordBreak: "break-all" }}>
++                            {`${tAny("storage_default_root")}: ${report?.defaultRoot ?? ""}`}
++                        </Text>
++                        <Flex gap="2" mt="1" wrap="wrap">
++                            <Button
++                                size="1"
++                                variant="soft"
++                                disabled={!report?.effectiveRoot}
++                                onClick={() => openInApp(report?.effectiveRoot ?? "")}
++                            >
++                                {tAny("storage_open_in_browser")}
++                            </Button>
++                            <Button
++                                size="1"
++                                variant="soft"
++                                disabled={busy}
++                                onClick={() => {
++                                    setBusy(true);
++                                    void fileBrowserApi
++                                        .setStorageRoot("")
++                                        .then(() => refresh())
++                                        .finally(() => setBusy(false));
++                                }}
++                            >
++                                {tAny("storage_use_default")}
++                            </Button>
++                        </Flex>
++                    </Flex>
++
++                    <Flex direction="column" gap="2">
++                        <Text size="2" weight="bold">
++                            {tAny("storage_access_title")}
++                        </Text>
++                        {row(
++                            tAny("storage_access_all_files"),
++                            Boolean(report?.access.allFiles),
++                            tAny("storage_access_all_files_desc"),
++                            tAny("storage_go_settings"),
++                            () => {
++                                void fileBrowserApi
++                                    .openAllFilesAccessSettings()
++                                    .catch(() => null);
++                            },
++                        )}
++                        {row(
++                            tAny("storage_access_saf"),
++                            Boolean(report?.access.safTree),
++                            report?.access.safPrefix || tAny("storage_access_saf_desc"),
++                            tAny("storage_pick_dir"),
++                            () => {
++                                void fileBrowserApi
++                                    .pickDirectory()
++                                    .then(() => refresh())
++                                    .catch(() => null);
++                            },
++                        )}
++                        {row(
++                            tAny("storage_access_shizuku"),
++                            Boolean(report?.access.shizuku),
++                            tAny("storage_access_shizuku_desc"),
++                            tAny("storage_bind_shizuku"),
++                            () => {
++                                void (async () => {
++                                    await fileBrowserApi
++                                        .shizukuBindShellService()
++                                        .catch(() => null);
++                                    for (let i = 0; i < 12; i++) {
++                                        await new Promise((r) => setTimeout(r, 400));
++                                        const s = await fileBrowserApi
++                                            .shizukuShellReady()
++                                            .catch(() => null);
++                                        if (s?.ready) break;
++                                    }
++                                    await refresh();
++                                })();
++                            },
++                        )}
++                    </Flex>
++                </Flex>
++
++                <Flex justify="end" mt="4">
++                    <Button variant="soft" onClick={() => onOpenChange(false)}>
++                        {tAny("close")}
++                    </Button>
++                </Flex>
++            </Dialog.Content>
++        </Dialog.Root>
++    );
++}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
 index 242997f5..97bf6100 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
@@ -80717,10 +81080,10 @@ index 00000000..340f3078
 +}
 diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
 new file mode 100644
-index 00000000..a93791da
+index 00000000..6c97c8a5
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileTopBar.tsx
-@@ -0,0 +1,967 @@
+@@ -0,0 +1,969 @@
 +/**
 + * MobileTopBar — 触摸形态顶部**横向菜单栏**（按 PS 设计稿 ps1.png）。
 + *
@@ -81004,6 +81367,7 @@ index 00000000..a93791da
 +
 +    const menus: Record<MenuName, ReadonlyArray<MenuEntry>> = {
 +        menu_file: [
++            { sep: true, label: "" },
 +            { label: t("menu_new_project"), action: onNewProject },
 +            { label: t("menu_open_project"), action: onOpenProject },
 +            {
@@ -81277,6 +81641,7 @@ index 00000000..a93791da
 +        ],
 +        // 桌面 MenuBar 里这一项是硬编码中文（没有 i18n 键），保持一致。
 +        menu_options: [
++            { sep: true, label: "" },
 +            {
 +                label: `${tAny("stretch_project_override")}`,
 +                sub: [
@@ -95577,10 +95942,10 @@ index 59e658ed..3939ddf1 100644
          const anchorSec = state.session.playheadSec;
  
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..25c8eb49 100644
+index 858bca55..2a3da528 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
-@@ -2,6 +2,8 @@ export const enUS = {
+@@ -2,8 +2,38 @@ export const enUS = {
      menu_file: "File",
      menu_edit: "Edit",
      menu_view: "View",
@@ -95588,8 +95953,38 @@ index 858bca55..25c8eb49 100644
 +    menu_track_lower_level: "Demote Track Level",
      menu_track: "Track",
      menu_options: "Options",
++    menu_project_settings: "Project Settings…",
++    menu_storage_settings: "Storage Settings…",
++    project_settings_desc: "Project-level settings (separate from global appearance). Changes apply immediately.",
++    project_name_label: "Project name",
++    project_path_label: "Project path",
++    project_unsaved_hint: "(Unsaved — the project file path shows here after saving)",
++    storage_settings_desc: "Set the default storage location and review the three file-access grants.",
++    storage_effective_root: "Effective folder",
++    storage_using_fallback: "insufficient grants — using private folder",
++    storage_open_in_browser: "Open in file browser",
++    storage_custom_root: "Default storage location (empty = default)",
++    storage_default_root: "Default",
++    storage_save: "Save",
++    storage_use_default: "Use default",
++    storage_access_title: "File access grants",
++    storage_access_all_files: "All files access",
++    storage_access_all_files_desc: "One grant gives real-path read/write on shared storage (recommended)",
++    storage_access_saf: "SAF folder grant",
++    storage_access_saf_desc: "Per-folder grant; files inside are materialized before reading",
++    storage_access_shizuku: "Shizuku (shell identity)",
++    storage_access_shizuku_desc: "Reaches Android/data and other shell-only folders",
++    storage_state_on: "Active",
++    storage_state_off: "Inactive",
++    storage_go_settings: "Settings",
++    storage_pick_dir: "Pick folder",
++    storage_bind_shizuku: "Connect",
++    storage_error_unusable_root: "That folder is unusable (missing or not writable). Pick another.",
++    save_undo_history_desc: "Store undo history with the project (larger file, undo across sessions)",
      menu_help: "Help",
-@@ -330,6 +332,7 @@ export const enUS = {
+     menu_new_project: "New Project",
+     menu_open_project: "Open Project...",
+@@ -330,6 +360,7 @@ export const enUS = {
      panel_editor: "Editor",
      panel_timeline: "Timeline",
      panel_io: "I/O",
@@ -95597,7 +95992,7 @@ index 858bca55..25c8eb49 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1482,68 @@ export const enUS = {
+@@ -1479,4 +1510,68 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -95667,10 +96062,10 @@ index 858bca55..25c8eb49 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..44c4582b 100644
+index ef08ef81..1ecd765a 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
-@@ -2,6 +2,8 @@ export const jaJP = {
+@@ -2,8 +2,38 @@ export const jaJP = {
      menu_file: "ファイル",
      menu_edit: "編集",
      menu_view: "表示",
@@ -95678,8 +96073,38 @@ index ef08ef81..44c4582b 100644
 +    menu_track_lower_level: "階層を下げる",
      menu_track: "トラック",
      menu_options: "オプション",
++    menu_project_settings: "プロジェクト設定…",
++    menu_storage_settings: "ストレージ設定…",
++    project_settings_desc: "プロジェクト単位の設定（全体の外観設定とは別）。変更は即時反映されます。",
++    project_name_label: "プロジェクト名",
++    project_path_label: "プロジェクトのパス",
++    project_unsaved_hint: "（未保存：保存後にここへプロジェクトのパスが表示されます）",
++    storage_settings_desc: "既定の保存先を設定し、3 種類のファイルアクセス許可の状態を確認できます。",
++    storage_effective_root: "実際に有効なフォルダ",
++    storage_using_fallback: "権限不足のためプライベート領域に退避",
++    storage_open_in_browser: "ファイルブラウザで開く",
++    storage_custom_root: "既定の保存先（空欄 = 既定を使用）",
++    storage_default_root: "既定",
++    storage_save: "保存",
++    storage_use_default: "既定を使う",
++    storage_access_title: "ファイルアクセス許可",
++    storage_access_all_files: "すべてのファイルへのアクセス",
++    storage_access_all_files_desc: "1 回の許可で共有ストレージを実パスで読み書き（推奨）",
++    storage_access_saf: "SAF フォルダ許可",
++    storage_access_saf_desc: "フォルダ単位の許可。許可内のファイルは読む前に実体化されます",
++    storage_access_shizuku: "Shizuku（shell 権限）",
++    storage_access_shizuku_desc: "Android/data など shell 権限でのみ到達できる場所を読めます",
++    storage_state_on: "有効",
++    storage_state_off: "無効",
++    storage_go_settings: "設定へ",
++    storage_pick_dir: "フォルダ選択",
++    storage_bind_shizuku: "接続",
++    storage_error_unusable_root: "このフォルダは使用できません（存在しない／書き込めない）。別を選んでください。",
++    save_undo_history_desc: "プロジェクトと一緒に undo 履歴を保存（ファイルは大きくなります）",
      menu_help: "ヘルプ",
-@@ -192,6 +194,7 @@ export const jaJP = {
+     menu_new_project: "新規プロジェクト",
+     menu_open_project: "プロジェクトを開く...",
+@@ -192,6 +222,7 @@ export const jaJP = {
      panel_editor: "エディタ",
      panel_timeline: "タイムライン",
      panel_io: "入出力",
@@ -95687,7 +96112,7 @@ index ef08ef81..44c4582b 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1495,60 @@ export const jaJP = {
+@@ -1492,4 +1523,60 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -95749,10 +96174,10 @@ index ef08ef81..44c4582b 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..74cf100e 100644
+index 508fcb25..a728bbb9 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
-@@ -2,6 +2,8 @@ export const koKR = {
+@@ -2,8 +2,38 @@ export const koKR = {
      menu_file: "파일",
      menu_edit: "편집",
      menu_view: "보기",
@@ -95760,8 +96185,38 @@ index 508fcb25..74cf100e 100644
 +    menu_track_lower_level: "계층 내리기",
      menu_track: "트랙",
      menu_options: "옵션",
++    menu_project_settings: "프로젝트 설정…",
++    menu_storage_settings: "저장소 설정…",
++    project_settings_desc: "프로젝트 수준 설정(전역 모양 설정과 별개). 변경은 즉시 적용됩니다.",
++    project_name_label: "프로젝트 이름",
++    project_path_label: "프로젝트 경로",
++    project_unsaved_hint: "(저장되지 않음 — 저장하면 여기에 프로젝트 파일 경로가 표시됩니다)",
++    storage_settings_desc: "기본 저장 위치를 설정하고 세 가지 파일 접근 권한 상태를 확인합니다.",
++    storage_effective_root: "실제 적용 폴더",
++    storage_using_fallback: "권한 부족 — 비공개 폴더로 대체",
++    storage_open_in_browser: "파일 브라우저에서 열기",
++    storage_custom_root: "기본 저장 위치(비우면 기본값)",
++    storage_default_root: "기본",
++    storage_save: "저장",
++    storage_use_default: "기본값 사용",
++    storage_access_title: "파일 접근 권한",
++    storage_access_all_files: "모든 파일 접근",
++    storage_access_all_files_desc: "한 번 허용하면 공유 저장소를 실제 경로로 읽고 씁니다(권장)",
++    storage_access_saf: "SAF 폴더 권한",
++    storage_access_saf_desc: "폴더 단위 권한. 권한 내 파일은 읽기 전에 실체화됩니다",
++    storage_access_shizuku: "Shizuku(shell 권한)",
++    storage_access_shizuku_desc: "Android/data 처럼 shell 권한만 닿는 폴더를 읽을 수 있습니다",
++    storage_state_on: "적용됨",
++    storage_state_off: "미적용",
++    storage_go_settings: "설정으로",
++    storage_pick_dir: "폴더 선택",
++    storage_bind_shizuku: "연결",
++    storage_error_unusable_root: "이 폴더는 사용할 수 없습니다(없거나 쓰기 불가). 다른 곳을 선택하세요.",
++    save_undo_history_desc: "프로젝트와 함께 undo 기록 저장(파일이 커지지만 세션 간 undo 가능)",
      menu_help: "도움말",
-@@ -269,6 +271,7 @@ export const koKR = {
+     menu_new_project: "새 프로젝트",
+     menu_open_project: "프로젝트 열기...",
+@@ -269,6 +299,7 @@ export const koKR = {
      panel_editor: "에디터",
      panel_timeline: "타임라인",
      panel_io: "입출력",
@@ -95769,7 +96224,7 @@ index 508fcb25..74cf100e 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1472,60 @@ export const koKR = {
+@@ -1469,4 +1500,60 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -95831,10 +96286,10 @@ index 508fcb25..74cf100e 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..3a93d370 100644
+index 8bcc3071..5c6fddfb 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
-@@ -2,6 +2,8 @@ export const zhCN = {
+@@ -2,8 +2,38 @@ export const zhCN = {
      menu_file: "文件",
      menu_edit: "编辑",
      menu_view: "视图",
@@ -95842,8 +96297,38 @@ index 8bcc3071..3a93d370 100644
 +    menu_track_lower_level: "降低辈分",
      menu_track: "轨道",
      menu_options: "选项",
++    menu_project_settings: "工程设置…",
++    menu_storage_settings: "存储设置…",
++    project_settings_desc: "工程级设置（与全局外观设置分开）。改动即时生效。",
++    project_name_label: "工程名",
++    project_path_label: "工程路径",
++    project_unsaved_hint: "（未保存：保存后这里显示工程文件路径）",
++    storage_settings_desc: "设置默认存储位置，并查看三种文件访问授权的生效情况。",
++    storage_effective_root: "实际生效目录",
++    storage_using_fallback: "授权不足，已回退到私有目录",
++    storage_open_in_browser: "在文件浏览器中打开",
++    storage_custom_root: "默认存储位置（留空 = 用默认）",
++    storage_default_root: "默认",
++    storage_save: "保存",
++    storage_use_default: "用默认",
++    storage_access_title: "文件访问授权",
++    storage_access_all_files: "所有文件访问",
++    storage_access_all_files_desc: "一次授权即可读写共享存储的真路径（推荐）",
++    storage_access_saf: "SAF 目录授权",
++    storage_access_saf_desc: "按目录授权；授权目录内的文件读取前会自动物化",
++    storage_access_shizuku: "Shizuku（shell 身份）",
++    storage_access_shizuku_desc: "可读取 Android/data 等只有 shell 身份能碰的目录",
++    storage_state_on: "已生效",
++    storage_state_off: "未生效",
++    storage_go_settings: "去设置",
++    storage_pick_dir: "选择目录",
++    storage_bind_shizuku: "连接",
++    storage_error_unusable_root: "这个目录不可用（不存在或不可写），请换一个。",
++    save_undo_history_desc: "随工程保存撤销历史（文件更大，但可跨会话撤销）",
      menu_help: "帮助",
-@@ -182,6 +184,7 @@ export const zhCN = {
+     menu_new_project: "新建工程",
+     menu_open_project: "打开工程...",
+@@ -182,6 +212,7 @@ export const zhCN = {
      panel_editor: "编辑器",
      panel_timeline: "时间轴",
      panel_io: "输入输出",
@@ -95851,7 +96336,7 @@ index 8bcc3071..3a93d370 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1447,68 @@ export const zhCN = {
+@@ -1444,4 +1475,68 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -95921,10 +96406,10 @@ index 8bcc3071..3a93d370 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..6da39d85 100644
+index 176638e2..eb92634e 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
-@@ -3,6 +3,8 @@ export const zhTW = {
+@@ -3,8 +3,38 @@ export const zhTW = {
      menu_file: "檔案",
      menu_edit: "編輯",
      menu_view: "檢視",
@@ -95932,8 +96417,38 @@ index 176638e2..6da39d85 100644
 +    menu_track_lower_level: "降低輩分",
      menu_track: "軌道",
      menu_options: "選項",
++    menu_project_settings: "專案設定…",
++    menu_storage_settings: "儲存設定…",
++    project_settings_desc: "專案層級設定（與全域外觀設定分開）。變更即時生效。",
++    project_name_label: "專案名稱",
++    project_path_label: "專案路徑",
++    project_unsaved_hint: "（尚未儲存：儲存後這裡會顯示專案檔路徑）",
++    storage_settings_desc: "設定預設儲存位置，並檢視三種檔案存取授權的生效情況。",
++    storage_effective_root: "實際生效目錄",
++    storage_using_fallback: "授權不足，已回退到私有目錄",
++    storage_open_in_browser: "在檔案瀏覽器中開啟",
++    storage_custom_root: "預設儲存位置（留空 = 用預設）",
++    storage_default_root: "預設",
++    storage_save: "儲存",
++    storage_use_default: "用預設",
++    storage_access_title: "檔案存取授權",
++    storage_access_all_files: "所有檔案存取",
++    storage_access_all_files_desc: "一次授權即可讀寫共享儲存的真路徑（建議）",
++    storage_access_saf: "SAF 目錄授權",
++    storage_access_saf_desc: "依目錄授權；授權目錄內的檔案讀取前會自動物化",
++    storage_access_shizuku: "Shizuku（shell 身分）",
++    storage_access_shizuku_desc: "可讀取 Android/data 等只有 shell 身分能碰的目錄",
++    storage_state_on: "已生效",
++    storage_state_off: "未生效",
++    storage_go_settings: "去設定",
++    storage_pick_dir: "選擇目錄",
++    storage_bind_shizuku: "連線",
++    storage_error_unusable_root: "這個目錄不可用（不存在或不可寫），請換一個。",
++    save_undo_history_desc: "隨專案儲存復原歷史（檔案較大，但可跨工作階段復原）",
      menu_help: "說明",
-@@ -183,6 +185,7 @@ export const zhTW = {
+     menu_new_project: "新建專案",
+     menu_open_project: "開啟專案...",
+@@ -183,6 +213,7 @@ export const zhTW = {
      panel_editor: "編輯器",
      panel_timeline: "時間軸",
      panel_io: "輸入輸出",
@@ -95941,7 +96456,7 @@ index 176638e2..6da39d85 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1449,60 @@ export const zhTW = {
+@@ -1446,4 +1477,60 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -97737,7 +98252,7 @@ index cf451bd3..f8f4233b 100644
      startBackgroundRender: () =>
          invoke<{ ok: boolean; skipped?: boolean; rendering?: number }>("start_background_render"),
 diff --git a/frontend/src/services/api/fileBrowser.ts b/frontend/src/services/api/fileBrowser.ts
-index fc05dcd6..82761e0e 100644
+index fc05dcd6..c85c45c7 100644
 --- a/frontend/src/services/api/fileBrowser.ts
 +++ b/frontend/src/services/api/fileBrowser.ts
 @@ -32,9 +32,71 @@ export interface MediaAudioStream {
@@ -97812,6 +98327,31 @@ index fc05dcd6..82761e0e 100644
      searchFilesRecursive: (dirPath: string, query: string) =>
          invoke<FileEntry[]>("search_files_recursive", dirPath, query),
  
+@@ -46,6 +108,24 @@ export const fileBrowserApi = {
+     readAudioPreview: (filePath: string, maxFrames?: number) =>
+         invoke<AudioPreviewData>("read_audio_preview", filePath, maxFrames),
+ 
++    /** E21：当前存储状况（实际生效目录 + 三种授权状态）。 */
++    storageSettingsState: () =>
++        invoke<{
++            ok: boolean;
++            customRoot: string;
++            defaultRoot: string;
++            effectiveRoot: string;
++            fallbackRoot: string;
++            usingFallback: boolean;
++            access: { allFiles: boolean; safTree: boolean; safPrefix: string; shizuku: boolean };
++        }>("storage_settings_state"),
++
++    /** E21：设置默认存储位置（传空串 = 回到默认策略）。 */
++    setStorageRoot: (root: string) => invoke<{ ok: boolean; error?: string }>("set_storage_root", root),
++
++    /** E21：跳转到目录（由前端在应用内文件浏览器打开，后端只回显路径）。 */
++    openPathInFileManager: (path: string) =>
++        invoke<{ ok: boolean; path: string; inApp: boolean }>("open_path_in_file_manager", path),
+     pickDirectory: () =>
+         invoke<{ ok: boolean; canceled?: boolean; path?: string }>("pick_directory"),
+ };
 diff --git a/frontend/src/services/api/project.ts b/frontend/src/services/api/project.ts
 index c888dc37..65060800 100644
 --- a/frontend/src/services/api/project.ts
@@ -98436,7 +98976,7 @@ index f0ab3991..bd6ef3b1 100644
 +        invoke<{ ok: boolean }>("save_ui_settings", { settings }),
 +};
 diff --git a/frontend/src/services/invoke.ts b/frontend/src/services/invoke.ts
-index 4da31e42..dbdcd634 100644
+index 4da31e42..39b35520 100644
 --- a/frontend/src/services/invoke.ts
 +++ b/frontend/src/services/invoke.ts
 @@ -127,6 +127,13 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
@@ -98453,7 +98993,7 @@ index 4da31e42..dbdcd634 100644
          case "import_audio_item":
              return {
                  audioPath: args[0],
-@@ -601,6 +608,34 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
+@@ -601,6 +608,40 @@ export function buildTauriArgs(method: string, args: unknown[]): BuildArgsResult
          case "list_directory":
              return { dirPath: args[0] };
  
@@ -98481,6 +99021,12 @@ index 4da31e42..dbdcd634 100644
 +        case "shizuku_shell_exec":
 +            return { command: args[0] };
 +        case "shizuku_shell_list_dir":
++            return { path: args[0] };
++        case "storage_settings_state":
++            return {};
++        case "set_storage_root":
++            return { root: args[0] };
++        case "open_path_in_file_manager":
 +            return { path: args[0] };
 +        case "shizuku_shell_copy_to_cache":
 +            return { path: args[0] };

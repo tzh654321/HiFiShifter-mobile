@@ -2325,7 +2325,7 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 
 | # | 用户原话（要点） | 我的理解 / 计划 | 状态 |
 | :--- | :--- | :--- | :--- |
-| E1 | 加入**工程设置界面**，放在**菜单栏-文件**的选项中（"曾经好像提过"） | 文件菜单里加「工程设置」入口（工程名/采样率/节拍/输出目录等按 Flm/上游口径）；先做入口与基础项 | ⬜ TODO |
+| E1 | 加入**工程设置界面**，放在**菜单栏-文件**的选项中（"曾经好像提过"）| 🟡 **后端/组件已就绪，入口临时摘除**：<br>· `ProjectSettingsDialog`（工程名/路径只读 + 基础音阶 + 拍号 + 网格 + 撤销历史；改动走已有的 `setProjectTimelineSettings` 等命令，**真机验证后端链路生效**：grid 1/4→1/8 ✓）；<br>· 手机端菜单是 `MobileTopBar` 的**声明式数组**（不是桌面 `MenuBar` 的 JSX —— 一开始改错文件，表现为"代码在、菜单里没有"）；<br>· ⚠️ **打开该 Dialog 会让页面卡死**（CDP 求值全超时）。已排查：`useAppSelector` 复合选择器未带 `shallowEqual`（已修）⇒ 仍卡；简化到只用 Dialog+Button ⇒ 仍卡 ⇒ 问题在"**打开 Dialog 这个动作**"本身。为免用户点到就卡，**入口暂时摘除**（组件与后端保留，修好即一键恢复）| 🟡 待修（卡死）|
 | E2 | 轨道界面左上角**拍数/秒数**里的**秒数调小字体** | ✅ **DONE**：`TrackList.tsx` 的读数由单个 `formatted.combined` 拆成两段 —— 主读数原字号、次级（秒数）**0.72em** 且 `opacity-70`，外层加 `data-hs-tracklist-readout-secondary` 钩子；盒宽仍由 `SlotTimeText` 等宽槽位撑住 | ✅ DONE（模拟器 `_probe-e2-e6.mjs` **2/2**：主 12.8px vs 秒 9.216px；盒宽 115px 容得下内容 117px、无溢出）|
 | E3 | 缩小轨道头后**轨道头与轨道没对齐**（因为把左上角拍数/秒数隐藏了）；修法：**只隐藏拍数/秒数，保留那片区域及其中的 ✕ 与速度映射键** | 收起态不再整行 `display:none`：`index.css` 只隐藏 `.hs-tracklist-title` 与 `[data-hs-tracklist-readout]`（`TrackList.tsx` 新增该钩子），头行高度与速度映射键保留 | ✅ **DONE**（2026-09-29 03:4x，模拟器 `_probe-e3-collapse-align.mjs` **4/4**）：收起前后「拍数栏底→首行顶」差值恒为 **0**（旧做法整行消失 ⇒ 会差 48px）；头行仍 48px 高、读数隐藏、速度映射键可见 |
 | E4 | **^ 型菜单排密一点**：当前手机一行**四个按钮、共三行**；更大屏幕一行更多 | ✅ **DONE**：`MobileBottomBar` 的底栏上弹浮层（`bottom:100%` 的 grid）原来是写死的 `repeat(3, 1fr)`；改为 **`repeat(auto-fit, minmax(80px, 1fr))`** 按可用宽度自适应 | ✅ DONE（模拟器 `_probe-e4-menu-density.mjs` **3/3**：352px 面板 ⇒ 每行 **[4,4,2]**（共 10 项 = 4 个/行、3 行，与用户口径逐字一致）；最窄按钮 82px；900px 视口 ⇒ 每行 **[10]**）|
@@ -2346,7 +2346,7 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 | E19a | **未修复成功**：**还原画笔无法拖动使用**，只能一次点一个点 | 拖动路径未接 restore 模式（只有单击生效）| ⬜ TODO |
 | E19b | 「选择」的切换向「绘制」同步 —— 点**未选中**工具**直接切换**；点**选中**工具**展开工具菜单**；菜单展开后点别处**收起** | ✅ 已实现：绘制按钮的 `onClick` 改为条件语义（不在绘制组 ⇒ 直接切换；已在绘制组 ⇒ 开关工具菜单；桌面右键仍直接开菜单）；「点别处收起」原本就有 | 🟡 已实现，待设备验收 |
 | E20 | **播放时单击拍数栏要先暂停再跳转**，否则会跳转回暂停处 | 病根：`stopAudioPlayback()` 是异步 thunk，其 fulfilled 会把引擎播放位置**回写** `playheadSec`，覆盖刚 seek 的落点（= 用户看到的"跳回暂停处"）。改为 **`.finally()` 等停止落地后再 seek**（双击路径不动，仍"跳过去并播放"）| ✅ **DONE**（真机 **2/2**：播放中单击拍数栏 ⇒ transport 变回「播放」= 已暂停；落点 `playhead=18.0s` vs 点击处 `17.81s`（差 0.19s）⇒ **没有**被回写回暂停点）|
-| E21 | **（覆盖旧口径）** 默认存储目录改到 `storage/emulated/0/HiFiShifter`（含**录音、工程**等现在放在 `android/data` 的文件）；**未授权时仍存在 android/data**；**菜单-选项 加一栏「存储设置」**：可设默认存储位置、查看并**跳转**三种授权的生效情况 | 三类目录（音频导入/录音/工程）+ 存储设置页 + 授权状态与跳转入口 | ⬜ TODO（较大）|
+| E21 | **（覆盖旧口径）** 默认存储目录改到 `storage/emulated/0/HiFiShifter`（含录音、工程等）；**未授权时仍存在 android/data**；**菜单-选项 加一栏「存储设置」**：可设默认存储位置、查看并**跳转**三种授权的生效情况 | ✅ **后端全部完成并真机验证**：新增 `storage.rs`（统一入口 `resolve_storage_root`：用户设置 → 全盘访问时的 `/storage/emulated/0/HiFiShifter` → 回退私有目录），并接进**工程默认文件夹**（录音/自动备份随之落位）；三个命令 `storage_settings_state` / `set_storage_root` / `open_path_in_file_manager`。<br>真机 6/6：`effectiveRoot=/storage/emulated/0/HiFiShifter`（不再是 android/data）✓ · 三种授权状态齐全 ✓ · 自定义根可设可清（Download → 默认）✓ · 选项菜单里有「存储设置…」✓<br>⚠️ 与前一条同因：`StorageSettingsDialog` **打开即卡死** ⇒ 入口临时摘除 | 🟡 后端 DONE；UI 待修（卡死）|
 | E22 | **补充动画**：弹出分屏动画、移动轨道动画、菜单展开动画、各种拖动操作的平滑化/惯性化 等 | 与 E18 的平滑/惯性同源，统一做一套 | ⬜ TODO |
 
 ## E 组执行顺序（我的建议）

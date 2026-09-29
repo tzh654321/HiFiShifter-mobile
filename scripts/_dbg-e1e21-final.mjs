@@ -1,0 +1,13 @@
+﻿import { execSync } from "node:child_process";
+import { Cdp } from "./lib/cdp.mjs";
+const serial = "221deeb";
+const adb = (c) => execSync(`adb -s ${serial} ${c}`, { stdio: "pipe" }).toString();
+const pid = adb("shell pidof com.arounder.hifishifter").trim();
+adb("forward tcp:9222 localabstract:webview_devtools_remote_" + pid);
+const cdp = await Cdp.attach({ host: "127.0.0.1", port: 9222 });
+await cdp.send("Runtime.enable");
+const r = await cdp.call(() => ({ ok: true, menus: [...document.querySelectorAll("button")].map((b) => (b.textContent || "").trim()).filter((x) => x && x.length <= 4).slice(0, 8) }));
+console.log("页面响应正常：" + JSON.stringify(r));
+const rep = await cdp.call(() => window.__TAURI_INTERNALS__.invoke("storage_settings_state").catch((e) => ({ err: String(e).slice(0, 80) })));
+console.log("存储报告（后端仍可用）：" + JSON.stringify({ effectiveRoot: rep.effectiveRoot, usingFallback: rep.usingFallback }));
+cdp.close();

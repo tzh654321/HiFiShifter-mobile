@@ -1,8 +1,8 @@
 diff --git a/backend/src-tauri/src/commands.rs b/backend/src-tauri/src/commands.rs
-index 74a47f0b..89ae308b 100644
+index 74a47f0b..eec0738d 100644
 --- a/backend/src-tauri/src/commands.rs
 +++ b/backend/src-tauri/src/commands.rs
-@@ -1,1902 +1,2147 @@
+@@ -1,1902 +1,2169 @@
 -// 命令门面（Facade）
 -//
 -// 约束：
@@ -2266,6 +2266,28 @@ index 74a47f0b..89ae308b 100644
 +    recording::stop_recording(state)
 +}
 +
++// ── E21：存储设置（默认存储目录 + 三种授权生效情况）─────────────────────────
++
++/// 当前存储状况：自定义根 / 默认根 / **实际生效目录** / 三种授权状态。
++#[tauri::command(rename_all = "camelCase")]
++pub fn storage_settings_state(app: tauri::AppHandle) -> serde_json::Value {
++    crate::storage::storage_report(&app)
++}
++
++/// 设置默认存储位置（`root` 传空 = 回到默认策略）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn set_storage_root(app: tauri::AppHandle, root: Option<String>) -> serde_json::Value {
++    crate::storage::set_storage_root(&app, root)
++}
++
++/// 用系统文件管理器打开某个目录（「存储设置」里的**跳转**）。
++#[tauri::command(rename_all = "camelCase")]
++pub fn open_path_in_file_manager(path: String) -> serde_json::Value {
++    /* E21 的「跳转」不调用系统文件管理器 Intent（各 ROM 支持不一、失败还没反馈），
++       而是由**前端**在自己的文件浏览器里打开该目录 —— 100% 可靠、且用户本来就在应用内。
++       这里只把路径回显出去，前端据此切面板 + 跳目录。 */
++    serde_json::json!({ "ok": true, "path": path, "inApp": true })
++}
 +#[tauri::command(rename_all = "camelCase")]
 +pub fn get_recording_state(state: State<'_, AppState>) -> crate::recording::RecordingStatePayload {
 +    recording::get_recording_state(state)
@@ -4147,7 +4169,7 @@ index 62bcf038..4fdb4c3c 100644
          .pick_file();
  
 diff --git a/backend/src-tauri/src/commands/project.rs b/backend/src-tauri/src/commands/project.rs
-index cdf3b6bb..5b128e7a 100644
+index cdf3b6bb..6da78b88 100644
 --- a/backend/src-tauri/src/commands/project.rs
 +++ b/backend/src-tauri/src/commands/project.rs
 @@ -79,6 +79,8 @@ fn normalize_grid_size(raw: &str) -> String {
@@ -4159,7 +4181,34 @@ index cdf3b6bb..5b128e7a 100644
  
  fn update_window_title(window: &Window, name: &str, dirty: bool) {
      let suffix = if dirty { "*" } else { "" };
-@@ -878,7 +880,7 @@ pub(super) fn new_project(
+@@ -206,6 +208,17 @@ pub(crate) fn sanitize_file_name_segment(raw: &str) -> String {
+         .to_string()
+ }
+ 
++/// E21：工程"未保存时的默认文件夹"。**优先用统一存储根**（用户设置 / 移动端默认
++/// `/storage/emulated/0/HiFiShifter` / 未授权时回退私有目录），这样**录音与自动备份**
++/// 也跟着落到同一个默认位置，不再散落在 android/data 里（详见 `crate::storage`）。
++fn resolve_storage_root_or_documents(state: &AppState) -> PathBuf {
++    if let Some(handle) = state.app_handle.get() {
++        return crate::storage::resolve_storage_root(handle);
++    }
++    // ⚠️ 这里必须调 `resolve_documents_dir`（早先批量替换误把它也换成自己 ⇒ 无限递归）。
++    resolve_documents_dir(state).unwrap_or_else(|| PathBuf::from("."))
++}
++
+ fn resolve_documents_dir(state: &AppState) -> Option<PathBuf> {
+     if let Some(handle) = state.app_handle.get() {
+         if let Ok(dir) = handle.path().document_dir() {
+@@ -230,7 +243,7 @@ pub(crate) fn resolve_project_folder_for_backup(state: &AppState) -> PathBuf {
+             return parent.to_path_buf();
+         }
+     }
+-    resolve_documents_dir(state).unwrap_or_else(|| PathBuf::from("."))
++    resolve_storage_root_or_documents(state)
+ }
+ 
+ pub(crate) fn resolve_project_name_for_backup(state: &AppState) -> String {
+@@ -878,7 +891,7 @@ pub(super) fn new_project(
  }
  
  pub(super) fn open_project_dialog() -> serde_json::Value {
@@ -4168,7 +4217,7 @@ index cdf3b6bb..5b128e7a 100644
          .add_filter("HiFiShifter Project", &["hshp", "hsp"])
          .add_filter("HiFiShifter Backup Project", &["hshp-bak", "hsp-bak"])
          .add_filter("JSON Project", &["json"])
-@@ -1107,7 +1109,7 @@ pub(super) fn save_project_as(
+@@ -1107,7 +1120,7 @@ pub(super) fn save_project_as(
              p.name.clone()
          }
      };
@@ -4244,10 +4293,10 @@ index 98531493..ba27bdb2 100644
          .pick_file();
  
 diff --git a/backend/src-tauri/src/lib.rs b/backend/src-tauri/src/lib.rs
-index 3eff8813..d5ed82c3 100644
+index 3eff8813..5bf0276d 100644
 --- a/backend/src-tauri/src/lib.rs
 +++ b/backend/src-tauri/src/lib.rs
-@@ -1,732 +1,797 @@
+@@ -1,732 +1,801 @@
 -/// 热路径调试日志：经 `log::debug!` 走统一日志管线，release 默认 Info 级别下
 -/// 不产生格式化开销；需要诊断时用 `HIFISHIFTER_LOG=debug` 临时打开。
 -/// 定义在 crate 根，供所有子模块（引擎 worker、snapshot、pitch 等）使用。
@@ -4828,158 +4877,6 @@ index 3eff8813..d5ed82c3 100644
 -            commands::get_recording_apps,
 -            commands::start_recording,
 -            commands::stop_recording,
--            commands::get_recording_state,
--            commands::set_project_base_scale,
--            commands::set_project_custom_scale,
--            commands::set_project_stretch_settings,
--            commands::set_project_timeline_settings,
--            commands::set_timeline_tempo_map,
--            commands::open_audio_dialog,
--            commands::open_audio_dialog_multi,
--            commands::open_audio_dialog_for_source,
--            commands::get_media_audio_streams,
--            commands::pick_output_path,
--            commands::pick_directory,
--            commands::open_midi_dialog,
--            commands::get_root_mix_waveform_peaks_segment,
--            commands::get_track_mix_waveform_peaks_segment,
--            commands::clear_waveform_cache,
--            commands::get_waveform_mipmap_binary,
--            commands::preload_waveform_mipmap,
--            commands::batch_get_waveform_mipmap,
--            commands::get_waveform_manifest,
--            commands::get_waveform_tiles_binary,
--            commands::import_audio_item,
--            commands::import_audio_bytes,
--            commands::add_track,
--            commands::remove_track,
--            commands::duplicate_track,
--            commands::move_track,
--            commands::set_track_state,
--            commands::select_track,
--            commands::set_project_length,
--            commands::get_track_summary,
--            commands::get_param_frames,
--            commands::set_param_frames,
--            commands::restore_param_frames,
--            commands::stretch_track_linked_params,
--            commands::add_clip,
--            commands::create_clips_bulk,
--            commands::get_static_param,
--            commands::set_static_param,
--            commands::remove_clip,
--            commands::remove_clips,
--            commands::move_clip,
--            commands::move_clips,
--            commands::get_clip_linked_params,
--            commands::apply_clip_linked_params,
--            commands::set_clip_state,
--            commands::set_clips_state_bulk,
--            commands::set_clip_active_take,
--            commands::cycle_clip_takes,
--            commands::pack_clips_into_takes,
--            commands::explode_clip_takes,
--            commands::duplicate_clip_take,
--            commands::remove_clip_take,
--            commands::rename_clip_take,
--            commands::set_clip_take_reversed,
--            commands::add_clip_take_from_media,
--            commands::import_media_files_as_takes,
--            commands::duplicate_clips_bulk,
--            commands::replace_clip_source,
--            commands::check_source_files_changed,
--            commands::search_source_file_replacements,
--            commands::split_clip,
--            commands::split_clips_at,
--            commands::analyze_clip_silence,
--            commands::remove_clip_silence,
--            commands::close_track_gaps,
--            commands::glue_clips,
--            commands::group_clips,
--            commands::ungroup_clips,
--            commands::toggle_group_disabled,
--            commands::convert_clips_to_pitch_reference,
--            commands::update_pitch_reference,
--            commands::select_clip,
--            commands::copy_timeline_clips,
--            commands::copy_timeline_tracks,
--            commands::paste_timeline_clipboard,
--            commands::has_timeline_clipboard,
--            commands::clipboard_kind,
--            commands::write_system_clipboard_object,
--            commands::read_system_clipboard_object,
--            commands::load_default_model,
--            commands::load_model,
--            commands::set_pitch_shift,
--            commands::process_audio,
--            commands::synthesize,
--            commands::save_synthesized,
--            commands::save_separated,
--            commands::export_audio_advanced,
--            commands::cancel_export_audio,
--            commands::get_export_audio_defaults,
--            commands::preview_export_audio_plan,
--            commands::quick_export_selected_clips,
--            commands::set_metronome,
--            commands::play_original,
--            commands::stop_audio,
--            commands::get_playback_state,
--            commands::start_background_render,
--            commands::cancel_background_render,
--            commands::debug_realtime_render_stats,
--            commands::get_pitch_analysis_progress,
--            commands::open_log_folder,
--            commands::pick_diagnostics_output_path,
--            commands::export_diagnostics,
--            commands::log_frontend_error,
--            commands::get_onnx_status,
--            commands::get_onnx_diagnostic,
--            commands::run_vocoder_benchmark,
--            commands::get_gpu_devices,
--            commands::get_dml_adapters,
--            commands::clear_pitch_cache,
--            commands::get_pitch_cache_stats,
--            commands::list_directory,
--            commands::get_audio_file_info,
--            commands::read_audio_preview,
--            commands::search_files_recursive,
--            commands::open_vocalshifter_dialog,
--            commands::import_vocalshifter_project,
--            commands::paste_vocalshifter_clipboard,
--            commands::open_reaper_dialog,
--            commands::import_reaper_project,
--            commands::paste_reaper_clipboard,
--            commands::has_reaper_clipboard,
--            commands::clear_cache,
--            commands::get_processor_params,
--            commands::get_midi_tracks,
--            commands::read_midi_clipboard_to_memory,
--            commands::import_midi_to_pitch,
--            commands::import_midi_as_clip,
--            commands::replace_midi_clip_data,
--            commands::pick_midi_output_path,
--            commands::export_pitch_to_midi,
--            commands::get_ui_settings,
--            commands::save_ui_settings,
--        ])
--        .build(tauri::generate_context!())
--        .expect("error while building tauri application")
--        .run(|app_handle, event| {
--            if let tauri::RunEvent::Exit = event {
--                // Shut down audio engine: stop meter thread, send Shutdown to
--                // worker threads, and drop the channel sender so all worker
--                // threads exit their recv loops.
--                let state = app_handle.state::<state::AppState>();
--                crate::recording::shutdown(state.inner());
--                state.audio_engine.shutdown();
--
--                // Force-drop all ONNX sessions to release GPU memory before exit.
--                crate::nsf_hifigan_onnx::drop_shared_session();
--                crate::fcpe_onnx::drop_shared_session();
--                crate::hnsep_onnx::drop_shared_session();
--            }
--        });
--}
 +/// 热路径调试日志：经 `log::debug!` 走统一日志管线，release 默认 Info 级别下
 +/// 不产生格式化开销；需要诊断时用 `HIFISHIFTER_LOG=debug` 临时打开。
 +/// 定义在 crate 根，供所有子模块（引擎 worker、snapshot、pitch 等）使用。
@@ -5119,6 +5016,7 @@ index 3eff8813..d5ed82c3 100644
 +mod soundtouch;
 +#[path = "audio/sstretch.rs"]
 +mod sstretch;
++mod storage;
 +mod state;
 +#[path = "vocoder/streaming_world.rs"]
 +mod streaming_world;
@@ -5612,7 +5510,161 @@ index 3eff8813..d5ed82c3 100644
 +            commands::get_recording_apps,
 +            commands::start_recording,
 +            commands::stop_recording,
-+            commands::get_recording_state,
+             commands::get_recording_state,
+-            commands::set_project_base_scale,
+-            commands::set_project_custom_scale,
+-            commands::set_project_stretch_settings,
+-            commands::set_project_timeline_settings,
+-            commands::set_timeline_tempo_map,
+-            commands::open_audio_dialog,
+-            commands::open_audio_dialog_multi,
+-            commands::open_audio_dialog_for_source,
+-            commands::get_media_audio_streams,
+-            commands::pick_output_path,
+-            commands::pick_directory,
+-            commands::open_midi_dialog,
+-            commands::get_root_mix_waveform_peaks_segment,
+-            commands::get_track_mix_waveform_peaks_segment,
+-            commands::clear_waveform_cache,
+-            commands::get_waveform_mipmap_binary,
+-            commands::preload_waveform_mipmap,
+-            commands::batch_get_waveform_mipmap,
+-            commands::get_waveform_manifest,
+-            commands::get_waveform_tiles_binary,
+-            commands::import_audio_item,
+-            commands::import_audio_bytes,
+-            commands::add_track,
+-            commands::remove_track,
+-            commands::duplicate_track,
+-            commands::move_track,
+-            commands::set_track_state,
+-            commands::select_track,
+-            commands::set_project_length,
+-            commands::get_track_summary,
+-            commands::get_param_frames,
+-            commands::set_param_frames,
+-            commands::restore_param_frames,
+-            commands::stretch_track_linked_params,
+-            commands::add_clip,
+-            commands::create_clips_bulk,
+-            commands::get_static_param,
+-            commands::set_static_param,
+-            commands::remove_clip,
+-            commands::remove_clips,
+-            commands::move_clip,
+-            commands::move_clips,
+-            commands::get_clip_linked_params,
+-            commands::apply_clip_linked_params,
+-            commands::set_clip_state,
+-            commands::set_clips_state_bulk,
+-            commands::set_clip_active_take,
+-            commands::cycle_clip_takes,
+-            commands::pack_clips_into_takes,
+-            commands::explode_clip_takes,
+-            commands::duplicate_clip_take,
+-            commands::remove_clip_take,
+-            commands::rename_clip_take,
+-            commands::set_clip_take_reversed,
+-            commands::add_clip_take_from_media,
+-            commands::import_media_files_as_takes,
+-            commands::duplicate_clips_bulk,
+-            commands::replace_clip_source,
+-            commands::check_source_files_changed,
+-            commands::search_source_file_replacements,
+-            commands::split_clip,
+-            commands::split_clips_at,
+-            commands::analyze_clip_silence,
+-            commands::remove_clip_silence,
+-            commands::close_track_gaps,
+-            commands::glue_clips,
+-            commands::group_clips,
+-            commands::ungroup_clips,
+-            commands::toggle_group_disabled,
+-            commands::convert_clips_to_pitch_reference,
+-            commands::update_pitch_reference,
+-            commands::select_clip,
+-            commands::copy_timeline_clips,
+-            commands::copy_timeline_tracks,
+-            commands::paste_timeline_clipboard,
+-            commands::has_timeline_clipboard,
+-            commands::clipboard_kind,
+-            commands::write_system_clipboard_object,
+-            commands::read_system_clipboard_object,
+-            commands::load_default_model,
+-            commands::load_model,
+-            commands::set_pitch_shift,
+-            commands::process_audio,
+-            commands::synthesize,
+-            commands::save_synthesized,
+-            commands::save_separated,
+-            commands::export_audio_advanced,
+-            commands::cancel_export_audio,
+-            commands::get_export_audio_defaults,
+-            commands::preview_export_audio_plan,
+-            commands::quick_export_selected_clips,
+-            commands::set_metronome,
+-            commands::play_original,
+-            commands::stop_audio,
+-            commands::get_playback_state,
+-            commands::start_background_render,
+-            commands::cancel_background_render,
+-            commands::debug_realtime_render_stats,
+-            commands::get_pitch_analysis_progress,
+-            commands::open_log_folder,
+-            commands::pick_diagnostics_output_path,
+-            commands::export_diagnostics,
+-            commands::log_frontend_error,
+-            commands::get_onnx_status,
+-            commands::get_onnx_diagnostic,
+-            commands::run_vocoder_benchmark,
+-            commands::get_gpu_devices,
+-            commands::get_dml_adapters,
+-            commands::clear_pitch_cache,
+-            commands::get_pitch_cache_stats,
+-            commands::list_directory,
+-            commands::get_audio_file_info,
+-            commands::read_audio_preview,
+-            commands::search_files_recursive,
+-            commands::open_vocalshifter_dialog,
+-            commands::import_vocalshifter_project,
+-            commands::paste_vocalshifter_clipboard,
+-            commands::open_reaper_dialog,
+-            commands::import_reaper_project,
+-            commands::paste_reaper_clipboard,
+-            commands::has_reaper_clipboard,
+-            commands::clear_cache,
+-            commands::get_processor_params,
+-            commands::get_midi_tracks,
+-            commands::read_midi_clipboard_to_memory,
+-            commands::import_midi_to_pitch,
+-            commands::import_midi_as_clip,
+-            commands::replace_midi_clip_data,
+-            commands::pick_midi_output_path,
+-            commands::export_pitch_to_midi,
+-            commands::get_ui_settings,
+-            commands::save_ui_settings,
+-        ])
+-        .build(tauri::generate_context!())
+-        .expect("error while building tauri application")
+-        .run(|app_handle, event| {
+-            if let tauri::RunEvent::Exit = event {
+-                // Shut down audio engine: stop meter thread, send Shutdown to
+-                // worker threads, and drop the channel sender so all worker
+-                // threads exit their recv loops.
+-                let state = app_handle.state::<state::AppState>();
+-                crate::recording::shutdown(state.inner());
+-                state.audio_engine.shutdown();
+-
+-                // Force-drop all ONNX sessions to release GPU memory before exit.
+-                crate::nsf_hifigan_onnx::drop_shared_session();
+-                crate::fcpe_onnx::drop_shared_session();
+-                crate::hnsep_onnx::drop_shared_session();
+-            }
+-        });
+-}
++            commands::storage_settings_state,
++            commands::set_storage_root,
++            commands::open_path_in_file_manager,
 +            commands::set_project_base_scale,
 +            commands::set_project_custom_scale,
 +            commands::set_project_stretch_settings,
