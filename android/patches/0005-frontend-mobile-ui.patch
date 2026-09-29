@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..217b23e1 100644
+index 3802022a..436f889c 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4529 @@
+@@ -1,4006 +1,4545 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -5115,6 +5115,22 @@ index 3802022a..217b23e1 100644
 +            '[data-hs-split-handle], [data-hs-time-ruler="params"]',
 +        )) {
 +            el.style.touchAction = "none";
++        }
++
++        /* 🔴 E10-①（用户：全屏不满屏，**能稳定复现**）：切到"只有一个面板"（即全屏）时，
++           必须**清掉上一次拖动分屏边界时留在子元素上的 inline `flexGrow`**。
++           拖动是用 `paintRatio()` 直接改 DOM 的（见上面 `onMove`，为了不每帧重渲整棵树），
++           于是子元素带着"分屏比例"（例如 0.38）留在原地；而 React 渲染那层 `div` 时
++           **没有** style.flexGrow ⇒ 重渲不会重置它 ⇒ 单面板全屏时只占 38% 高。
++           实测：视口 708px 而参数面板容器只有 411px（占 58%），与 1-ratio 完全吻合。
++           修法：只剩一个面板时把 flexGrow 归 1（同时清掉 inline 值，交回 CSS 类控制）。 */
++        const splitBox = mobileSplitRef.current;
++        if (splitBox && Object.values(mobilePanels).filter(Boolean).length <= 1) {
++            for (const child of Array.from(splitBox.children)) {
++                const el = child as HTMLElement;
++                el.style.flexGrow = "1";
++                if (el.style.flexBasis) el.style.flexBasis = "";
++            }
 +        }
 +    }, [mobilePanels, isPhone]);
 +
@@ -19080,10 +19096,10 @@ index de6d05a3..af40d929 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
-index 613ea89d..c8a5682b 100644
+index 613ea89d..91fbcd9a 100644
 --- a/frontend/src/components/layout/PianoRollPanel.tsx
 +++ b/frontend/src/components/layout/PianoRollPanel.tsx
-@@ -1,7214 +1,7904 @@
+@@ -1,7214 +1,7924 @@
 -import { PitchSnapSettingsDialog } from "./PitchSnapSettingsDialog";
 -import React, {
 -    type CSSProperties,
@@ -32823,8 +32839,21 @@ index 613ea89d..c8a5682b 100644
 +                                variant={s.toolModeGroup === "draw" ? "solid" : "ghost"}
 +                                data-tooltip={drawToolButtonTitle}
 +                                tabIndex={-1}
-+                                onClick={() => dispatch(setToolMode(currentDrawTool))}
++                                onClick={() => {
++                                    /* E19b（用户口径）：「**「选择」的切换向「绘制」同步** ——
++                                       点**未选中**的工具后**直接切换**；点**选择中**的工具**展开工具菜单**；
++                                       展开菜单后点别处可以收起」。
++                                       实现：与「选择」按钮同一套语义 ——
++                                         · 当前不在绘制组 ⇒ 点一下直接切到绘制工具（不弹菜单）；
++                                         · 当前已在绘制组 ⇒ 再点一下展开工具菜单（menu 内的关闭/点别处收起已有）。 */
++                                    if (s.toolModeGroup !== "draw") {
++                                        dispatch(setToolMode(currentDrawTool));
++                                        return;
++                                    }
++                                    setDrawToolMenuOpen((prev) => !prev);
++                                }}
 +                                onContextMenu={(e) => {
++                                    /* 桌面右键仍直接开菜单（老习惯保留）。 */
 +                                    e.preventDefault();
 +                                    setDrawToolMenuOpen(true);
 +                                }}
@@ -33867,8 +33896,15 @@ index 613ea89d..c8a5682b 100644
 +                            ),
 +                        }}
 +                    >
-+                        {/* 速度映射小按钮（右下角）：显示/创建 或 清空/隐藏。 */}
-+                        <TempoMapCornerButton />
++                        {/* 速度映射小按钮（右下角）：显示/创建 或 清空/隐藏。
++                            E9（用户口径）：「轨道+参数分屏下**开启同步位置与缩放**后应**隐藏参数界面
++                            左上角的速度映射键**」—— 同步开着时两侧视图一体，参数侧再留一颗既重复
++                            又容易误按。用外层包裹 + `body[data-hs-paramsync="on"]` 做 CSS 隐藏，
++                            这样不必把 `paramEditorSyncTimeline` 读进本组件（少一处订阅）。
++                            ⚠️ `display: contents` 让包裹层不参与布局，正常态与原样完全一致。 */}
++                        <Box data-hs-params-tempo-map style={{ display: "contents" }}>
++                            <TempoMapCornerButton />
++                        </Box>
 +                    </Box>
 +                    <div
 +                        ref={axisWrapRef}
@@ -59376,10 +59412,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..72bbb7bb 100644
+index c0db2221..534ccef2 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2676 @@
+@@ -1,2297 +1,2791 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -62972,13 +63008,85 @@ index c0db2221..72bbb7bb 100644
 +        return { track: tracks[rawIdx] ?? null, yInRow, index: rawIdx };
 +    }
 +
++    /* E11（用户口径：「轨道头增益**划不动了**；为防误触可以设为**长按后划动**」）：
++       增益旋钮原来**按下即生效**（零阈值）⇒ 手机竖着划列表时手指扫过旋钮就改了增益（误触）。
++       现在加**长按门槛**：按住 `GAIN_KNOB_LONG_PRESS_MS` 才真正进入拖动（并震一下，E12）；
++       期间先移动超过 `GAIN_KNOB_CANCEL_PX` 即判定为"在滑动列表"，直接放弃、不抢手势。
++       ⚠️ 实现上把原实现改名为 `startVolumeKnobDragNow`，本函数只做门槛后**转发原事件对象**——
++       React 18 起合成事件不再池化，异步持有 `e` 是安全的。 */
++    const GAIN_KNOB_LONG_PRESS_MS = 260;
++    const GAIN_KNOB_CANCEL_PX = 10;
 +    function beginVolumeKnobDrag(
 +        e: React.PointerEvent<HTMLButtonElement>,
 +        trackId: string,
 +        volume: number,
 +    ) {
-+        // 数位笔 / 触摸不拖增益旋钮：零阈值按下即生效，滑动画线时极易误触。
-+        if (shouldSuppressHoverSideEffects(e.nativeEvent)) return;
++        /* ⚠️ 这里**不能**再有 `shouldSuppressHoverSideEffects` 的早退：它会吃掉 touch/pen
++           ⇒ 门槛定时器根本不会建立 ⇒ 手机上一按就没反应。这正是用户报的
++           「轨道头增益**划不动了**」的真因（原先触摸被一律拒识）。
++           防误触现在由下面的长按门槛承担：按住 260ms 才生效，期间划动即放弃。 */
++        const pressX = e.clientX;
++        const pressY = e.clientY;
++        let armed = false;
++        /* 🔴 E11 的关键补丁：**必须在门槛阶段就阻止浏览器接管触摸**。
++           实测：只在长按后的 `startVolumeKnobDragNow` 里 `preventDefault()` 已经太晚 ——
++           那时 WebView 已判定为纵向滚动并发出 `pointercancel`，拖动会被立刻收尾
++           （表现为 `track.volume` 从 1 → 1，看起来"长按也拖不动"）。
++           手法与文件浏览器的长按拖拽一致：挂**非被动** `touchmove` 并 `preventDefault()`
++           （React 合成事件对 touch 默认被动，`preventDefault` 无效，必须用原生监听）。 */
++        const blockScroll = (ev: TouchEvent) => {
++            if (ev.cancelable) ev.preventDefault();
++        };
++        window.addEventListener("touchmove", blockScroll, { passive: false });
++        const clearGate = () => {
++            window.clearTimeout(gateTimer);
++            window.removeEventListener("touchmove", blockScroll);
++            window.removeEventListener("pointermove", onGateMove, true);
++            window.removeEventListener("pointerup", onGateUp, true);
++            window.removeEventListener("pointercancel", onGateUp, true);
++        };
++        const onGateMove = (ev: PointerEvent) => {
++            if (armed) return;
++            if (Math.hypot(ev.clientX - pressX, ev.clientY - pressY) > GAIN_KNOB_CANCEL_PX) {
++                clearGate();
++            }
++        };
++        const onGateUp = () => {
++            if (!armed) clearGate();
++        };
++        const gateTimer = window.setTimeout(() => {
++            armed = true;
++            clearGate();
++            /* E12：长按识别后震一下（与其它"长按并划动"手势一致）。失败静默即可。 */
++            try {
++                (
++                    navigator as unknown as { vibrate?: (p: number) => boolean }
++                ).vibrate?.(12);
++            } catch {
++                /* 忽略：部分 WebView 无振动权限 */
++            }
++            /* `fromLongPress = true`：**长按已经承担了防误触**，所以触摸路径也要放行。
++               ⚠️ 这正是用户报「增益划不动了」的真因：原实现里
++               `startVolumeKnobDragNow` 开头就对 touch/pen 直接 return（"触摸不拖增益旋钮"），
++               于是手机上一按就被拒 —— 现在改成"长按后才放行触摸"。 */
++            startVolumeKnobDragNow(e, trackId, volume, true);
++        }, GAIN_KNOB_LONG_PRESS_MS);
++        window.addEventListener("pointermove", onGateMove, true);
++        window.addEventListener("pointerup", onGateUp, true);
++        window.addEventListener("pointercancel", onGateUp, true);
++    }
++
++    function startVolumeKnobDragNow(
++        e: React.PointerEvent<HTMLButtonElement>,
++        trackId: string,
++        volume: number,
++        /** 由长按门槛放行时为 true（见 `beginVolumeKnobDrag`）。 */
++        fromLongPress = false,
++    ) {
++        /* 数位笔 / 触摸原先**一律不拖增益旋钮**（"零阈值按下即生效，滑动画线时极易误触"）。
++           但那让手机用户**根本拖不动** —— 这正是用户报「轨道头增益划不动了」的真因。
++           现在只拒绝"未经长按"的路径；长按门槛本身已保证防误触。 */
++        if (!fromLongPress && shouldSuppressHoverSideEffects(e.nativeEvent)) return;
 +        e.preventDefault();
 +        e.stopPropagation();
 +        clearPendingVolumeCommit(trackId);
@@ -63027,6 +63135,10 @@ index c0db2221..72bbb7bb 100644
 +        let finished = false;
 +        const tearDown = () => {
 +            unregisterAbort();
++            /* E11：触摸路径的监听也要一并摘掉（否则下一次手势会叠加多份）。 */
++            window.removeEventListener("touchmove", onTouchMove);
++            window.removeEventListener("touchend", onTouchEnd);
++            window.removeEventListener("touchcancel", onTouchEnd);
 +            window.removeEventListener("pointermove", onMove);
 +            window.removeEventListener("pointerup", onEnd);
 +            window.removeEventListener("pointercancel", onEnd);
@@ -63046,6 +63158,12 @@ index c0db2221..72bbb7bb 100644
 +        };
 +        const onEnd = (ev: PointerEvent) => {
 +            if (finished) return;
++            /* 🔴 E11：触摸路径下 **`pointercancel` 是常态** —— WebView 会在手势开始后
++               接管为滚动并发出它（实测事件序列：`pointerdown → pointermove ×2 → pointercancel`）。
++               原来据此收尾 ⇒ 长按拖动刚开始就被结束（`track.volume` 保持 1）。
++               现在：触摸的 cancel **不再收尾**，收尾交给下面注册的原生 `touchend/touchcancel`；
++               鼠标/笔维持原语义不变。 */
++            if (ev.type === "pointercancel" && ev.pointerType === "touch") return;
 +            finished = true;
 +            const knobRect = knobEl.getBoundingClientRect();
 +            const stillOverKnob =
@@ -63056,6 +63174,31 @@ index c0db2221..72bbb7bb 100644
 +            setVolumeHoveredTrackId(stillOverKnob ? trackId : null);
 +            tearDown();
 +        };
++
++        /* ── 触摸路径：用**原生 touch 事件**驱动拖动 ──────────────────────────
++           为什么不用 pointermove：WebView 接管手势后会发 `pointercancel`，pointer 序列
++           随时可能中断（上面那条注释）。原生 `touchmove` + 非被动 `preventDefault()`
++           是唯一稳定可用的通道（与文件浏览器"长按拖拽"同一套手法，已在真机验证有效）。 */
++        const onTouchMove = (ev: TouchEvent) => {
++            if (finished) return;
++            const t = ev.touches[0];
++            if (!t) return;
++            if (ev.cancelable) ev.preventDefault();
++            const deltaY = startY - t.clientY;
++            const nextDb = clampGainDb(startDb + deltaY * TRACK_GAIN_DRAG_DB_PER_PX);
++            if (Math.abs(nextDb - lastDb) < 0.01) return;
++            lastDb = nextDb;
++            onVolumeUiChange(trackId, dbToGain(nextDb));
++        };
++        const onTouchEnd = () => {
++            if (finished) return;
++            finished = true;
++            setVolumeHoveredTrackId(null);
++            tearDown();
++        };
++        window.addEventListener("touchmove", onTouchMove, { passive: false });
++        window.addEventListener("touchend", onTouchEnd, { passive: true });
++        window.addEventListener("touchcancel", onTouchEnd, { passive: true });
 +        const unregisterAbort = registerDragAbort(finish);
 +
 +        window.addEventListener("pointermove", onMove);
@@ -63939,6 +64082,14 @@ index c0db2221..72bbb7bb 100644
 +                                                                    volume,
 +                                                                )
 +                                                            }
++                                                            /* E15（用户口径）：「**双击**轨道头的增益旋钮要能恢复到 +0dB」。
++                                                               0 dB ⇒ 线性增益 1.0。 */
++                                                            onDoubleClick={(e) => {
++                                                                e.stopPropagation();
++                                                                e.preventDefault();
++                                                                onVolumeUiChange(track.id, dbToGain(0));
++                                                                onVolumeCommit(track.id, dbToGain(0));
++                                                            }}
 +                                                        >
 +                                                            <span
 +                                                                className="absolute left-1/2 top-1/2 w-[2px] h-3 -translate-x-1/2 -translate-y-full rounded-full bg-qt-highlight"
@@ -95852,481 +96003,13 @@ index 176638e2..6da39d85 100644
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..681a8396 100644
+index d42792c8..831ba3e3 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
-@@ -1,471 +1,1222 @@
+@@ -1,471 +1,1230 @@
 -@tailwind base;
 -@tailwind components;
 -@tailwind utilities;
--
--/*
--  Qt-like design tokens as CSS variables.
--  - Dark uses the legacy Qt hex colors.
--  - Light derives from Radix Theme tokens to avoid inventing a new palette.
--*/
--
--.qt-theme.dark,
--:root[data-theme="dark"] {
--    --qt-window: #353535;
--    --qt-base: #2d2d2d;
--    --qt-panel: #2a2a2a;
--    --qt-surface: #404040;
--    --qt-clip-bg: #343434;
--    --qt-clip-border: rgba(255, 255, 255, 0.14);
--    /* Clip 是明亮色块，选中描边一律深色实线（半透明白在彩色块上发灰） */
--    --qt-clip-selected-border: rgba(24, 28, 35, 0.95);
--    --qt-text: #d0d0d0;
--    --qt-text-muted: #909090;
--    --qt-highlight: #3b82f6;
--    --qt-playhead: #f05a5a;
--    --qt-button: #3d3d3d;
--    --qt-button-hover: #484848;
--    --qt-border: #505050;
--    --qt-hover: #484848;
--    --qt-danger-bg: #4a1a1a;
--    --qt-danger-text: #fca5a5;
--    --qt-danger-border: #ef4444;
--    --qt-warning-bg: #3d2a0a;
--    --qt-warning-text: #fcd34d;
--    --qt-warning-border: #f59e0b;
--    /* 画布区（时间线轨道/参数编辑器）比 chrome 区（window/panel）深一档，
--       让工具栏/标尺/画布靠明度而不是仅靠 1px 细线分区 */
--    --qt-graph-bg: #1f1f1f;
--    /* 半透明白：在泳道和彩色 clip 上都呈同色调细线，
--       不会在波形上切出生硬的条纹 */
--    --qt-graph-grid-strong: rgba(255, 255, 255, 0.22);
--    --qt-graph-grid-weak: rgba(255, 255, 255, 0.1);
--    --qt-scrollbar-thumb: #555555;
--    --qt-overlay: rgba(0, 0, 0, 0.35);
--    --qt-divider: rgba(255, 255, 255, 0.04);
--    --qt-subtle-1: rgba(255, 255, 255, 0.025);
--    --qt-subtle-2: rgba(255, 255, 255, 0.045);
--    --qt-subtle-3: rgba(255, 255, 255, 0.07);
--    --qt-subtle-hover: rgba(255, 255, 255, 0.04);
--    --qt-meter-rail: #2a2a2a;
--    --qt-meter-well: #1d1d1d;
--    /* 吸附竖线高亮：按吸附目标类型区分颜色 */
--    --qt-snap-grid: #3b82f6;
--    --qt-snap-clip: #f59e0b;
--    --qt-snap-offset: #ec4899;
--    --qt-snap-source: #a855f7;
--    --qt-snap-selection: #22d3ee;
--    --qt-snap-cursor: #f05a5a;
--    --qt-snap-sample: #94a3b8;
--    --qt-snap-loop: #22c55e;
--}
--
--.qt-theme.light,
--:root[data-theme="light"] {
--    --qt-window: #f2f3f6;
--    --qt-base: #ebedf1;
--    --qt-panel: #f8f9fb;
--    --qt-surface: #e1e4ea;
--    --qt-clip-bg: #dde1e8;
--    --qt-clip-border: rgba(32, 38, 52, 0.18);
--    --qt-clip-selected-border: rgba(24, 28, 35, 0.95);
--    --qt-text: #1f232b;
--    --qt-text-muted: #666d79;
--    --qt-highlight: #4b68d1;
--    --qt-playhead: #de4f5d;
--    --qt-button: #e3e6ec;
--    --qt-button-hover: #d7dbe4;
--    --qt-border: #b8bdc9;
--    --qt-hover: #dde1e8;
--    --qt-danger-bg: #ffe6ea;
--    --qt-danger-text: #b53a49;
--    --qt-danger-border: #df6674;
--    --qt-warning-bg: #fff1dc;
--    --qt-warning-text: #9b5f13;
--    --qt-warning-border: #d59140;
--    --qt-graph-bg: #edf0f5;
--    /* 半透明蓝灰：在泳道上与旧实色等效，在 clip 色块/波形上则化为
--       同色调的细线，不再切出高对比条纹 */
--    --qt-graph-grid-strong: rgba(74, 88, 112, 0.55);
--    --qt-graph-grid-weak: rgba(74, 88, 112, 0.3);
--    --qt-scrollbar-thumb: #b4bac7;
--    --qt-overlay: rgba(20, 24, 32, 0.22);
--    --qt-divider: rgba(32, 38, 52, 0.1);
--    --qt-subtle-1: rgba(28, 36, 52, 0.025);
--    --qt-subtle-2: rgba(28, 36, 52, 0.04);
--    --qt-subtle-3: rgba(28, 36, 52, 0.06);
--    --qt-subtle-hover: rgba(28, 36, 52, 0.04);
--    --qt-meter-rail: #d6dbe5;
--    --qt-meter-well: #c8ceda;
--    /* 吸附竖线高亮：按吸附目标类型区分颜色（浅色主题取更深的可读色） */
--    --qt-snap-grid: #2563eb;
--    --qt-snap-clip: #d97706;
--    --qt-snap-offset: #db2777;
--    --qt-snap-source: #9333ea;
--    --qt-snap-selection: #0891b2;
--    --qt-snap-cursor: #de4f5d;
--    --qt-snap-sample: #64748b;
--    --qt-snap-loop: #16a34a;
--}
--
--:root {
--    --qt-font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
--    --default-font-family: var(--qt-font-family);
--    font-family: var(--qt-font-family);
--}
--
--:root[data-theme="dark"] {
--    color-scheme: dark;
--}
--
--:root[data-theme="light"] {
--    color-scheme: light;
--}
--
--html,
--body,
--#root {
--    margin: 0;
--    width: 100%;
--    height: 100%;
--    overflow: hidden; /* Prevent scrolling on body */
--}
--
--/*
-- * DAW-style interaction baseline: the app itself is not selectable text.
-- * This is especially important on Linux/WebKitGTK, where `selectstart`
-- * suppression alone does not always stop mouse-drag text selection.
-- * Editable controls and explicit `data-hs-selectable` surfaces opt back in.
-- */
--html,
--body,
--#root,
--body * {
--    -webkit-user-select: none;
--    user-select: none;
--}
--
--body input,
--body textarea,
--body select,
--body [contenteditable="true"],
--body [data-hs-selectable="true"],
--body [data-hs-selectable="true"] * {
--    -webkit-user-select: text;
--    user-select: text;
--}
--
--body {
--    background: var(--qt-window, #353535);
--    color: var(--qt-text, #cccccc);
--    font-family: var(--qt-font-family);
--}
--
--* {
--    box-sizing: border-box;
--}
--
--button,
--input,
--select,
--textarea {
--    font-family: inherit;
--}
--
--.rt-BaseButton:focus-visible,
--:where(button, [role="button"]):focus-visible {
--    outline: none;
--    box-shadow: none;
--}
--
--:where(input, textarea, select, .rt-TextFieldInput, .rt-SelectTrigger):focus-visible {
--    outline: none;
--    box-shadow: none;
--}
--
--/*
-- * Qt/DAW 风格滚动条（标准 CSS 滚动条属性）。
-- *
-- * 不用 ::-webkit-scrollbar 自绘：WebView2/Chromium 在分数设备缩放
-- * （Windows 125%/150%、浏览器缩放）下，作者自绘滚动条的滑块命中与
-- * 拖拽映射有缺陷 —— 实测拖拽滑块时内容滚动速度被放大约 dpr² 倍，滑块
-- * 直接飞离指针（同页对照：原生滚动条映射正确）。标准属性走引擎原生
-- * 主题渲染，任意缩放下命中与拖拽映射都正确，也是各引擎的标准化方向
-- * （::-webkit-scrollbar 非标准且已废弃）。主题色经 scrollbar-color
-- * 保留；hover 变色与圆角自绘无法用标准属性表达，让位给交互正确性。
-- *
-- * 两个属性都是**继承**的（CSS Scrollbars L1）：挂在 `:root` 即可全局生效，
-- * 通配选择器只是保守起见保持显式（旧的全局 ::-webkit-scrollbar 语义）。
-- * 标准滚动条属性 Chromium 121+ 才支持；此前的 WebView2 会回退到无样式的
-- * 默认滚动条（可接受：Tauri WebView2 是常青更新）。
-- */
--* {
--    scrollbar-width: thin;
--    scrollbar-color: var(--qt-scrollbar-thumb, #555555) var(--qt-base, #303030);
--}
--
--.qt-overlay {
--    background: var(--qt-overlay);
--    backdrop-filter: blur(2px);
--}
--
--/* 紧凑面板变体：透明轨道（时间轴 / 参数编辑器 / 列表等自定义容器沿用） */
--.custom-scrollbar {
--    scrollbar-width: thin;
--    scrollbar-color: var(--qt-scrollbar-thumb, #555555) transparent;
--}
--
--/* 隐藏纵向滚动条（保留滚动功能）用于左侧轨道头。
-- * 置于 .custom-scrollbar 之后：同类选择器按源序覆盖 scrollbar-width。 */
--.hide-v-scrollbar {
--    scrollbar-width: none;
--    -ms-overflow-style: none;
--}
--
--/* 隐藏两轴原生滚动条但**保留滚动能力**（`scrollbar-width: none` 只改渲染，
-- * 不改变可滚动范围，程序化 scrollLeft/scrollTop 与原生滚动都照常工作）。
-- *
-- * 用途：渲染内核自绘滚动条的面板（参数编辑器）。内核模式下滚动位置由内核持有，
-- * 原生滚动条只是**被动镜像**——镜像需要保留滚动范围才能接受程序化写入，但它的
-- * 滚动条本身必须隐藏，否则会与自绘滚动条重复显示。
-- * 与 `.hide-v-scrollbar` 的区别：本类同时隐藏水平与竖直。 */
--.hide-scrollbar {
--    scrollbar-width: none;
--    -ms-overflow-style: none;
--}
--.hide-scrollbar::-webkit-scrollbar {
--    display: none;
--}
--
--/* Unified popup/menu/dialog surfaces for Radix and custom panels */
--.rt-DialogOverlay {
--    background: var(--qt-overlay) !important;
--    backdrop-filter: blur(2px);
--}
--
--/*
-- * 层级约定（高 → 低）：
-- *   快速搜索                99998 / 99999
-- *   导入模式等全屏选择菜单     9999
-- *   模态弹窗（Dialog）       1000  —— 打开时独占交互，盖过「操作记录」面板与菜单
-- *   右键 / 上下文菜单等       999
-- *   工具栏右键菜单            600
-- *   「操作记录」面板          500   —— 高于时间轴瞬态元素（选区框 z-40、握把 z-60 之外的内容）
-- *   时间轴瞬态元素            ≤ 60
-- *
-- * Radix 的 Dialog / 菜单 portal 本身不带 z-index（靠 DOM 顺序决定层级），
-- * 而「操作记录」是常驻浮层（z-500），不显式分层就会挡住后打开的弹窗与菜单。
-- * 弹层与弹窗同用 1000 时靠 DOM 顺序：后打开的（如弹窗内的下拉）在上。
-- */
--.rt-DialogOverlay,
--.rt-DialogContent {
--    z-index: 1000 !important;
--}
--
--.rt-DropdownMenuContent,
--.rt-SelectContent,
--.rt-ContextMenuContent,
--.rt-PopoverContent {
--    z-index: 1000 !important;
--}
--
--.rt-DialogContent,
--.rt-DropdownMenuContent,
--.rt-SelectContent,
--.rt-ContextMenuContent,
--.rt-PopoverContent {
--    background: var(--qt-panel) !important;
--    color: var(--qt-text) !important;
--    border: 1px solid var(--qt-border) !important;
--    border-radius: 10px !important;
--    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28) !important;
--}
--
--/* Ensure Radix controls follow custom font everywhere */
--.rt-Theme,
--.rt-BaseButton,
--.rt-SelectTrigger,
--.rt-TextFieldInput,
--.rt-TextArea,
--.rt-DialogContent,
--.rt-DropdownMenuContent,
--.rt-SelectContent,
--.rt-SelectItem,
--.rt-ContextMenuContent,
--.rt-PopoverContent,
--.rt-TooltipContent {
--    font-family: var(--qt-font-family) !important;
--}
--
--/*
-- * 工具栏/开关图标按钮尺寸稳定：
-- * Radix 的「ghost」变体会改用 content-box 尺寸并用 padding + 负 margin 做补偿，
-- * 导致其占用的盒子与固定尺寸的 solid/soft 变体不一致。这样在启用/禁用（solid ↔ ghost）
-- * 切换时，按钮会产生约 1px 的尺寸/位置抖动。这里把 ghost 图标按钮统一为与其他变体
-- * 相同的固定尺寸（border-box + 无内边距 + 无负 margin），保证开关切换时布局零位移。
-- * 用户通过 margin 属性（如 ml="2"）设置的外边距仍然生效。
-- */
--.rt-IconButton.rt-variant-ghost {
--    box-sizing: border-box;
--    width: var(--base-button-height);
--    height: var(--base-button-height);
--    padding: 0;
--    --margin-top-override: var(--margin-top);
--    --margin-right-override: var(--margin-right);
--    --margin-bottom-override: var(--margin-bottom);
--    --margin-left-override: var(--margin-left);
--}
--
--/*
-- * 参数编辑器工具栏的“参数分组药丸”：
-- * 把「眼睛 + 参数名 + 子参数下拉」三个片段整合成一个连续背景的整体，
-- * 让用户自然看出眼睛/下拉菜单都属于该参数；激活参数的强调色整体铺满，
-- * 各片段仍保留独立的悬停高亮以提示可点击。
-- */
--.param-pill {
--    display: inline-flex;
--    align-items: stretch;
--    height: var(--space-5); /* 与 size-1 按钮一致：24px */
--    border: 1px solid var(--qt-border);
--    border-radius: 6px;
--    background: var(--qt-panel);
--    overflow: hidden;
--    white-space: nowrap;
--}
--.param-pill[data-active] {
--    border-color: transparent;
--    background: var(--accent-9);
--}
--.param-pill__seg {
--    display: inline-flex;
--    align-items: center;
--    justify-content: center;
--    padding: 0 3px;
--    border: 0;
--    background: transparent;
--    color: var(--qt-text);
--    font: inherit;
--    text-align: center;
--    cursor: pointer;
--}
--.param-pill[data-active] .param-pill__seg {
--    color: var(--accent-contrast, #ffffff);
--}
--/* 片段之间的细分隔线，取代各自独立的背景 */
--.param-pill__seg + .param-pill__seg {
--    box-shadow: inset 1px 0 0 0 var(--qt-divider);
--}
--.param-pill[data-active] .param-pill__seg + .param-pill__seg {
--    box-shadow: inset 1px 0 0 0 rgba(255, 255, 255, 0.22);
--}
--/* 悬停：仅高亮当前片段 */
--.param-pill__seg:not(.param-pill__seg--inert):hover {
--    background: color-mix(in oklab, var(--accent-9) 16%, transparent);
--}
--.param-pill[data-active] .param-pill__seg:not(.param-pill__seg--inert):hover {
--    background: rgba(255, 255, 255, 0.18);
--}
--/* 主参数的眼睛只展示“睁开”状态、不响应点击：不高亮、指针 default */
--.param-pill__seg--inert {
--    cursor: default;
--}
--.param-pill__seg--eye {
--    min-width: 24px;
--    padding-inline: 4px;
--}
--.param-pill__seg--label {
--    padding-inline: 5px;
--    font-size: var(--font-size-1);
--    line-height: 16px;
--}
--.param-pill__seg--chev {
--    min-width: 20px;
--    padding-inline: 2px 4px;
--}
--.param-pill__seg--breath {
--    min-width: 22px;
--    padding-inline: 3px;
--}
--/* 参数整体不可见（眼睛关闭）时，参数名降为弱化色：
--   与「禁用」的浅灰斜眼、激活态的实底拉开三个层次 */
--.param-pill[data-eye-off] .param-pill__seg--label {
--    color: var(--qt-text-muted);
--}
--
--/*
-- * 原生 range 滑杆（参数编辑器「平滑度」等）：
-- * 未填充的轨道槽用 --qt-border，保证在浅色工具栏上可见；
-- * 滑块用全局强调色 --accent-9（跟随 Radix accent 设置）。
-- */
--.qt-range {
--    -webkit-appearance: none;
--    appearance: none;
--    height: 14px;
--    background: transparent;
--    cursor: pointer;
--}
--.qt-range::-webkit-slider-runnable-track {
--    height: 4px;
--    border-radius: 2px;
--    background: var(--qt-border);
--}
--.qt-range::-webkit-slider-thumb {
--    -webkit-appearance: none;
--    appearance: none;
--    margin-top: -4px; /* 4px 槽 + 12px 滑块 → 垂直居中 */
--    width: 12px;
--    height: 12px;
--    border: none;
--    border-radius: 50%;
--    background: var(--accent-9);
--}
--.qt-range::-moz-range-track {
--    height: 4px;
--    border-radius: 2px;
--    background: var(--qt-border);
--}
--.qt-range::-moz-range-thumb {
--    width: 12px;
--    height: 12px;
--    border: none;
--    border-radius: 50%;
--    background: var(--accent-9);
--}
--
--.rt-DropdownMenuItem,
--.rt-SelectItem,
--.rt-ContextMenuItem {
--    border-radius: 7px !important;
--}
--
--.rt-DropdownMenuItem[data-highlighted],
--.rt-SelectItem[data-highlighted],
--.rt-ContextMenuItem[data-highlighted] {
--    background: color-mix(in oklab, var(--qt-highlight) 24%, transparent) !important;
--    color: var(--qt-text) !important;
--}
--
--.rt-DropdownMenuSeparator,
--.rt-SelectSeparator,
--.rt-ContextMenuSeparator {
--    background: var(--qt-divider) !important;
--}
--
--/* Unified app tooltip (shared by gain knobs and all data-tooltip elements) */
--.app-tooltip {
--    position: fixed;
--    z-index: 2147483647;
--    pointer-events: none;
--    background: var(--qt-panel);
--    color: var(--qt-text);
--    padding: 4px 8px;
--    border-radius: 6px;
--    font-size: 12px;
--    line-height: 16px;
--    border: 1px solid var(--qt-border);
--    box-shadow: 0 2px 10px var(--qt-overlay);
--    white-space: pre-line;
--    /* 400px：容纳关于对话框里两行展示的完整仓库链接（约 320px），其余
--       短文案不受影响（只在内容超过 320px 时才会用满更宽的气泡）。 */
--    max-width: 400px;
--    tab-size: 4;
--}
 +@tailwind base;
 +@tailwind components;
 +@tailwind utilities;
@@ -97549,6 +97232,482 @@ index d42792c8..681a8396 100644
 +body[data-hs-paramsync="on"] [data-hs-sb="timeline"] {
 +    display: none !important;
 +}
+ 
+-/*
+-  Qt-like design tokens as CSS variables.
+-  - Dark uses the legacy Qt hex colors.
+-  - Light derives from Radix Theme tokens to avoid inventing a new palette.
+-*/
+-
+-.qt-theme.dark,
+-:root[data-theme="dark"] {
+-    --qt-window: #353535;
+-    --qt-base: #2d2d2d;
+-    --qt-panel: #2a2a2a;
+-    --qt-surface: #404040;
+-    --qt-clip-bg: #343434;
+-    --qt-clip-border: rgba(255, 255, 255, 0.14);
+-    /* Clip 是明亮色块，选中描边一律深色实线（半透明白在彩色块上发灰） */
+-    --qt-clip-selected-border: rgba(24, 28, 35, 0.95);
+-    --qt-text: #d0d0d0;
+-    --qt-text-muted: #909090;
+-    --qt-highlight: #3b82f6;
+-    --qt-playhead: #f05a5a;
+-    --qt-button: #3d3d3d;
+-    --qt-button-hover: #484848;
+-    --qt-border: #505050;
+-    --qt-hover: #484848;
+-    --qt-danger-bg: #4a1a1a;
+-    --qt-danger-text: #fca5a5;
+-    --qt-danger-border: #ef4444;
+-    --qt-warning-bg: #3d2a0a;
+-    --qt-warning-text: #fcd34d;
+-    --qt-warning-border: #f59e0b;
+-    /* 画布区（时间线轨道/参数编辑器）比 chrome 区（window/panel）深一档，
+-       让工具栏/标尺/画布靠明度而不是仅靠 1px 细线分区 */
+-    --qt-graph-bg: #1f1f1f;
+-    /* 半透明白：在泳道和彩色 clip 上都呈同色调细线，
+-       不会在波形上切出生硬的条纹 */
+-    --qt-graph-grid-strong: rgba(255, 255, 255, 0.22);
+-    --qt-graph-grid-weak: rgba(255, 255, 255, 0.1);
+-    --qt-scrollbar-thumb: #555555;
+-    --qt-overlay: rgba(0, 0, 0, 0.35);
+-    --qt-divider: rgba(255, 255, 255, 0.04);
+-    --qt-subtle-1: rgba(255, 255, 255, 0.025);
+-    --qt-subtle-2: rgba(255, 255, 255, 0.045);
+-    --qt-subtle-3: rgba(255, 255, 255, 0.07);
+-    --qt-subtle-hover: rgba(255, 255, 255, 0.04);
+-    --qt-meter-rail: #2a2a2a;
+-    --qt-meter-well: #1d1d1d;
+-    /* 吸附竖线高亮：按吸附目标类型区分颜色 */
+-    --qt-snap-grid: #3b82f6;
+-    --qt-snap-clip: #f59e0b;
+-    --qt-snap-offset: #ec4899;
+-    --qt-snap-source: #a855f7;
+-    --qt-snap-selection: #22d3ee;
+-    --qt-snap-cursor: #f05a5a;
+-    --qt-snap-sample: #94a3b8;
+-    --qt-snap-loop: #22c55e;
+-}
+-
+-.qt-theme.light,
+-:root[data-theme="light"] {
+-    --qt-window: #f2f3f6;
+-    --qt-base: #ebedf1;
+-    --qt-panel: #f8f9fb;
+-    --qt-surface: #e1e4ea;
+-    --qt-clip-bg: #dde1e8;
+-    --qt-clip-border: rgba(32, 38, 52, 0.18);
+-    --qt-clip-selected-border: rgba(24, 28, 35, 0.95);
+-    --qt-text: #1f232b;
+-    --qt-text-muted: #666d79;
+-    --qt-highlight: #4b68d1;
+-    --qt-playhead: #de4f5d;
+-    --qt-button: #e3e6ec;
+-    --qt-button-hover: #d7dbe4;
+-    --qt-border: #b8bdc9;
+-    --qt-hover: #dde1e8;
+-    --qt-danger-bg: #ffe6ea;
+-    --qt-danger-text: #b53a49;
+-    --qt-danger-border: #df6674;
+-    --qt-warning-bg: #fff1dc;
+-    --qt-warning-text: #9b5f13;
+-    --qt-warning-border: #d59140;
+-    --qt-graph-bg: #edf0f5;
+-    /* 半透明蓝灰：在泳道上与旧实色等效，在 clip 色块/波形上则化为
+-       同色调的细线，不再切出高对比条纹 */
+-    --qt-graph-grid-strong: rgba(74, 88, 112, 0.55);
+-    --qt-graph-grid-weak: rgba(74, 88, 112, 0.3);
+-    --qt-scrollbar-thumb: #b4bac7;
+-    --qt-overlay: rgba(20, 24, 32, 0.22);
+-    --qt-divider: rgba(32, 38, 52, 0.1);
+-    --qt-subtle-1: rgba(28, 36, 52, 0.025);
+-    --qt-subtle-2: rgba(28, 36, 52, 0.04);
+-    --qt-subtle-3: rgba(28, 36, 52, 0.06);
+-    --qt-subtle-hover: rgba(28, 36, 52, 0.04);
+-    --qt-meter-rail: #d6dbe5;
+-    --qt-meter-well: #c8ceda;
+-    /* 吸附竖线高亮：按吸附目标类型区分颜色（浅色主题取更深的可读色） */
+-    --qt-snap-grid: #2563eb;
+-    --qt-snap-clip: #d97706;
+-    --qt-snap-offset: #db2777;
+-    --qt-snap-source: #9333ea;
+-    --qt-snap-selection: #0891b2;
+-    --qt-snap-cursor: #de4f5d;
+-    --qt-snap-sample: #64748b;
+-    --qt-snap-loop: #16a34a;
+-}
+-
+-:root {
+-    --qt-font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+-    --default-font-family: var(--qt-font-family);
+-    font-family: var(--qt-font-family);
+-}
+-
+-:root[data-theme="dark"] {
+-    color-scheme: dark;
+-}
+-
+-:root[data-theme="light"] {
+-    color-scheme: light;
+-}
+-
+-html,
+-body,
+-#root {
+-    margin: 0;
+-    width: 100%;
+-    height: 100%;
+-    overflow: hidden; /* Prevent scrolling on body */
+-}
+-
+-/*
+- * DAW-style interaction baseline: the app itself is not selectable text.
+- * This is especially important on Linux/WebKitGTK, where `selectstart`
+- * suppression alone does not always stop mouse-drag text selection.
+- * Editable controls and explicit `data-hs-selectable` surfaces opt back in.
+- */
+-html,
+-body,
+-#root,
+-body * {
+-    -webkit-user-select: none;
+-    user-select: none;
+-}
+-
+-body input,
+-body textarea,
+-body select,
+-body [contenteditable="true"],
+-body [data-hs-selectable="true"],
+-body [data-hs-selectable="true"] * {
+-    -webkit-user-select: text;
+-    user-select: text;
+-}
+-
+-body {
+-    background: var(--qt-window, #353535);
+-    color: var(--qt-text, #cccccc);
+-    font-family: var(--qt-font-family);
+-}
+-
+-* {
+-    box-sizing: border-box;
+-}
+-
+-button,
+-input,
+-select,
+-textarea {
+-    font-family: inherit;
+-}
+-
+-.rt-BaseButton:focus-visible,
+-:where(button, [role="button"]):focus-visible {
+-    outline: none;
+-    box-shadow: none;
+-}
+-
+-:where(input, textarea, select, .rt-TextFieldInput, .rt-SelectTrigger):focus-visible {
+-    outline: none;
+-    box-shadow: none;
+-}
+-
+-/*
+- * Qt/DAW 风格滚动条（标准 CSS 滚动条属性）。
+- *
+- * 不用 ::-webkit-scrollbar 自绘：WebView2/Chromium 在分数设备缩放
+- * （Windows 125%/150%、浏览器缩放）下，作者自绘滚动条的滑块命中与
+- * 拖拽映射有缺陷 —— 实测拖拽滑块时内容滚动速度被放大约 dpr² 倍，滑块
+- * 直接飞离指针（同页对照：原生滚动条映射正确）。标准属性走引擎原生
+- * 主题渲染，任意缩放下命中与拖拽映射都正确，也是各引擎的标准化方向
+- * （::-webkit-scrollbar 非标准且已废弃）。主题色经 scrollbar-color
+- * 保留；hover 变色与圆角自绘无法用标准属性表达，让位给交互正确性。
+- *
+- * 两个属性都是**继承**的（CSS Scrollbars L1）：挂在 `:root` 即可全局生效，
+- * 通配选择器只是保守起见保持显式（旧的全局 ::-webkit-scrollbar 语义）。
+- * 标准滚动条属性 Chromium 121+ 才支持；此前的 WebView2 会回退到无样式的
+- * 默认滚动条（可接受：Tauri WebView2 是常青更新）。
+- */
+-* {
+-    scrollbar-width: thin;
+-    scrollbar-color: var(--qt-scrollbar-thumb, #555555) var(--qt-base, #303030);
+-}
+-
+-.qt-overlay {
+-    background: var(--qt-overlay);
+-    backdrop-filter: blur(2px);
+-}
+-
+-/* 紧凑面板变体：透明轨道（时间轴 / 参数编辑器 / 列表等自定义容器沿用） */
+-.custom-scrollbar {
+-    scrollbar-width: thin;
+-    scrollbar-color: var(--qt-scrollbar-thumb, #555555) transparent;
+-}
+-
+-/* 隐藏纵向滚动条（保留滚动功能）用于左侧轨道头。
+- * 置于 .custom-scrollbar 之后：同类选择器按源序覆盖 scrollbar-width。 */
+-.hide-v-scrollbar {
+-    scrollbar-width: none;
+-    -ms-overflow-style: none;
+-}
+-
+-/* 隐藏两轴原生滚动条但**保留滚动能力**（`scrollbar-width: none` 只改渲染，
+- * 不改变可滚动范围，程序化 scrollLeft/scrollTop 与原生滚动都照常工作）。
+- *
+- * 用途：渲染内核自绘滚动条的面板（参数编辑器）。内核模式下滚动位置由内核持有，
+- * 原生滚动条只是**被动镜像**——镜像需要保留滚动范围才能接受程序化写入，但它的
+- * 滚动条本身必须隐藏，否则会与自绘滚动条重复显示。
+- * 与 `.hide-v-scrollbar` 的区别：本类同时隐藏水平与竖直。 */
+-.hide-scrollbar {
+-    scrollbar-width: none;
+-    -ms-overflow-style: none;
+-}
+-.hide-scrollbar::-webkit-scrollbar {
+-    display: none;
+-}
+-
+-/* Unified popup/menu/dialog surfaces for Radix and custom panels */
+-.rt-DialogOverlay {
+-    background: var(--qt-overlay) !important;
+-    backdrop-filter: blur(2px);
+-}
+-
+-/*
+- * 层级约定（高 → 低）：
+- *   快速搜索                99998 / 99999
+- *   导入模式等全屏选择菜单     9999
+- *   模态弹窗（Dialog）       1000  —— 打开时独占交互，盖过「操作记录」面板与菜单
+- *   右键 / 上下文菜单等       999
+- *   工具栏右键菜单            600
+- *   「操作记录」面板          500   —— 高于时间轴瞬态元素（选区框 z-40、握把 z-60 之外的内容）
+- *   时间轴瞬态元素            ≤ 60
+- *
+- * Radix 的 Dialog / 菜单 portal 本身不带 z-index（靠 DOM 顺序决定层级），
+- * 而「操作记录」是常驻浮层（z-500），不显式分层就会挡住后打开的弹窗与菜单。
+- * 弹层与弹窗同用 1000 时靠 DOM 顺序：后打开的（如弹窗内的下拉）在上。
+- */
+-.rt-DialogOverlay,
+-.rt-DialogContent {
+-    z-index: 1000 !important;
+-}
+-
+-.rt-DropdownMenuContent,
+-.rt-SelectContent,
+-.rt-ContextMenuContent,
+-.rt-PopoverContent {
+-    z-index: 1000 !important;
+-}
+-
+-.rt-DialogContent,
+-.rt-DropdownMenuContent,
+-.rt-SelectContent,
+-.rt-ContextMenuContent,
+-.rt-PopoverContent {
+-    background: var(--qt-panel) !important;
+-    color: var(--qt-text) !important;
+-    border: 1px solid var(--qt-border) !important;
+-    border-radius: 10px !important;
+-    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28) !important;
+-}
+-
+-/* Ensure Radix controls follow custom font everywhere */
+-.rt-Theme,
+-.rt-BaseButton,
+-.rt-SelectTrigger,
+-.rt-TextFieldInput,
+-.rt-TextArea,
+-.rt-DialogContent,
+-.rt-DropdownMenuContent,
+-.rt-SelectContent,
+-.rt-SelectItem,
+-.rt-ContextMenuContent,
+-.rt-PopoverContent,
+-.rt-TooltipContent {
+-    font-family: var(--qt-font-family) !important;
+-}
+-
+-/*
+- * 工具栏/开关图标按钮尺寸稳定：
+- * Radix 的「ghost」变体会改用 content-box 尺寸并用 padding + 负 margin 做补偿，
+- * 导致其占用的盒子与固定尺寸的 solid/soft 变体不一致。这样在启用/禁用（solid ↔ ghost）
+- * 切换时，按钮会产生约 1px 的尺寸/位置抖动。这里把 ghost 图标按钮统一为与其他变体
+- * 相同的固定尺寸（border-box + 无内边距 + 无负 margin），保证开关切换时布局零位移。
+- * 用户通过 margin 属性（如 ml="2"）设置的外边距仍然生效。
+- */
+-.rt-IconButton.rt-variant-ghost {
+-    box-sizing: border-box;
+-    width: var(--base-button-height);
+-    height: var(--base-button-height);
+-    padding: 0;
+-    --margin-top-override: var(--margin-top);
+-    --margin-right-override: var(--margin-right);
+-    --margin-bottom-override: var(--margin-bottom);
+-    --margin-left-override: var(--margin-left);
+-}
+-
+-/*
+- * 参数编辑器工具栏的“参数分组药丸”：
+- * 把「眼睛 + 参数名 + 子参数下拉」三个片段整合成一个连续背景的整体，
+- * 让用户自然看出眼睛/下拉菜单都属于该参数；激活参数的强调色整体铺满，
+- * 各片段仍保留独立的悬停高亮以提示可点击。
+- */
+-.param-pill {
+-    display: inline-flex;
+-    align-items: stretch;
+-    height: var(--space-5); /* 与 size-1 按钮一致：24px */
+-    border: 1px solid var(--qt-border);
+-    border-radius: 6px;
+-    background: var(--qt-panel);
+-    overflow: hidden;
+-    white-space: nowrap;
+-}
+-.param-pill[data-active] {
+-    border-color: transparent;
+-    background: var(--accent-9);
+-}
+-.param-pill__seg {
+-    display: inline-flex;
+-    align-items: center;
+-    justify-content: center;
+-    padding: 0 3px;
+-    border: 0;
+-    background: transparent;
+-    color: var(--qt-text);
+-    font: inherit;
+-    text-align: center;
+-    cursor: pointer;
+-}
+-.param-pill[data-active] .param-pill__seg {
+-    color: var(--accent-contrast, #ffffff);
+-}
+-/* 片段之间的细分隔线，取代各自独立的背景 */
+-.param-pill__seg + .param-pill__seg {
+-    box-shadow: inset 1px 0 0 0 var(--qt-divider);
+-}
+-.param-pill[data-active] .param-pill__seg + .param-pill__seg {
+-    box-shadow: inset 1px 0 0 0 rgba(255, 255, 255, 0.22);
+-}
+-/* 悬停：仅高亮当前片段 */
+-.param-pill__seg:not(.param-pill__seg--inert):hover {
+-    background: color-mix(in oklab, var(--accent-9) 16%, transparent);
+-}
+-.param-pill[data-active] .param-pill__seg:not(.param-pill__seg--inert):hover {
+-    background: rgba(255, 255, 255, 0.18);
+-}
+-/* 主参数的眼睛只展示“睁开”状态、不响应点击：不高亮、指针 default */
+-.param-pill__seg--inert {
+-    cursor: default;
+-}
+-.param-pill__seg--eye {
+-    min-width: 24px;
+-    padding-inline: 4px;
+-}
+-.param-pill__seg--label {
+-    padding-inline: 5px;
+-    font-size: var(--font-size-1);
+-    line-height: 16px;
+-}
+-.param-pill__seg--chev {
+-    min-width: 20px;
+-    padding-inline: 2px 4px;
+-}
+-.param-pill__seg--breath {
+-    min-width: 22px;
+-    padding-inline: 3px;
+-}
+-/* 参数整体不可见（眼睛关闭）时，参数名降为弱化色：
+-   与「禁用」的浅灰斜眼、激活态的实底拉开三个层次 */
+-.param-pill[data-eye-off] .param-pill__seg--label {
+-    color: var(--qt-text-muted);
+-}
+-
+-/*
+- * 原生 range 滑杆（参数编辑器「平滑度」等）：
+- * 未填充的轨道槽用 --qt-border，保证在浅色工具栏上可见；
+- * 滑块用全局强调色 --accent-9（跟随 Radix accent 设置）。
+- */
+-.qt-range {
+-    -webkit-appearance: none;
+-    appearance: none;
+-    height: 14px;
+-    background: transparent;
+-    cursor: pointer;
+-}
+-.qt-range::-webkit-slider-runnable-track {
+-    height: 4px;
+-    border-radius: 2px;
+-    background: var(--qt-border);
+-}
+-.qt-range::-webkit-slider-thumb {
+-    -webkit-appearance: none;
+-    appearance: none;
+-    margin-top: -4px; /* 4px 槽 + 12px 滑块 → 垂直居中 */
+-    width: 12px;
+-    height: 12px;
+-    border: none;
+-    border-radius: 50%;
+-    background: var(--accent-9);
+-}
+-.qt-range::-moz-range-track {
+-    height: 4px;
+-    border-radius: 2px;
+-    background: var(--qt-border);
+-}
+-.qt-range::-moz-range-thumb {
+-    width: 12px;
+-    height: 12px;
+-    border: none;
+-    border-radius: 50%;
+-    background: var(--accent-9);
+-}
+-
+-.rt-DropdownMenuItem,
+-.rt-SelectItem,
+-.rt-ContextMenuItem {
+-    border-radius: 7px !important;
+-}
+-
+-.rt-DropdownMenuItem[data-highlighted],
+-.rt-SelectItem[data-highlighted],
+-.rt-ContextMenuItem[data-highlighted] {
+-    background: color-mix(in oklab, var(--qt-highlight) 24%, transparent) !important;
+-    color: var(--qt-text) !important;
+-}
+-
+-.rt-DropdownMenuSeparator,
+-.rt-SelectSeparator,
+-.rt-ContextMenuSeparator {
+-    background: var(--qt-divider) !important;
+-}
+-
+-/* Unified app tooltip (shared by gain knobs and all data-tooltip elements) */
+-.app-tooltip {
+-    position: fixed;
+-    z-index: 2147483647;
+-    pointer-events: none;
+-    background: var(--qt-panel);
+-    color: var(--qt-text);
+-    padding: 4px 8px;
+-    border-radius: 6px;
+-    font-size: 12px;
+-    line-height: 16px;
+-    border: 1px solid var(--qt-border);
+-    box-shadow: 0 2px 10px var(--qt-overlay);
+-    white-space: pre-line;
+-    /* 400px：容纳关于对话框里两行展示的完整仓库链接（约 320px），其余
+-       短文案不受影响（只在内容超过 320px 时才会用满更宽的气泡）。 */
+-    max-width: 400px;
+-    tab-size: 4;
+-}
++/* E9（用户口径）：「轨道+参数分屏下**开启同步位置与缩放**后应**隐藏参数界面左上角的速度映射键**」。
++   `body[data-hs-paramsync="on"]` 正是"分屏 + 同步开启"这个状态（App.tsx 里按
++   `paramEditorSyncTimeline && mobilePanels.params && mobilePanels.timeline` 设置）。
++   两颗速度映射键在同步态下功能一体、且并排容易误按 ⇒ 参数侧那颗隐藏。 */
++body[data-hs-paramsync="on"] [data-hs-params-tempo-map] {
++    display: none !important;
++}
+\ No newline at end of file
 diff --git a/frontend/src/services/api/core.ts b/frontend/src/services/api/core.ts
 index cf451bd3..f8f4233b 100644
 --- a/frontend/src/services/api/core.ts
