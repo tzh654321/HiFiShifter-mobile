@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..d0ed876c 100644
+index 3802022a..aa9278e3 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4606 @@
+@@ -1,4006 +1,4608 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -5025,7 +5025,9 @@ index 3802022a..d0ed876c 100644
 +        const COLLAPSE_TOP = 0.14;
 +        /** 死区：小于它只当"点了一下标题条"（同一根条上还有各自的点击语义）。 */
 +        const DEAD_PX = 14;
-+        const HANDLE_SELECTOR = '[data-hs-split-handle], [data-hs-time-ruler="params"]';
++        /* E8（用户口径）：手柄**只**认带 `data-hs-split-handle` 的那几条（上工具栏 / 文件浏览器标题栏 /
++   记事本标题栏）。**参数界面的拍数栏不再参与** —— 它原先被塞进这个选择器，导致"拖拍数栏改分屏高度"。 */
++const HANDLE_SELECTOR = '[data-hs-split-handle]';
 +        let drag: { pointerId: number; startY: number; moved: boolean; ratio: number } | null = null;
 +
 +        const findHandle = (target: EventTarget | null): HTMLElement | null => {
@@ -79889,10 +79891,10 @@ index 00000000..2ffc91cf
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..9ccfc5f1
+index 00000000..90ee4b12
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1955 @@
+@@ -0,0 +1,1957 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -81664,6 +81666,8 @@ index 00000000..9ccfc5f1
 +
 +    return (
 +        <div
++            /* E8（用户口径）：**参数界面上的「上工具栏」就是手机端分屏的手柄** —— 可直接上下拖动调分屏高度。 */
++            data-hs-split-handle="param-toolbar"
 +            /* D1：加语义类，供 CSS 收紧按钮间距（不改命中区） */
 +            className="hs-param-toolrow shrink-0 relative flex items-center bg-qt-base border-b border-qt-border"
 +            style={{ minHeight: MOBILE_PARAM_TOOL_ROW_HEIGHT, paddingInline: 2, gap: 2 }}

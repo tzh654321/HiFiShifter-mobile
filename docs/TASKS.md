@@ -2987,3 +2987,34 @@ WebView 的指针序列是
 
 **同时确认的量化手段**：`get_param_frames(trackId, "pitch", startFrame, frameCount, stride, binary)`
 可以在页面里直接调用，用来**比对拖动前后被改写的帧数与范围** —— 这正是判定"拖动 vs 单点"的客观依据。
+
+---
+
+## 📋 E8 实施与部分验证（2026-09-30 01:4x）
+
+**用户口径**：「带参数页面的分屏模式下：**上工具栏显示在参数界面上面**，且**可上下拖动调整分屏高度**；
+让**参数界面的拍数栏不能用于调整分屏高度**」。
+
+**实施**：
+
+1. 给 `MobileParamToolRow` 的根元素（`hs-param-toolrow` / `role="toolbar"`）加
+   `data-hs-split-handle="param-toolbar"` ⇒ 它成为手机端分屏手柄；
+2. `HANDLE_SELECTOR` 由 `'[data-hs-split-handle], [data-hs-time-ruler="params"]'`
+   收窄为 `'[data-hs-split-handle]'` ⇒ **参数拍数栏退出**（它原先被塞进这个选择器，
+   导致"拖拍数栏改分屏高度"）。
+
+**验证（真机）**：
+
+| 判据 | 结果 |
+| :--- | :--- |
+| 拖**参数拍数栏**不再改变分屏高度 | ✅ 通过（前 369 → 后 369）|
+| 拖**上工具栏**能调整分屏高度 | 🔴 **未生效**（采样恒为 369）|
+
+**E8-a 的下一步排查**：上工具栏元素确实带上了手柄属性（探针量到
+`[data-hs-split-handle="param-toolbar"]` = 360×41 @ (180,66)），但拖动无反应。
+怀疑方向：
+* 上工具栏**整条都是按钮**（`BarButton` 密集）⇒ 按下点落在按钮上，其 `pointerdown`
+  可能在**冒泡**阶段被吞（我们的监听在 window **捕获**阶段，理论上不受影响，需实测确认）；
+* 或 `resolveHandle` 里 `container.contains(el)` 不成立（上工具栏是否真的在
+  `[data-hs-mobile-split="1"]` 之内 —— 它在参数面板里，需确认参数面板就是 split 的子块）；
+* 或 `DEAD_PX` 之外的移动阈值与该条的其它手势（横向滑动切工具）冲突。
