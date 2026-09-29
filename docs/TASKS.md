@@ -2334,7 +2334,7 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 | E7 | 轨道头菜单调整**辈分**后有概率选中第一个导入的音频（**未能复现**） | 记录下来；排查 `moveTrackRemote` 后是否触发了选中重置 | ⬜ TODO（待复现）|
 | E8 | **（覆盖之前说法）** 带参数页面的分屏模式下：上工具栏显示在**参数界面上方**，且**可上下拖动调整分屏高度**；让**参数界面的拍数栏不能用于调整分屏高度** | 手柄从"下方面板标题栏"改为"上工具栏所在的那条"；参数拍数栏退出 `HANDLE_SELECTOR` | ⬜ TODO（覆盖 C5/C6 旧口径）|
 | E9 | 轨道+参数分屏下开启**同步位置与缩放**后，应**隐藏参数界面左上角的速度映射键** | 与 D3 同一开关下的第二处去重 | ⬜ TODO |
-| E10 | 从轨道+参数分屏切到**参数界面全屏**：参数界面**无法占满全屏**、有概率**卡崩**（全白 + 左上角灰框哭脸）、有概率状态栏闪"剪贴板没有可粘贴的内容" | 🔎 **已定位根因（2026-09-29 真机取证）**：三个现象**同一个根因** —— 面板切换时**旧的 WebGL canvas 不释放**，context 累积到浏览器上限后新建内核失败 ⇒ 渲染「内核不可用」页（＝灰框哭脸/白屏）⇒ 该页尝试把诊断写入剪贴板 ⇒ 系统提示"剪贴板没有可粘贴的内容"。修法：面板隐藏/卸载时释放 context（约束：同一 canvas 不能换 context，必须让 React **卸载 canvas 元素**、重挂时新建元素）| 🔎 已定位，待实现（详见下节取证）|
+| E10 | 从轨道+参数分屏切到**参数界面全屏**：参数界面**无法占满全屏**、有概率**卡崩**（全白 + 左上角灰框哭脸）、有概率状态栏闪"剪贴板没有可粘贴的内容" | 🔎 **分两条独立问题**（2026-09-29 真机取证）：<br>**③ 剪贴板闪烁已确认**：应用**静置无交互也每 2 秒访问一次系统剪贴板**（logcat `ClipboardService: op=29 callingPackage=com.arounder.hifishifter`，12 秒内 3 次），OPPO 对每次读取都 flash 提示 ⇒ "有概率"= 是否撞上界面刷新。已排除：前端 `setInterval` 的 `hasTimelineClipboard`（读的是**内部**剪贴板）、`clipboard_kind` 的三处调用（都在用户点"粘贴"时按需）、`system_clipboard.rs`（Windows 专用，Android 不编译）。<br>**①② 待续**：手机端面板是**条件渲染**（不是常挂载）⇒ 上一轮"context 累积"的推断**证据不足**（实测 3 个 canvas = 轨道内核 1 + 参数面板 2，属正常）| 🔎 ③ 已确认待修；①② 待复现（需用正确入口切面板）|
 | E11 | **轨道头增益划不动了**；为防误触可设为**长按后划动** | 增益旋钮改长按门槛再进入拖动 | ⬜ TODO |
 | E12 | 长按并划动的操作都应在**识别到长按后震动一下**（"已完成部分，设计得不错"）| 统一到所有长按手势（含新增的），复用既有实现 | ⬜ TODO（部分已有）|
 | E13 | 轨道头缩小后**从无轨道处右滑无法展开**轨道头，需修 | ✅ **DONE**：左划收起/右划展开原本只挂在滚动容器 `[data-track-list-panel]` 上，而收起后那是 26px 窄条，手指常落在**头行**（滚动容器的兄弟）或外壳空白处 ⇒ 事件到不了容器。改为同一套判定**再挂外壳 + 文档级兜底**（边界取轨道头列右边缘，展开/收起两态通吃）| ✅ DONE（模拟器 `_probe-e13-expand-from-blank.mjs` **4/4**：收起态在头行右滑⇒展开、在**无轨道处**右滑⇒展开、展开态在头行/轨道行左划⇒仍收起）|
@@ -2408,3 +2408,41 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 
 1. 参数面板的稳定选择器是 **`data-piano-roll-canvas`**（不是 `data-hs-surface="params"`）；
 2. 「视图」菜单项**不是** `role=menuitem`（用该选择器枚举得到空数组 ⇒ 之前几轮"切面板"其实没生效）。
+
+### 🔬 E10 复查（2026-09-29 傍晚）：更正上一轮结论 + 新增硬证据
+
+**更正**：上一轮把根因写成"面板切换未释放 WebGL context ⇒ context 累积超限"。复查后**证据不足**，撤回该结论：
+
+* 手机端面板在 `App.tsx` 里是**条件渲染**（`mobilePanels.params ? <div>…<PianoRollPanel/></div> : null`），
+  面板卸载时 canvas 元素随之移除 ⇒ 不存在"常挂载导致累积"；
+* 实测"3 个 912×1098 canvas"正好等于**轨道内核 1 个 + 参数面板 2 个**（主曲线 + GL 叠加层），属**正常**；
+* 上一轮的探针**根本没切成全屏** —— ① 参数面板选择器用错（应为 `data-piano-roll-canvas`）；
+  ② 面板切换入口用错（「视图」菜单项不是 `role=menuitem`，枚举得到空数组 ⇒ 点击全部落空）。
+  ⇒ 那几轮"切面板"实际没发生，因此"未崩"不能作为"不复现"的证据。
+
+**新增硬证据（现象③ = 剪贴板闪烁）**：
+
+```
+静置 12 秒、页面零可编辑元素（activeElement=BODY、无选区），系统剪贴板仍被访问 3 次：
+13:46:07.902 ClipboardService: clipboardAccessAllowed: op=29 result=true callingPackage=com.arounder.hifishifter
+13:46:09.901 …（间隔精确 2s）
+13:46:11.899 …
+```
+
+⇒ **应用无条件每 2 秒读一次系统剪贴板**。OPPO 对每次读取都 flash 提示，是否被看到取决于界面刷新时机
+⇒ 用户说的"**有概率**闪剪贴板提示"完全吻合。
+
+**已排除的候选**（逐个查过，都不是）：
+
+| 候选 | 结论 |
+| :--- | :--- |
+| `useTimelineClipActions` 的 `setInterval(refresh, 2000)` | ❌ 它调 `hasTimelineClipboard()`，读的是**内部**剪贴板 |
+| `clipboard_kind` 的三处调用（MenuBar / MobileTopBar / MobileBottomBar）| ❌ 都在用户点「粘贴」时**按需**调用 |
+| `KernelUnavailableNotice` 的复制按钮 | ❌ 需用户点击才写剪贴板 |
+| `system_clipboard.rs` 的周期性可用性轮询 | ❌ 该模块是 **Windows 专用**（`clipboard-win`），Android 不编译 |
+
+**下一步（下一轮第一件事）**：在后端与依赖侧继续找这个 2 秒节拍 ——
+重点看 `tauri-plugin-*`/`clipboard` 相关 crate 是否在 Android 上启动了 "clipboard watcher"
+（很多 crate 用 2s 轮询实现"剪贴板变化通知"），以及 `App.tsx` 的三个 `setInterval`（L675 / L3487 / L3527）
+是否间接触发系统剪贴板读取。定位手段已有：`_dbg-clipboard-poll.mjs`（静置计数）
++ `logcat -s ClipboardService`（带调用方包名）。
