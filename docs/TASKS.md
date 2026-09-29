@@ -2834,3 +2834,49 @@ console.log("[g1] ctxClip found", session.clips.some(c => c.id === (d.clipId ?? 
 `ClipControlPoints` 的抓取判据原先以**块边界**为基准（`geo.left ± OUTSIDE_GRAB_PX`），
 而圆点画在块外侧 `DOT_R + 3` 处 ⇒ 手指按在圆点正中却差 ~10px 落空（真机实测）。
 已改为**以圆点中心为基准**，并把容差放宽到 40px（手指落点本来就粗）。
+
+---
+
+## 🌐 git push 网络问题诊断（2026-09-30 01:xx）—— 不是仓库/凭据问题
+
+用户问"能 ping 到吗"。诊断结果：
+
+| 检查 | 结果 |
+| :--- | :--- |
+| DNS 解析 | ✅ `github.com → 20.205.243.166` |
+| `ping github.com` | ✅ 通 |
+| `Test-NetConnection github.com -Port 443` | ✅ **TcpTestSucceeded = True** |
+| 代理环境变量 / `git http.proxy` | 均为空（无代理）|
+| `Invoke-WebRequest https://github.com` | ❌ **卡到 5 分钟超时** |
+| `git push`（HTTP/2 与 HTTP/1.1、postBuffer 500MB 都试过）| ❌ `Failed to connect ... :443` / `Recv failure: Connection was reset` |
+
+⇒ **结论：TCP 能连、但 HTTPS 会话被中断**（TLS 握手/请求阶段被 reset 或超时）
+—— 典型的中间设备干扰，**不是仓库、凭据或 git 配置问题**，本机侧无法自修。
+需要用户侧提供可用代理（设 `https_proxy` 后 git 会自动走）或换网络。
+
+**待推送的本地提交（网络恢复后第一条命令就是 `git push`）**：
+
+```
+a5ba4641 test(e5/e6/g1/f2): 全部验收通过（真机）—— 关键是改用前端流程造块
+5a0b2340 test(i4): 白屏专项复现 —— 空渲染警告归零（可量化），白屏本体模拟器复现不出
+```
+
+---
+
+## 🔍 E19a「还原画笔无法拖动，只能一次点一个点」—— 代码排查结论
+
+用户口径（E19a）：「还原画笔**无法拖动使用**，只能一次点一个点」。
+
+读码结果（`usePianoRollInteractions.ts`）：
+
+* 「还原」工具与"右键拖动"走**同一条服务端路径**（`mode: StrokeMode = toolMode === "restore" || secondaryDown ? "restore" : "draw"`，L4241）；
+* `onCanvasPointerDown` 建立 `strokeRef = { mode, points: [首点] }`（L4266）；
+* `onCanvasPointerMove` **会累积点**：`last.frame !== f2` 时 `st.points.push(b)`（L4637），
+  同帧则只更新值（L4622）——**restore 模式同样走这段**；
+* `onCanvasPointerUp` 提交整条 stroke：`commitStroke(st.points, st.mode)`（L4493）；
+* `commitStroke` 的 restore 分支按 `minF..maxF` 恢复（早前读过：`restoreParamFrames(trackId, param, minF, len, true)`）。
+
+⇒ **代码路径本身是支持"拖动连续还原"的**，"一次点一个点"更像是**运行期**的问题
+（例如同一帧内反复更新、或 `yDragEnabled`/`currentDragDir` 让拖动被当作 x-only、
+或触摸路径没进这段 —— 手机是 pointer 事件，理论应进）。
+⇒ 需要**真机复现**：用还原工具拖动，观察提交的帧范围（或加临时日志打印 `st.points.length` 与 `minF..maxF`）。
