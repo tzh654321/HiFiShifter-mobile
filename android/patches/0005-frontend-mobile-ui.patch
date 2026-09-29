@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..df903906 100644
+index 3802022a..eed285c7 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4575 @@
+@@ -1,4006 +1,4587 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -445,6 +445,8 @@ index 3802022a..df903906 100644
 +import { MobileTopBar } from "./components/mobile/MobileTopBar";
 +import { ClipQuickActions } from "./components/mobile/ClipQuickActions";
 +import { ProjectSettingsDialog } from "./components/layout/ProjectSettingsDialog";
++import { SnapGridSettingsDialog } from "./components/layout/SnapGridSettingsDialog";
++import { SplitTransitionSettingsDialog } from "./components/layout/SplitTransitionSettingsDialog";
 +import { StorageSettingsDialog } from "./components/layout/StorageSettingsDialog";
 +import { ClipEdgeLongPressHint } from "./components/mobile/ClipEdgeLongPressHint";
 +import { ClipControlPoints } from "./components/mobile/ClipControlPoints";
@@ -5038,7 +5040,13 @@ index 3802022a..df903906 100644
 -    const projectPath = useAppSelector((state) => state.session.project.path);
 -    const hasExistingTempoMap = useAppSelector((state) => Boolean(state.session.tempoMap));
 -    // 当工程路径变更时（新建/打开/关闭工程），重置已忽略的源文件路径集合
--    useEffect(() => {
++function SettingsOverlays() {
++    const [projectOpen, setProjectOpen] = useState(false);
++    const [storageOpen, setStorageOpen] = useState(false);
++    /* G-2：^ 菜单里「吸附网格…」「分割过渡…」的长按 ⇒ 打开**原版那套**设置对话框。 */
++    const [snapGridOpen, setSnapGridOpen] = useState(false);
++    const [splitTransitionOpen, setSplitTransitionOpen] = useState(false);
+     useEffect(() => {
 -        ignoredSourcePathsRef.current = new Set();
 -    }, [projectPath]);
 -
@@ -5601,8 +5609,16 @@ index 3802022a..df903906 100644
 -            window.removeEventListener("wheel", preventBrowserZoomWheel, {
 -                capture: true,
 -            } as EventListenerOptions);
--        };
--    }, []);
++        const onOpen = (e: Event) => {
++            const which = (e as CustomEvent<{ which?: string }>).detail?.which;
++            if (which === "project") setProjectOpen(true);
++            else if (which === "storage") setStorageOpen(true);
++            else if (which === "snap-grid") setSnapGridOpen(true);
++            else if (which === "split-transition") setSplitTransitionOpen(true);
+         };
++        window.addEventListener("hs-open-settings", onOpen);
++        return () => window.removeEventListener("hs-open-settings", onOpen);
+     }, []);
 -
 -    // 剪贴板错误码可能带回退链后缀/细节，先经 token 精确映射为 i18n key
 -    // （未收录的码回退显示原文，保留诊断信息）。
@@ -6277,10 +6293,7 @@ index 3802022a..df903906 100644
 -        status,
 -    });
 -
-+function SettingsOverlays() {
-+    const [projectOpen, setProjectOpen] = useState(false);
-+    const [storageOpen, setStorageOpen] = useState(false);
-     useEffect(() => {
+-    useEffect(() => {
 -        void dispatch(fetchTimeline());
 -        void dispatch(refreshRuntime());
 -        void dispatch(loadUiSettings());
@@ -6929,11 +6942,7 @@ index 3802022a..df903906 100644
 -            const saved = searchResultsByClipId.get(item.clip_id);
 -            if (!saved) return item;
 -            return { ...item, ...saved };
-+        const onOpen = (e: Event) => {
-+            const which = (e as CustomEvent<{ which?: string }>).detail?.which;
-+            if (which === "project") setProjectOpen(true);
-+            else if (which === "storage") setStorageOpen(true);
-         };
+-        };
 -
 -        sourceFileCheckBusyRef.current = true;
 -        try {
@@ -6996,9 +7005,7 @@ index 3802022a..df903906 100644
 -
 -    const closeSourceFileChangedDialog = useCallback(() => {
 -        setSourceFileChangedDialog((prev) => ({ ...prev, open: false }));
-+        window.addEventListener("hs-open-settings", onOpen);
-+        return () => window.removeEventListener("hs-open-settings", onOpen);
-     }, []);
+-    }, []);
 -
 -    // 参数线上移/下移的长按重复：上一拍尚未完成（后端请求仍在途中）时
 -    // 跳过本拍，避免 50ms 节奏下 IPC 与历史检查点堆积。
@@ -7820,7 +7827,7 @@ index 3802022a..df903906 100644
 -        (item) => item.action === "processing",
 -    );
 -
--    return (
+     return (
 -        <Flex
 -            direction="column"
 -            className="h-screen w-screen bg-qt-window text-qt-text overflow-hidden font-sans text-sm selection:bg-qt-highlight selection:text-white"
@@ -8395,7 +8402,14 @@ index 3802022a..df903906 100644
 -                onAutoReloadModifiedMediaChange={handleAutoReloadModifiedMediaChange}
 -                loopNewClips={loopNewClips}
 -                onLoopNewClipsChange={handleLoopNewClipsChange}
--            />
++        <>
++            <ProjectSettingsDialog open={projectOpen} onOpenChange={setProjectOpen} />
++            <StorageSettingsDialog open={storageOpen} onOpenChange={setStorageOpen} />
++            <SnapGridSettingsDialog open={snapGridOpen} onOpenChange={setSnapGridOpen} />
++            <SplitTransitionSettingsDialog
++                open={splitTransitionOpen}
++                onOpenChange={setSplitTransitionOpen}
+             />
 -            <ActionBar />
 -
 -            {/* Main Content Area: Splitter + optional right-side panels */}
@@ -8579,15 +8593,12 @@ index 3802022a..df903906 100644
 -}
 -
 -function App() {
-     return (
+-    return (
 -        <PitchAnalysisProvider>
 -            <PianoRollStatusProvider>
 -                <AppInner />
 -            </PianoRollStatusProvider>
 -        </PitchAnalysisProvider>
-+        <>
-+            <ProjectSettingsDialog open={projectOpen} onOpenChange={setProjectOpen} />
-+            <StorageSettingsDialog open={storageOpen} onOpenChange={setStorageOpen} />
 +        </>
      );
  }
@@ -34289,23 +34300,23 @@ index 613ea89d..91fbcd9a 100644
 +};
 diff --git a/frontend/src/components/layout/ProjectSettingsDialog.tsx b/frontend/src/components/layout/ProjectSettingsDialog.tsx
 new file mode 100644
-index 00000000..c74107d4
+index 00000000..93dd5660
 --- /dev/null
 +++ b/frontend/src/components/layout/ProjectSettingsDialog.tsx
-@@ -0,0 +1,229 @@
+@@ -0,0 +1,262 @@
 +/**
-+ * ProjectSettingsOverlay —— E1（+ F3 修订）：「菜单栏-文件 → 工程设置…」。
++ * ProjectSettingsOverlay —— E1 + G-3：「菜单栏-文件 → 工程设置…」。
 + *
-+ * F3（用户口径，2026-09-30）：
-+ *   a. **基准音阶要可调** ⇒ 与网格一样给按钮组（12 个音阶直接点）；
-+ *   b. 下方已有「网格 / 每小节拍数」的可点区域 ⇒ **上方不再赘述**这些只读行；
-+ *   c. **删掉**「工程级设置（与全局外观设置分开）。改动即时生效。」这句说明；
-+ *   d. 「工程路径」**不要换行**（值用 nowrap + 省略号，不再 break-all）；
-+ *   e. 「（未保存：保存后这里显示工程文件路径）」简化成 **「（未保存）」**；
-+ *   f. **网格选项不全，要能手动输入**（对齐桌面端的做法：允许任意 `a/b` 或数字）。
-+ * F4：浮层高度**不再用固定 top/bottom**，改为按内容自适应（只留 top 与 maxHeight）。
++ * G-3（用户口径，2026-09-30）：「工程设置完全参考原软件的上工具栏设计，不要自己猜选项是什么、
++ * 是否有输入框，还缺 BPM」。据此调整：
++ *   · **加 BPM**（`set_transport({ bpm })`，与上工具栏一致：数值 + 步进）；
++ *   · **去掉我自己加的"网格手动输入框"** —— 那是猜出来的；网格间距在原版里属于
++ *     **「吸附网格设置」**（`SnapGridSettingsDialog`，含网格线/间距/最小像素间距/Swing/总开关），
++ *     这里只给一个入口按钮，不再自己造第二套；
++ *   · 保留上工具栏里确实有的：基准音阶、拍号（每小节拍数 / 分母）、撤销历史；
++ *   · 工程名 / 路径只读（改名走「另存为」：工程名即文件名，上游口径）。
 + *
-+ * ⚠️ 复合选择器必须带 `shallowEqual`（默认引用比较 ⇒ 每次 dispatch 都判"变了"）。
++ * F4：高度按内容自适应（只留 top + maxHeight）。
 + */
 +import React from "react";
 +import { Button, Flex, Text } from "@radix-ui/themes";
@@ -34321,9 +34332,8 @@ index 00000000..c74107d4
 +
 +/** 与 `ScaleKey` 一致（♭ 记法）。 */
 +const BASE_SCALES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"] as const;
-+/** 常用网格（不限于此：下面还有手动输入）。 */
-+const GRID_PRESETS = ["1/1", "1/2", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128"] as const;
 +const BEATS_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 12] as const;
++const DENOMINATOR_OPTIONS = [2, 4, 8, 16] as const;
 +
 +export function ProjectSettingsDialog({ open, onOpenChange }: Props) {
 +    const { t } = useI18n();
@@ -34337,33 +34347,35 @@ index 00000000..c74107d4
 +            denominator: st.session.project.timeSignatureDenominator,
 +            gridSize: st.session.project.gridSize,
 +            beats: st.session.beats,
++            bpm: st.session.bpm,
 +        }),
 +        shallowEqual,
 +    );
 +    const [busy, setBusy] = React.useState(false);
-+    /** 网格手动输入（F3-f）。初值跟随当前网格，切工程时同步一次。 */
-+    const [gridInput, setGridInput] = React.useState<string>(s.gridSize || "1/4");
++    /** BPM 输入框（受控，仅在本组件内）—— 应用时走 `set_transport`。 */
++    const [bpmInput, setBpmInput] = React.useState<string>(String(Math.round(s.bpm || 120)));
 +    React.useEffect(() => {
-+        setGridInput(s.gridSize || "1/4");
-+    }, [s.gridSize, open]);
++        setBpmInput(String(Math.round(s.bpm || 120)));
++    }, [s.bpm, open]);
 +
 +    const beatsPerBar = Math.max(1, Math.round(s.beats || 4));
 +    const denominator = s.denominator || 4;
 +
++    const applyBpm = (raw: string) => {
++        const v = Number(raw);
++        if (!Number.isFinite(v) || v <= 0) return;
++        setBusy(true);
++        void (webApi.setTransport({ bpm: v }) as Promise<unknown>).finally(() => setBusy(false));
++    };
 +    const applyTimeline = (beats: number, den: number, grid: string) => {
 +        setBusy(true);
 +        void (webApi.setProjectTimelineSettings(beats, den, grid) as Promise<unknown>).finally(() =>
 +            setBusy(false),
 +        );
 +    };
-+    const setBaseScale = (scale: string) => {
-+        setBusy(true);
-+        void (webApi.setProjectBaseScale(scale) as Promise<unknown>).finally(() => setBusy(false));
-+    };
 +
 +    if (!open) return null;
 +
-+    /** 只读行：标签定宽不换行，值 nowrap + 省略号（F3-d）。 */
 +    const infoRow = (label: string, value: string, title?: string) => (
 +        <Flex align="center" justify="between" gap="3" style={{ minWidth: 0 }}>
 +            <Text size="2" color="gray" style={{ flexShrink: 0 }}>
@@ -34372,12 +34384,7 @@ index 00000000..c74107d4
 +            <Text
 +                size="2"
 +                title={title ?? value}
-+                style={{
-+                    whiteSpace: "nowrap",
-+                    overflow: "hidden",
-+                    textOverflow: "ellipsis",
-+                    minWidth: 0,
-+                }}
++                style={{ whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", minWidth: 0 }}
 +            >
 +                {value}
 +            </Text>
@@ -34392,7 +34399,6 @@ index 00000000..c74107d4
 +                style={{ inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 60 }}
 +                onClick={() => onOpenChange(false)}
 +            />
-+            {/* F4：高度按内容自适应（只留 top + maxHeight，不再固定 bottom）。 */}
 +            <div
 +                data-hs-project-settings
 +                role="dialog"
@@ -34413,22 +34419,52 @@ index 00000000..c74107d4
 +                    {tAny("menu_project_settings")}
 +                </Text>
 +
-+                {/* F3-b/c：只保留"这里没有别处可改"的只读项；网格/拍数在下方可点，
-+                    不再在上方赘述；说明句已删除。 */}
 +                <Flex direction="column" gap="2" mt="3">
 +                    {infoRow(tAny("project_name_label"), s.name || "Untitled")}
-+                    {infoRow(
-+                        tAny("project_path_label"),
-+                        s.path ?? tAny("project_unsaved_short"),
-+                        s.path ?? undefined,
-+                    )}
-+                    {infoRow(
-+                        tAny("proj_undo_label"),
-+                        s.saveUndoHistory ? tAny("storage_state_on") : tAny("storage_state_off"),
-+                    )}
++                    {infoRow(tAny("project_path_label"), s.path ?? tAny("project_unsaved_short"), s.path ?? undefined)}
 +                </Flex>
 +
-+                {/* F3-a：基准音阶可调（按钮组，与网格同风格） */}
++                {/* BPM（G-3：上工具栏里有，之前缺）*/}
++                <Flex direction="column" gap="1" mt="3">
++                    <Text size="2" weight="bold">
++                        BPM
++                    </Text>
++                    <Flex gap="2" align="center">
++                        <Button
++                            size="1"
++                            variant="soft"
++                            disabled={busy}
++                            onClick={() => applyBpm(String(Math.max(1, Math.round(s.bpm || 120) - 1)))}
++                        >
++                            −1
++                        </Button>
++                        <input
++                            data-hs-project-bpm-input
++                            value={bpmInput}
++                            onChange={(e) => setBpmInput(e.target.value)}
++                            onKeyDown={(e) => {
++                                e.stopPropagation();
++                                if (e.key === "Enter") applyBpm(bpmInput.trim());
++                            }}
++                            inputMode="decimal"
++                            className="text-xs rounded px-2 py-1 outline-none bg-qt-base text-qt-text border border-qt-border"
++                            style={{ width: 72 }}
++                        />
++                        <Button
++                            size="1"
++                            variant="soft"
++                            disabled={busy}
++                            onClick={() => applyBpm(String(Math.round(s.bpm || 120) + 1))}
++                        >
++                            +1
++                        </Button>
++                        <Button size="1" disabled={busy || !bpmInput.trim()} onClick={() => applyBpm(bpmInput.trim())}>
++                            {tAny("storage_save")}
++                        </Button>
++                    </Flex>
++                </Flex>
++
++                {/* 基准音阶（E1 要求可调）*/}
 +                <Flex direction="column" gap="1" mt="3">
 +                    <Text size="2" weight="bold">
 +                        {tAny("base_scale")}
@@ -34440,7 +34476,12 @@ index 00000000..c74107d4
 +                                size="1"
 +                                variant={s.baseScale === k ? "solid" : "soft"}
 +                                disabled={busy}
-+                                onClick={() => setBaseScale(k)}
++                                onClick={() => {
++                                    setBusy(true);
++                                    void (webApi.setProjectBaseScale(k) as Promise<unknown>).finally(() =>
++                                        setBusy(false),
++                                    );
++                                }}
 +                            >
 +                                {k}
 +                            </Button>
@@ -34448,52 +34489,7 @@ index 00000000..c74107d4
 +                    </Flex>
 +                </Flex>
 +
-+                {/* 网格：预设 + 手动输入（F3-f） */}
-+                <Flex direction="column" gap="1" mt="3">
-+                    <Text size="2" weight="bold">
-+                        {tAny("proj_grid_label")}
-+                    </Text>
-+                    <Flex gap="1" wrap="wrap">
-+                        {GRID_PRESETS.map((g) => (
-+                            <Button
-+                                key={g}
-+                                size="1"
-+                                variant={s.gridSize === g ? "solid" : "soft"}
-+                                disabled={busy}
-+                                onClick={() => applyTimeline(beatsPerBar, denominator, g)}
-+                            >
-+                                {g}
-+                            </Button>
-+                        ))}
-+                    </Flex>
-+                    {/* 手动输入：对齐桌面端 —— 允许任意 `a/b` 或数字（后端会归一/校验）。
-+                        用**原生 input**，避免受控组件在本页面上出现意外的重渲开销。 */}
-+                    <Flex gap="2" align="center" mt="1">
-+                        <input
-+                            data-hs-project-grid-input
-+                            value={gridInput}
-+                            onChange={(e) => setGridInput(e.target.value)}
-+                            onKeyDown={(e) => {
-+                                e.stopPropagation();
-+                                if (e.key === "Enter") {
-+                                    applyTimeline(beatsPerBar, denominator, gridInput.trim());
-+                                }
-+                            }}
-+                            placeholder="1/4"
-+                            className="text-xs rounded px-2 py-1 outline-none bg-qt-base text-qt-text border border-qt-border"
-+                            style={{ width: 88 }}
-+                        />
-+                        <Button
-+                            size="1"
-+                            disabled={busy || !gridInput.trim()}
-+                            onClick={() => applyTimeline(beatsPerBar, denominator, gridInput.trim())}
-+                        >
-+                            {tAny("storage_save")}
-+                        </Button>
-+                    </Flex>
-+                </Flex>
-+
-+                {/* 每小节拍数 */}
++                {/* 拍号 */}
 +                <Flex direction="column" gap="1" mt="3">
 +                    <Text size="2" weight="bold">
 +                        {tAny("beats_per_bar")}
@@ -34511,6 +34507,54 @@ index 00000000..c74107d4
 +                            </Button>
 +                        ))}
 +                    </Flex>
++                    <Text size="1" weight="bold" mt="1">
++                        {tAny("time_signature_denominator")}
++                    </Text>
++                    <Flex gap="1" wrap="wrap">
++                        {DENOMINATOR_OPTIONS.map((n) => (
++                            <Button
++                                key={n}
++                                size="1"
++                                variant={denominator === n ? "solid" : "soft"}
++                                disabled={busy}
++                                onClick={() => applyTimeline(beatsPerBar, n, s.gridSize || "1/4")}
++                            >
++                                {String(n)}
++                            </Button>
++                        ))}
++                    </Flex>
++                </Flex>
++
++                {/* 网格：只给入口，不自己造第二套（G-3）*/}
++                <Flex direction="column" gap="1" mt="3">
++                    <Text size="2" weight="bold">
++                        {tAny("proj_grid_label")}
++                    </Text>
++                    <Flex align="center" gap="2">
++                        <Text size="2" data-hs-project-grid-value>
++                            {s.gridSize || "1/4"}
++                        </Text>
++                        <Button
++                            size="1"
++                            variant="soft"
++                            onClick={() => {
++                                window.dispatchEvent(
++                                    new CustomEvent("hs-open-settings", { detail: { which: "snap-grid" } }),
++                                );
++                                onOpenChange(false);
++                            }}
++                        >
++                            {tAny("menu_snap_grid_settings")}
++                        </Button>
++                    </Flex>
++                </Flex>
++
++                {/* 撤销历史（只读展示；其开关在原版属于工程保存设置）*/}
++                <Flex direction="column" gap="1" mt="3">
++                    {infoRow(
++                        tAny("proj_undo_label"),
++                        s.saveUndoHistory ? tAny("storage_state_on") : tAny("storage_state_off"),
++                    )}
 +                </Flex>
 +
 +                <Flex justify="end" mt="4">
@@ -34751,10 +34795,10 @@ index 00000000..ccf42cee
 +    );
 +}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..a6dfb508 100644
+index 242997f5..ecc274e6 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7152 @@
+@@ -1,6438 +1,7155 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -40567,9 +40611,12 @@ index 242997f5..a6dfb508 100644
 -        (request: FadeContextMenuRequest) => {
 -            setContextMenu(null);
 +        const onOpenClipMenu = (e: Event) => {
-+            const d = (e as CustomEvent<{ x?: number; y?: number }>).detail ?? {};
++            const d = (e as CustomEvent<{ x?: number; y?: number; clipId?: string }>).detail ?? {};
 +            const session = store.getState().session;
-+            const id = session.selectedClipId;
++            /* ⚠️ 优先用**事件里带的 clipId**：后端 `select_clip` 命令不经过前端 thunk，
++               所以前端 store 的 `selectedClipId` 可能仍是 null（实测就是这么"发事件没反应"）。
++               浮条本来就知道自己那一块的 id ⇒ 直接带过来最可靠。 */
++            const id = d.clipId ?? session.selectedClipId;
 +            if (!id) return;
 +            if (!session.clips.some((c) => c.id === id)) return;
              setTrackAreaMenu(null);
@@ -79022,7 +79069,7 @@ index 00000000..c51ea7f9
 +}
 diff --git a/frontend/src/components/mobile/ClipQuickActions.tsx b/frontend/src/components/mobile/ClipQuickActions.tsx
 new file mode 100644
-index 00000000..4831fa6d
+index 00000000..9bd9c623
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipQuickActions.tsx
 @@ -0,0 +1,333 @@
@@ -79249,7 +79296,7 @@ index 00000000..4831fa6d
 +                run: () =>
 +                    window.dispatchEvent(
 +                        new CustomEvent("hs-open-clip-context-menu", {
-+                            detail: { x: centerX, y: barTop },
++                            detail: { x: centerX, y: barTop, clipId: clip.id },
 +                        }),
 +                    ),
 +            },
@@ -79361,10 +79408,10 @@ index 00000000..4831fa6d
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..d3000ff8
+index 00000000..e58f809d
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1940 @@
+@@ -0,0 +1,1950 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -79995,15 +80042,9 @@ index 00000000..d3000ff8
 +                                } catch {
 +                                    /* 忽略：部分 WebView 无振动权限 */
 +                                }
-+                                if (item.longPress) {
-+                                    item.longPress();
-+                                    return;
-+                                }
-+                                /* 未提供专属菜单 ⇒ 打开「工程设置」浮层（含网格/拍数等时间轴设置）；
-+                                   「吸附网格…」语义正好对上，「分割过渡…」的专属设置待补。 */
-+                                window.dispatchEvent(
-+                                    new CustomEvent("hs-open-settings", { detail: { which: "project" } }),
-+                                );
++                                /* G-2：**只对提供了 longPress 的项**打开菜单；没有的项长按**无反应**。
++                                   （原来这里兜底打开「工程设置」，正是"所有按钮长按都进工程设置"的来源。） */
++                                item.longPress?.();
 +                            }, 260);
 +                        }}
 +                        onPointerUp={() => {
@@ -80393,14 +80434,25 @@ index 00000000..d3000ff8
 +    const trackFoldItems: FoldItem[] = [
 +        {
 +            id: "metronome",
-+            label: t("mobile_metronome"),
++            label: `${t("mobile_metronome")}…`,
 +            on: s.metronomeEnabled,
 +            icon: <IconMetronome />,
 +            act: () => {
 +                void dispatch(updateMetronome({ metronomeEnabled: !s.metronomeEnabled }));
 +            },
 +        },
-+        { id: "snap", label: `${t("mobile_grid_snap" as never)}…`, on: s.snapEnabled, icon: <IconSnap />, act: flip(toggleSnap) },
++        {
++            id: "snap",
++            label: `${t("mobile_grid_snap" as never)}…`,
++            on: s.snapEnabled,
++            icon: <IconSnap />,
++            act: flip(toggleSnap),
++            /* G-2：长按 = 原版软件的「吸附网格设置」（项目里已有该对话框，直接复用）。 */
++            longPress: () =>
++                window.dispatchEvent(
++                    new CustomEvent("hs-open-settings", { detail: { which: "snap-grid" } }),
++                ),
++        },
 +        {
 +            id: "autoCrossfade",
 +            label: t("mobile_auto_crossfade"),
@@ -80411,6 +80463,11 @@ index 00000000..d3000ff8
 +        {
 +            id: "splitTransition",
 +            label: `${t("mobile_split_transition")}…`,
++            /* G-2：长按 = 原版软件的「分割过渡设置」（同样复用已有对话框）。 */
++            longPress: () =>
++                window.dispatchEvent(
++                    new CustomEvent("hs-open-settings", { detail: { which: "split-transition" } }),
++                ),
 +            on: s.splitTransitionEnabled,
 +            icon: <IconSplit />,
 +            act: flip(toggleSplitTransition),
@@ -96173,10 +96230,10 @@ index 59e658ed..3939ddf1 100644
          const anchorSec = state.session.playheadSec;
  
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..a8df687b 100644
+index 858bca55..a4ea6d5f 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
-@@ -2,8 +2,41 @@ export const enUS = {
+@@ -2,8 +2,42 @@ export const enUS = {
      menu_file: "File",
      menu_edit: "Edit",
      menu_view: "View",
@@ -96185,6 +96242,7 @@ index 858bca55..a8df687b 100644
      menu_track: "Track",
      menu_options: "Options",
 +    menu_project_settings: "Project Settings…",
++    menu_snap_grid_settings: "Snap/grid settings…",
 +    menu_storage_settings: "Storage Settings…",
 +    proj_grid_label: "Grid",
 +    proj_undo_label: "Save undo history",
@@ -96218,7 +96276,7 @@ index 858bca55..a8df687b 100644
      menu_help: "Help",
      menu_new_project: "New Project",
      menu_open_project: "Open Project...",
-@@ -330,6 +363,7 @@ export const enUS = {
+@@ -330,6 +364,7 @@ export const enUS = {
      panel_editor: "Editor",
      panel_timeline: "Timeline",
      panel_io: "I/O",
@@ -96226,7 +96284,7 @@ index 858bca55..a8df687b 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1513,69 @@ export const enUS = {
+@@ -1479,4 +1514,69 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -96297,10 +96355,10 @@ index 858bca55..a8df687b 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..af60b31f 100644
+index ef08ef81..06e6b3b4 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
-@@ -2,8 +2,41 @@ export const jaJP = {
+@@ -2,8 +2,42 @@ export const jaJP = {
      menu_file: "ファイル",
      menu_edit: "編集",
      menu_view: "表示",
@@ -96309,6 +96367,7 @@ index ef08ef81..af60b31f 100644
      menu_track: "トラック",
      menu_options: "オプション",
 +    menu_project_settings: "プロジェクト設定…",
++    menu_snap_grid_settings: "スナップ/グリッド設定…",
 +    menu_storage_settings: "ストレージ設定…",
 +    proj_grid_label: "グリッド",
 +    proj_undo_label: "undo 履歴を保存",
@@ -96342,7 +96401,7 @@ index ef08ef81..af60b31f 100644
      menu_help: "ヘルプ",
      menu_new_project: "新規プロジェクト",
      menu_open_project: "プロジェクトを開く...",
-@@ -192,6 +225,7 @@ export const jaJP = {
+@@ -192,6 +226,7 @@ export const jaJP = {
      panel_editor: "エディタ",
      panel_timeline: "タイムライン",
      panel_io: "入出力",
@@ -96350,7 +96409,7 @@ index ef08ef81..af60b31f 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1526,61 @@ export const jaJP = {
+@@ -1492,4 +1527,61 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -96413,10 +96472,10 @@ index ef08ef81..af60b31f 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..ee85a86e 100644
+index 508fcb25..8a12f054 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
-@@ -2,8 +2,41 @@ export const koKR = {
+@@ -2,8 +2,42 @@ export const koKR = {
      menu_file: "파일",
      menu_edit: "편집",
      menu_view: "보기",
@@ -96425,6 +96484,7 @@ index 508fcb25..ee85a86e 100644
      menu_track: "트랙",
      menu_options: "옵션",
 +    menu_project_settings: "프로젝트 설정…",
++    menu_snap_grid_settings: "스냅/그리드 설정…",
 +    menu_storage_settings: "저장소 설정…",
 +    proj_grid_label: "그리드",
 +    proj_undo_label: "undo 기록 저장",
@@ -96458,7 +96518,7 @@ index 508fcb25..ee85a86e 100644
      menu_help: "도움말",
      menu_new_project: "새 프로젝트",
      menu_open_project: "프로젝트 열기...",
-@@ -269,6 +302,7 @@ export const koKR = {
+@@ -269,6 +303,7 @@ export const koKR = {
      panel_editor: "에디터",
      panel_timeline: "타임라인",
      panel_io: "입출력",
@@ -96466,7 +96526,7 @@ index 508fcb25..ee85a86e 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1503,61 @@ export const koKR = {
+@@ -1469,4 +1504,61 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -96529,10 +96589,10 @@ index 508fcb25..ee85a86e 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..f009a618 100644
+index 8bcc3071..2a5233dd 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
-@@ -2,8 +2,41 @@ export const zhCN = {
+@@ -2,8 +2,42 @@ export const zhCN = {
      menu_file: "文件",
      menu_edit: "编辑",
      menu_view: "视图",
@@ -96541,6 +96601,7 @@ index 8bcc3071..f009a618 100644
      menu_track: "轨道",
      menu_options: "选项",
 +    menu_project_settings: "工程设置…",
++    menu_snap_grid_settings: "吸附/网格设置…",
 +    menu_storage_settings: "存储设置…",
 +    proj_grid_label: "网格",
 +    proj_undo_label: "保存撤销历史",
@@ -96574,7 +96635,7 @@ index 8bcc3071..f009a618 100644
      menu_help: "帮助",
      menu_new_project: "新建工程",
      menu_open_project: "打开工程...",
-@@ -182,6 +215,7 @@ export const zhCN = {
+@@ -182,6 +216,7 @@ export const zhCN = {
      panel_editor: "编辑器",
      panel_timeline: "时间轴",
      panel_io: "输入输出",
@@ -96582,7 +96643,7 @@ index 8bcc3071..f009a618 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1478,69 @@ export const zhCN = {
+@@ -1444,4 +1479,69 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -96653,10 +96714,10 @@ index 8bcc3071..f009a618 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..bf56f834 100644
+index 176638e2..d957098b 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
-@@ -3,8 +3,41 @@ export const zhTW = {
+@@ -3,8 +3,42 @@ export const zhTW = {
      menu_file: "檔案",
      menu_edit: "編輯",
      menu_view: "檢視",
@@ -96665,6 +96726,7 @@ index 176638e2..bf56f834 100644
      menu_track: "軌道",
      menu_options: "選項",
 +    menu_project_settings: "專案設定…",
++    menu_snap_grid_settings: "吸附/格線設定…",
 +    menu_storage_settings: "儲存設定…",
 +    proj_grid_label: "格線",
 +    proj_undo_label: "儲存復原歷史",
@@ -96698,7 +96760,7 @@ index 176638e2..bf56f834 100644
      menu_help: "說明",
      menu_new_project: "新建專案",
      menu_open_project: "開啟專案...",
-@@ -183,6 +216,7 @@ export const zhTW = {
+@@ -183,6 +217,7 @@ export const zhTW = {
      panel_editor: "編輯器",
      panel_timeline: "時間軸",
      panel_io: "輸入輸出",
@@ -96706,7 +96768,7 @@ index 176638e2..bf56f834 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1480,61 @@ export const zhTW = {
+@@ -1446,4 +1481,61 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
