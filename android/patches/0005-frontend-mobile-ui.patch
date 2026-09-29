@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..aa9278e3 100644
+index 3802022a..22b11513 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4608 @@
+@@ -1,4006 +1,4612 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -5034,9 +5034,13 @@ index 3802022a..aa9278e3 100644
 +            const container = mobileSplitRef.current;
 +            if (!(target instanceof Element) || container === null) return null;
 +            const el = target.closest<HTMLElement>(HANDLE_SELECTOR);
-+            if (el === null || !container.contains(el)) return null;
-+            /* 标题条里的按钮（打开文件夹 / 刷新 / 关闭 / 编辑预览切换）原先是"按下不归手柄管"；I-1/I-3 起改为也认作手柄候选。 */
-+            return el;   /* I-1/I-3: 按钮上也允许拖分屏边界 —— 靠后面既有的 d.moved 阈值区分点击与拖动 */
++            if (el === null) return null;
++            /* E8-a（真机实测定位）：**手柄不必是 split 容器的后代** ——
++               手机端的「上工具栏」就在参数面板**之上**、位于 split 容器**之外**
++               （实测 `box.contains(bar) === false`），但它明确带 `data-hs-split-handle`
++               ⇒ 意图清楚、应当能拖。原先那句 `!container.contains(el)` 把它整条挡掉了，
++               表现为"拖上工具栏没反应"。容器仍然必须存在（要拿它量比例 / 改子元素 flexGrow）。 */
++            return el;
 +        };
 +
 +        /** 直接改 DOM 的 flexGrow（与桌面分割条同一手法，避免每帧整树重绘）。 */
