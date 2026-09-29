@@ -59860,10 +59860,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..534ccef2 100644
+index c0db2221..57c68fcb 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2791 @@
+@@ -1,2297 +1,2797 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -63611,7 +63611,13 @@ index c0db2221..534ccef2 100644
 +               原来据此收尾 ⇒ 长按拖动刚开始就被结束（`track.volume` 保持 1）。
 +               现在：触摸的 cancel **不再收尾**，收尾交给下面注册的原生 `touchend/touchcancel`；
 +               鼠标/笔维持原语义不变。 */
-+            if (ev.type === "pointercancel" && ev.pointerType === "touch") return;
++            /* ⚠️ **一律**不收尾：实测（`_dbg-gain-trace.mjs`）事件序列是
++               `pointerdown → pointermove×2 → pointercancel → touchmove×6`，
++               而合成触摸的 `pointercancel` **未必带 `pointerType: "touch"`**
++               ⇒ 原来那个条件挡不住 ⇒ 拖动被提前收尾，之后所有 `touchmove` 都被
++               `if (finished) return` 吃掉（拖动过程中 `volume` 全程为 1）。
++               收尾只认：鼠标/笔的 pointerup、以及原生 touchend/touchcancel。 */
++            if (ev.type === "pointercancel") return;
 +            finished = true;
 +            const knobRect = knobEl.getBoundingClientRect();
 +            const stillOverKnob =
