@@ -2471,3 +2471,32 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 **下次复现建议**：`logcat -c` 后依次试 ① 打开「剪贴板预览」/「弹出展示参数」开关；
 ② 进入参数界面并触发一次"粘贴"；③ 复现 E10-②（反复切全屏）—— 三种状态下各静置 12s 计数。
 工具：`scripts/_dbg-clipboard-origin.mjs`（定性：JS or native）、`scripts/_dbg-clipboard-state.mjs`（按状态计数）。
+
+---
+
+## ⚠️ 教训：「页面卡死」是我误判的 —— 探针把应用切到后台导致的假象（2026-09-29 深夜）
+
+**我一度判定**「点开 E1/E21 的对话框会让页面卡死」，并因此摘掉入口、连做三轮构建尝试
+（补 `shallowEqual` → 简化控件 → 换自绘浮层 → 改走事件桥 + 在 App.tsx 渲染），**全都没用**。
+
+**真相**：那个"卡死"是**探针的假象**。
+`_probe-e1-e21.mjs` 的 E21 分支里调用了 `pickDirectory()`（SAF 目录选择器）与
+`openAllFilesAccessSettings()`（系统设置页）—— **这两个都会把应用切到后台**。
+WebView 在后台**暂停 JS**，于是随后所有 `Runtime.evaluate` 都 30s 超时 ⇒
+看起来像"页面卡死"。用 `adb screencap` 截图才看清：**前台是手机的系统文件管理器**
+（路径 `.aaa`，正是 SAF 授权目录），我们的应用根本不在前台。
+
+**铁证**：改用**只做应用内操作**的纯净探针（`_probe-e1-e21-clean.mjs`）后，
+两个浮层**都能正常打开**，E1 3/3、E21 3/3 全通过。
+
+**留给后人的检查清单**（遇到"CDP 求值超时"时先查这些，别急着改代码）：
+1. `adb shell dumpsys window | grep mCurrentFocus` —— **前台是不是我们的应用**；
+   不是（常见：SAF 选择器 / 系统设置页 / 权限对话框）⇒ 超时与代码无关；
+2. `adb shell pidof <pkg>` —— 进程还在吗（区分"崩溃"与"只是被切走"）；
+3. `adb exec-out screencap` 截图 —— 用户视角一眼看清；
+4. `logcat` 里有没有 `chromium`/`Tauri/Console` 的 React 报错
+   （真死循环通常会有 `Maximum update depth exceeded`；一条都没有就别怀疑重渲循环）。
+
+**顺带修正**：radix 的 `Dialog`/`Select` 在本项目里用法没问题（`ExportAudioDialog` 一直正常），
+我最后改成自绘浮层是**为了排查**，本身不是必须的；现在保留自绘版本（与项目里
+`SelectToolMenu`/`DrawToolMenu` 风格一致、无 portal 与滚动锁，更可控）。
