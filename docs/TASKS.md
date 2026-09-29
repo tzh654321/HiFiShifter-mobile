@@ -2962,3 +2962,28 @@ WebView 的指针序列是
 * 它与"电脑右键拖动"走**同一条服务端路径**（`mode: "restore"` ⇒ `restoreParamFrames`）；
 * 探针用**合成 PointerEvent** 长按**打不开**该菜单（React 的手势需要真实事件），
   ⇒ 下一步改用 **CDP 真实触摸长按**（`touchStart` + 保持 500ms + `touchEnd`）再验证拖动。
+
+---
+
+## 🔍 E19a 入口定位完成（2026-09-30 02:1x）
+
+用户口径：「还原画笔**无法拖动使用**，只能一次点一个点」。
+
+**已查清的事实**：
+
+| 问题 | 结论 |
+| :--- | :--- |
+| 「还原」入口在哪 | `MobileBottomBar` 的 **`DrawToolMenu`**（`mobile_tool_restore = "还原"`），由 `MobileParamToolRow` 的**绘制按钮长按**打开（`openDrawMenu`，注释写明门槛 **400ms**、mouse 不接管）|
+| 是否死代码 | **不是** —— `<DrawToolMenu>` 确实在 L1911 被渲染（`drawMenuOpen`）|
+| 界面是否反映当前工具 | 已修过（D2）：`currentDrawTool` 现在把 `restore` 也算进来（L1628）|
+| 与电脑右键的关系 | 同一条服务端路径：`toolMode === "restore" || secondaryDown` ⇒ `mode: "restore"` ⇒ `restoreParamFrames` |
+
+**探针现状**：用 CDP 真实触摸长按（`touchStart` + 550ms + `touchEnd`）**仍未打开**该菜单
+（合成 `PointerEvent` 也打不开 —— React 手势只认真实事件轮次）。
+⇒ 下一步换两种打法：① **400ms 前后多点几次**并检查 `document.querySelector` 里是否出现
+"绘制/颤音/还原"三项（必要时打印 `drawMenuOpen` 影响下的 DOM 变化）；
+② 或直接用 CDP **录制真实触摸序列**（`touchStart` → 每 50ms 一次 `touchMove`（位移 0）→ `touchEnd`），
+   模拟"手指按住不动"——某些 WebView 需要 move 事件才会推进长按计时器。
+
+**同时确认的量化手段**：`get_param_frames(trackId, "pitch", startFrame, frameCount, stride, binary)`
+可以在页面里直接调用，用来**比对拖动前后被改写的帧数与范围** —— 这正是判定"拖动 vs 单点"的客观依据。
