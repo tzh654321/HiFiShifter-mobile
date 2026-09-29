@@ -128,7 +128,11 @@ const main = async () => {
     );
 
     // ── F1：派发事件 ⇒ 出现右键那套菜单 ───────────────────────────
-    const f1 = await cdp.call(async () => {
+    /* F1 前先切到**轨道面板**：`TimelinePanel` 只在它可见时挂载 ⇒ 事件监听也只在那时存在。 */
+    await cdp.call(() => {
+        window.dispatchEvent(new CustomEvent("hs-mobile-switch-tab", { detail: { tab: "timeline" } }));
+    });
+    await sleep(2000);    const f1 = await cdp.call(async () => {
         const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         const inv = (c, a) => window.__TAURI_INTERNALS__.invoke(c, a).catch(() => null);
         let st = await inv('get_timeline_state', {});

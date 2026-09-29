@@ -79361,10 +79361,10 @@ index 00000000..4831fa6d
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..714ae3d1
+index 00000000..d3000ff8
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1899 @@
+@@ -0,0 +1,1940 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -79936,6 +79936,11 @@ index 00000000..714ae3d1
 +    items: FoldItem[];
 +    onClose: () => void;
 +}) {
++    /* F2（用户口径）：^ 菜单里的项支持**长按打开另一个菜单**（该项的设置）。
++       长按门槛与其它手势一致（260ms + 震动）；长按成立时**吃掉**随后的那次 onClick，
++       否则松手会顺手把开关翻掉。未提供 `longPress` 的项走通用路径（打开工程设置浮层）。 */
++    const longPressTimerRef = React.useRef<number | null>(null);
++    const longPressFiredRef = React.useRef<string | null>(null);
 +    const { t } = useI18n();
 +    return (
 +        <>
@@ -79972,7 +79977,43 @@ index 00000000..714ae3d1
 +                    <button
 +                        key={item.id}
 +                        type="button"
-+                        onClick={item.act}
++                        /* 长按 = 打开该项的"另一个菜单"；长按成立时吃掉这次 click。 */
++                        onClick={() => {
++                            if (longPressFiredRef.current === item.id) {
++                                longPressFiredRef.current = null;
++                                return;
++                            }
++                            item.act();
++                        }}
++                        onPointerDown={() => {
++                            window.clearTimeout(longPressTimerRef.current ?? undefined);
++                            longPressTimerRef.current = window.setTimeout(() => {
++                                longPressTimerRef.current = null;
++                                longPressFiredRef.current = item.id;
++                                try {
++                                    (navigator as unknown as { vibrate?: (p: number) => boolean }).vibrate?.(12);
++                                } catch {
++                                    /* 忽略：部分 WebView 无振动权限 */
++                                }
++                                if (item.longPress) {
++                                    item.longPress();
++                                    return;
++                                }
++                                /* 未提供专属菜单 ⇒ 打开「工程设置」浮层（含网格/拍数等时间轴设置）；
++                                   「吸附网格…」语义正好对上，「分割过渡…」的专属设置待补。 */
++                                window.dispatchEvent(
++                                    new CustomEvent("hs-open-settings", { detail: { which: "project" } }),
++                                );
++                            }, 260);
++                        }}
++                        onPointerUp={() => {
++                            window.clearTimeout(longPressTimerRef.current ?? undefined);
++                            longPressTimerRef.current = null;
++                        }}
++                        onPointerCancel={() => {
++                            window.clearTimeout(longPressTimerRef.current ?? undefined);
++                            longPressTimerRef.current = null;
++                        }}
 +                        aria-pressed={item.on}
 +                        className="hs-icon-btn flex flex-col items-center justify-center bg-transparent border-0 cursor-pointer"
 +                        style={{
