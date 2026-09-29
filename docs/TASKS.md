@@ -3045,3 +3045,32 @@ WebView 的指针序列是
 * 再切「还原」并拖动，用"该区间的非零帧是否被连续清除"作为判据；
 * 同时把 `get_param_frames` 的返回结构打印出来（确认 `edit` 是不是正确字段 ——
   也可能是 `orig` 或需要 `binary: true`）。
+
+---
+
+## 🔬 E19a v6 结果（2026-09-30 03:1x）—— 定位到"后端 pitch 编辑可用性"这一层
+
+**新证据**：
+
+1. `set_param_frames(trackId, "pitch", 0, values, false)` **写入成功**：返回 `{"ok":true}` ✅
+   ⇒ 写基线这条路是通的（不依赖绘制工具）；
+2. 但 `get_param_frames(...)` 的返回**字段结构**里：
+   `keys = [ok, root_track_id, param, frame_period_ms, start_frame, orig, edit, reference_kind,
+   pitch_edit_user_modified, pitch_edit_backend_available]`
+   而 **`edit` 长度为 0**（`orig` 也在字段里 ⇒ 数据可能落在 `orig`）；
+3. 新增关注点：**`pitch_edit_backend_available`** —— 若为 `false`，说明后端 pitch 编辑
+   **本就不在此轨道/此参数上可用**，那"还原擦不掉"就不是前端手势问题，而是后端能力开关。
+
+**下一步（极具体，照做即可）**：
+
+```
+① 在页面里打印：res.orig 的长度与非零数、res.pitch_edit_backend_available、res.pitch_edit_user_modified
+   ⇒ 判定"基线是否真的写进去了"以及"后端 pitch 编辑是否可用"；
+② 若 pitch_edit_backend_available === false ⇒ 换一个**可用**的参数再测（volume / formant）；
+③ 工具菜单打开存在**竞态**（同一打法时成时不成）：长按前多等 2.5s 并**重试 3 次**，
+   每次检查菜单项是否出现再继续。
+```
+
+**已有可复用结论**（写给后续所有"长按菜单"类验证）：
+真实触摸长按必须 `touchStart` → **每 90ms 发一次零位移 `touchMove`（共 6 次）** → `touchEnd`，
+只 `touchStart` + 干等打不开；合成 `PointerEvent` 也打不开。
