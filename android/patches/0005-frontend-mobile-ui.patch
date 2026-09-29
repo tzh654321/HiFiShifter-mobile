@@ -78615,10 +78615,10 @@ index 00000000..e750b7c0
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..0c82dfe2
+index 00000000..340f3078
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1890 @@
+@@ -0,0 +1,1897 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -79209,7 +79209,14 @@ index 00000000..0c82dfe2
 +                    borderRadius: 10,
 +                    padding: 6,
 +                    display: "grid",
-+                    gridTemplateColumns: "repeat(3, 1fr)",
++                    /* E4（用户口径）：「将 ^ 型菜单排密一点，使当前手机上一行能显示**四个**按钮、
++                       共三行，更大的屏幕下可以让一行显示更多按钮」。
++                       原来是写死的 `repeat(3, 1fr)`（一行 3 个）⇒ 手机上要滚更多行。
++                       改成**按可用宽度自适应**：每格最小 80px，宽了就自动多排一列。
++                       · 手机（内容宽 ~340px）：340/80 = 4.25 ⇒ **一行 4 个** ✓
++                       · 平板/横屏（~800px）：⇒ 一行 9 个 ✓（"更大屏幕一行显示更多"）
++                       `auto-fit` 让空轨道塌掉、按钮均分整行，不会留半格。 */
++                    gridTemplateColumns: "repeat(auto-fit, minmax(80px, 1fr))",
 +                    gap: 4,
 +                }}
 +            >
