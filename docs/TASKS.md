@@ -3250,3 +3250,39 @@ if param == "pitch" && !compose_enabled {
 > 教训（写给后续所有参数面板的验证）：**参数面板里有多层同尺寸 canvas 叠加**，
 > 选元素必须用 `[data-piano-roll-canvas]` 或按 `pointer-events` 过滤，
 > **绝不能按"面积最大"来选**。
+
+---
+
+# 🎯 E19a 突破：事件到达已证实，问题锁定在「move 环节」（2026-09-30 05:5x）
+
+**决定性证据**（在 `onCanvasPointerDown` 入口加一行日志后，真机 logcat）：
+
+```
+[e19a2] down button= 0 type= touch x= 76 y= 499 tool= draw
+```
+
+⇒ **指针事件确实到达了处理函数**（`button=0` 左键 / `type=touch` 触摸 / `tool=draw` 当前是绘制工具），
+而真宿主 `[data-piano-roll-canvas]` 的 rect 也已确认（`{x:56,y:355,w:304,h:288}`，`pointer-events:auto`）。
+
+**结论：拖动无效的原因在 `pointerdown` 之后** —— 即
+`onCanvasPointerMove` 的累积、或 `pointerup` 的提交环节。这与用户口径
+「还原画笔**无法拖动使用**，只能**一次点一个点**」**完全吻合**：
+**按下有效（点一下画一个点）、移动无效**。
+
+### 最高嫌疑：`pointerId` 不匹配
+
+`onCanvasPointerMove` 开头是：
+
+```ts
+const st = strokeRef.current;
+if (!st || st.pointerId !== e.pointerId) return;      // ← move 全部被丢弃
+```
+
+`strokeRef` 里存的是 **pointerdown 时的 `e.pointerId`**。若 WebView/合成触摸在
+`pointermove` 上给出的 `pointerId` 与 down 不一致（或 React 合成的 pointerId 与浏览器分配的不同），
+**所有 move 都会被这一句吞掉** ⇒ 表现正是"只能点一个点"。
+
+**下一轮第一步（一行日志即可定论）**：在 `onCanvasPointerMove` 入口打印
+`e.pointerId` 与 `strokeRef.current?.pointerId`，两者一比就知道。
+
+> 临时日志 `[e19a2] down …` **保留**在代码里（下轮验证还要用），验证完一并移除。

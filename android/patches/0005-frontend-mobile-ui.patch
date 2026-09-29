@@ -48997,10 +48997,10 @@ index 87fcc4b0..5534f0b1 100644
      const vMax = view.center + span / 2;
      const start = Math.ceil(vMin / spec.step) * spec.step;
 diff --git a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-index 08455bfd..a0b9aa43 100644
+index 08455bfd..151a1f40 100644
 --- a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
 +++ b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-@@ -1,4435 +1,4912 @@
+@@ -1,4435 +1,4913 @@
 -import type {
 -    KeyboardEvent,
 -    MouseEvent as ReactMouseEvent,
@@ -57672,6 +57672,7 @@ index 08455bfd..a0b9aa43 100644
 +            // 笔尖（button 0）= 画线；鼠标右键 / pen 笔杆键（button 2）与
 +            // pen 橡皮端（button 5）= 恢复（擦除回原始曲线）。橡皮端此前
 +            // 不在白名单里，落笔会被静默丢弃。
++            console.log("[e19a2] down button=", e.button, "type=", e.nativeEvent.pointerType, "x=", Math.round(e.clientX), "y=", Math.round(e.clientY), "tool=", String(toolMode));
 +            const penEraserDown = isEraserButton(e.button, e.nativeEvent.pointerType);
 +            const secondaryDown = e.button === 2 || penEraserDown;
 +            // D2：「还原」工具（手机上没有右键/笔杆键 ⇒ 用它替代电脑上的右键拖动）。
