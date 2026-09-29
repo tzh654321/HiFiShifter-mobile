@@ -2739,3 +2739,39 @@ console.log("[g1] ctxClip found", session.clips.some(c => c.id === (d.clipId ?? 
   （`emulator` + `qemu-system-x86_64`），但 **6 分钟内 `adb devices` 始终没有注册**（qemu 卡在启动阶段，
   非"90 秒超时"那次的立即秒退；C/D 盘各余 35GB，不是磁盘问题）⇒ 本轮无法在模拟器上验收。
   下次可先 `adb kill-server` + 清 `%TEMP%\AndroidEmulator` 冷启动再试。
+
+---
+
+## ✅ I-2 / I-3 验收通过（模拟器，2026-09-30 00:2x）
+
+用户报的两个分屏问题**在同一场景下一起验通**：
+
+```
+分屏状态：轨道 + 参数 + 文件（children=2，高度 [412,168]）
+手柄候选：params(rect 全 0，未布局) · files(x=180,y=598,w=360,h=32 ✔ 可见)
+拖动采样：[412, 513, 505, 496, 487, 479, 470, 461, 453, 444]   ← 10 个不同值
+```
+
+* **I-3**「参数+文件分屏时无法上下拖动**文件浏览器标题栏**调整分屏」⇒ ✅ 现在能拖了
+  （正是修复点：`resolveHandle` 原先把"按在按钮上"排除在外，而该标题栏按钮多、空白少）；
+* **I-2**「调整分屏高度时**不跟手**」⇒ ✅ 高度**逐帧连续跟随**（采样 10 个不同值、单调变化），
+  不再是"被重置回原位"（修复点：拖动期间跳过"单面板归位"）。
+
+判据脚本：`scripts/_probe-i23-split.mjs`（手柄优先取**可见**的那个 —— 参数拍数栏在分屏里
+实测 rect 全 0，用它当手柄会算到 (0,0) 导致"拖不动"的假象）。
+
+### I-4（E10-② 白屏）本轮落地两刀
+
+1. **消除 WebGL 空渲染调用**：`count <= 0` 时根本不调 draw
+   （`glyphProgram` 2 处 / `sdfBoxProgram` 2 处 / `polylineProgram` 1 处 /
+   `timelineClipGlRenderer` 1 处 / `surfaceRenderer` 2 处）。
+   依据：真机 logcat 曾见**每帧多条** `Render count or primcount is 0`，
+   每条都要经 JNI 写 logcat（`RustStdoutStderr` + `Tauri/Console` 双份）。
+2. **WebGL context 丢失自愈**（`glContext.ts`）：此前**没有任何人监听** `webglcontextlost`
+   ⇒ 一旦丢失就永久白屏（只能靠切面板重建内核）。现在：
+   `webglcontextlost` 里 `preventDefault()`（不阻止默认行为 = 拒绝恢复）、
+   `webglcontextrestored` 里复位标志、丢失期间 `resize/clear` 提前返回不误操作 GL，
+   并在句柄上暴露 `isLost()`（接口新增字段，调用方无需改）。
+
+> 白屏**本体**仍需要一次专项复现（用户口径"反复切换全屏/分屏后出现"）：
+> 下一轮按 `logcat -s chromium`（关注 `WebGL`/`RenderProcessGone`/`Context Lost`）+ 反复切换来做。

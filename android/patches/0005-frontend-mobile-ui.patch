@@ -58342,6 +58342,70 @@ index 08455bfd..a0b9aa43 100644
 +        refreshParamValuePreview,
 +    };
 +}
+diff --git a/frontend/src/components/layout/renderKernel/gl/glContext.ts b/frontend/src/components/layout/renderKernel/gl/glContext.ts
+index cb97152b..fdaa57a9 100644
+--- a/frontend/src/components/layout/renderKernel/gl/glContext.ts
++++ b/frontend/src/components/layout/renderKernel/gl/glContext.ts
+@@ -48,6 +48,8 @@ export interface GlCanvasHandle {
+      * "销毁后立即重新挂载"模式。
+      */
+     dispose(): void;
++    /** I-4：context 是否处于丢失状态。 */
++    isLost: () => boolean;
+ }
+ 
+ /**
+@@ -74,12 +76,42 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
+     });
+     if (!gl) return null;
+ 
++    /* I-4（E10-② 白屏）第二刀：**WebGL context 丢失的自愈**。
++       移动端"页面突然全白"的常见来源就是 GPU 侧丢 context（显存吃紧 / 渲染进程被打断 /
++       驱动重置），而此前**没人监听** `webglcontextlost` ⇒ 一旦丢失就永久白屏（只能靠切面板重建内核）。
++       规范给的正确姿势：
++         · `webglcontextlost` 里 **preventDefault()** —— 不阻止默认行为等于"拒绝恢复"，
++           浏览器就再也不会触发 restored；
++         · `webglcontextrestored` 里由调用方重建 program/buffer（各 program 的 `isContextLost()`
++           检查会让它们安全跳过绘制，不会再刷 "Render count is 0" 之类的警告）。
++       这里只做"允许恢复 + 暴露状态 + 丢失期间不误操作"，**不改调用方接口**。 */
++    let contextLost = false;
++    const onContextLost = (e: Event) => {
++        e.preventDefault();
++        contextLost = true;
++    };
++    const onContextRestored = () => {
++        contextLost = false;
++    };
++    canvas.addEventListener("webglcontextlost", onContextLost, false);
++    canvas.addEventListener("webglcontextrestored", onContextRestored, false);
++
+     let target = resolveGlRasterTarget(1, 1, 1);
+ 
+     return {
+         gl,
+ 
++        /** I-4：context 当前是否处于丢失状态（调用方可据此跳过昂贵的重绘）。 */
++        isLost: () => contextLost,
++
+         resize(cssWidthPx, cssHeightPx, dpr) {
++            // I-4：context 丢失期间所有 GL 调用都是无效的，直接量完 CSS 尺寸就返回。
++            if (contextLost) {
++                const t0 = resolveGlRasterTarget(cssWidthPx, cssHeightPx, dpr);
++                canvas.style.width = `${cssWidthPx}px`;
++                canvas.style.height = `${cssHeightPx}px`;
++                return t0;
++            }
+             target = resolveGlRasterTarget(cssWidthPx, cssHeightPx, dpr);
+             // 仅在物理尺寸真正变化时写 canvas 尺寸：写 canvas.width 会重置
+             // 整个绘制状态（缓冲被清空），无谓写入会丢掉同帧已上传的实例数据。
+@@ -96,6 +128,7 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
+         },
+ 
+         clear() {
++            if (contextLost) return;   // I-4：丢失期间不碰 GL
+             gl.clearColor(0, 0, 0, 0);
+             gl.clear(gl.COLOR_BUFFER_BIT);
+         },
 diff --git a/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts b/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts
 index 687d969f..dfc6284b 100644
 --- a/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts

@@ -1,6 +1,6 @@
-﻿import { execSync } from "node:child_process";
+import { execSync } from "node:child_process";
 import { Cdp } from "./lib/cdp.mjs";
-const serial = "221deeb";
+const serial = process.argv[2] ?? "emulator-5554";
 const adb = (c) => execSync(`adb -s ${serial} ${c}`, { stdio: "pipe" }).toString();
 const pid = adb("shell pidof com.arounder.hifishifter").trim();
 adb("forward tcp:9222 localabstract:webview_devtools_remote_" + pid);
@@ -47,20 +47,29 @@ if (!st || st.children < 2) {
 st = await splitChildren();
 console.log("分屏后：" + JSON.stringify(st));
 // 找手柄：参数拍数栏（data-hs-time-ruler="params"）
+/* 挑**可见**的手柄：`[data-hs-time-ruler="params"]` 在分屏里可能还没布局（rect 全 0），
+   所以把全部候选列出来，取第一个有尺寸的。 */
 const handle = await cdp.call(() => {
-  const el = document.querySelector('[data-hs-time-ruler="params"]') ?? document.querySelector('[data-hs-split-handle]');
-  if (!el) return null;
-  const r = el.getBoundingClientRect();
-  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), tag: el.getAttribute("data-hs-time-ruler") || el.getAttribute("data-hs-split-handle") };
+  const cands = [...document.querySelectorAll('[data-hs-split-handle="files"],[data-hs-split-handle="notes"],[data-hs-time-ruler="params"],[data-hs-split-handle]')].map((el) => {
+    const r = el.getBoundingClientRect();
+    return {
+      x: Math.round(r.left + r.width / 2),
+      y: Math.round(r.top + r.height / 2),
+      w: Math.round(r.width),
+      h: Math.round(r.height),
+      tag: el.getAttribute("data-hs-time-ruler") || el.getAttribute("data-hs-split-handle"),
+    };
+  });
+  return { all: cands, picked: cands.find((c) => c.w > 20 && c.h > 4) ?? null };
 });
 console.log("手柄：" + JSON.stringify(handle));
-if (handle && st && st.children >= 2) {
+if (handle?.picked && st && st.children >= 2) {
   const h0 = st.heights[0];
-  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 0, x: handle.x, y: handle.y, radiusX: 6, radiusY: 6, force: 1 }] });
+  await cdp.send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ id: 0, x: handle.picked.x, y: handle.picked.y, radiusX: 6, radiusY: 6, force: 1 }] });
   await sleep(80);
   const samples = [];
   for (let i = 1; i <= 10; i++) {
-    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ id: 0, x: handle.x, y: handle.y - i * 12, radiusX: 6, radiusY: 6, force: 1 }] });
+    await cdp.send("Input.dispatchTouchEvent", { type: "touchMove", touchPoints: [{ id: 0, x: handle.x, y: handle.picked.y - i * 12, radiusX: 6, radiusY: 6, force: 1 }] });
     await sleep(70);
     const s = await splitChildren();
     samples.push(s ? s.heights[0] : null);
