@@ -1,0 +1,21 @@
+﻿import { execSync } from "node:child_process";
+import { Cdp } from "./lib/cdp.mjs";
+const serial = "221deeb";
+const adb = (c) => execSync(`adb -s ${serial} ${c}`, { stdio: "pipe" }).toString();
+const pid = adb("shell pidof com.arounder.hifishifter").trim();
+adb("forward tcp:9222 localabstract:webview_devtools_remote_" + pid);
+const cdp = await Cdp.attach({ host: "127.0.0.1", port: 9222 });
+await cdp.send("Runtime.enable");
+const r = await cdp.call(async () => {
+  const inv = (c, a) => window.__TAURI_INTERNALS__.invoke(c, a).catch((e) => ({ err: String(e).slice(0, 120) }));
+  const trackId = "track_main";
+  const values = Array.from({ length: 800 }, (_, i) => Math.sin(i / 20) * 200);
+  await inv("set_param_frames", { trackId, param: "pitch", startFrame: 0, values, checkpoint: false });
+  const a = await inv("get_param_frames", { trackId, param: "pitch", startFrame: 0, frameCount: 800, stride: 1, binary: true });
+  const b = await inv("get_param_frames", { trackId, param: "pitch", startFrame: 0, frameCount: 800, stride: 1 });
+  const c = await inv("get_param_frames", { trackId, param: "pitch", startFrame: 0, frameCount: 800 });
+  const shape = (x) => x && !x.err ? { keys: Object.keys(x), binaryType: typeof x.binary, binaryLen: typeof x.binary === "string" ? x.binary.length : null, origLen: Array.isArray(x.orig) ? x.orig.length : null, editLen: Array.isArray(x.edit) ? x.edit.length : null } : { err: x?.err };
+  return { binaryTrue: shape(a), noStride: shape(b), minimal: shape(c) };
+});
+console.log(JSON.stringify(r, null, 1));
+cdp.close();

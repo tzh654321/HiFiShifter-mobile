@@ -3074,3 +3074,33 @@ WebView 的指针序列是
 **已有可复用结论**（写给后续所有"长按菜单"类验证）：
 真实触摸长按必须 `touchStart` → **每 90ms 发一次零位移 `touchMove`（共 6 次）** → `touchEnd`，
 只 `touchStart` + 干等打不开；合成 `PointerEvent` 也打不开。
+
+---
+
+## 🎯 E19a 前置条件定位（2026-09-30 03:2x）—— 参数读取恒空的原因
+
+**排查矩阵**（真机实测）：
+
+| 检查 | 结果 |
+| :--- | :--- |
+| `set_param_frames(trackId,"pitch",0,values,false)` | ✅ `{"ok": true}` |
+| 返回里的 `pitch_edit_user_modified` | **true** ⇒ 写入**确实生效** |
+| 返回里的 `pitch_edit_backend_available` | **true** ⇒ 后端 pitch 编辑**可用** |
+| `root_track_id`（响应里回显） | `track_main` ⇒ 与我传入的**一致**，不是"传错轨道" |
+| `ok` | true |
+| `get_param_frames` 的 `orig` / `edit` | **长度恒为 0**（试过 `binary:true` / `binary:false` / 省略 `stride`+`binary`，三种都一样；响应里**根本没有 `binary` 字段**）|
+
+⇒ **结论**：轨道 ID、参数名、后端可用性都没问题；`get_param_frames` 恒空**最合理的解释是
+「该轨道上**没有音频块**」** ⇒ pitch 曲线本身没有内容可读（`orig` 是分析结果、`edit` 是编辑值，
+两者都需要"有音频的块"作为载体）。重装 APK 后工程被重置，当前轨道是空的。
+
+**因此 E19a 的正确验证姿势（下一轮照做）**：
+
+1. **先用前端拖拽造块**（`_probe-d8-file-drag.mjs` 那套，已在真机验证过能生成块 ⇒ 前端 store 有块）；
+2. 然后 `set_param_frames` 写一段基线 ⇒ 此时 `get_param_frames` 应能读回非零；
+3. 再长按绘制按钮开工具菜单（**须带周期零位移 move**，见上一条）→ 选「还原」→ 拖动擦除；
+4. 判据：被擦除的帧**跨越整段拖动** ⇒ 拖动生效；只掉 1~3 帧 ⇒ 复现"只能点一个点"。
+
+> 附带确认：`binary` 参数在这条后端路径上**没有回显字段**，前端 `webApi.getParamFrames`
+> 里的"解码分支"实际上从未触发（`res.binary` 恒为 undefined）—— 这是一条值得回头核对的**上游可疑点**
+> （不是本次 E19a 的阻塞，但记下来）。
