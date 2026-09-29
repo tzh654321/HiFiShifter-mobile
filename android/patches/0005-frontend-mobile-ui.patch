@@ -34203,10 +34203,10 @@ index 613ea89d..c8a5682b 100644
 +    );
 +};
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..e565ae70 100644
+index 242997f5..97bf6100 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7082 @@
+@@ -1,6438 +1,7130 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -41744,6 +41744,54 @@ index 242997f5..e565ae70 100644
 +                    trackListEl.removeEventListener("touchmove", onHeaderTouchMove);
 +                    trackListEl.removeEventListener("touchend", onHeaderTouchEnd);
 +                    trackListEl.removeEventListener("touchcancel", onHeaderTouchEnd);
++                });
++
++                /* E13（用户口径）：「轨道头缩小后**从无轨道处右滑无法展开**轨道头，需修」。
++
++                   病根：上面这套「左划收起 / 右划展开」只挂在**滚动容器**
++                   `[data-track-list-panel]` 上，而收起后那是一条 26px 的窄条 ——
++                   手指很容易落在**头行**（`[data-hs-tracklist-head-bar]`，它是滚动容器的
++                   **兄弟**、不在容器内）或外壳的空白处 ⇒ 事件根本到不了容器，展不开。
++                   （这也是 E3 探针里"合成触摸收起不生效"的同一个原因。）
++
++                   修法：同一套判定**再挂两处**——
++                     · 外壳（`trackListEl.parentElement`，覆盖头行 + 列表 + 空白）；
++                     · 文档级兜底：**仅在收起态且起点落在左侧 40px 内**时参与判定
++                       （避免与时间线区域的横滑手势抢事件）。
++                   三处共用同一组回调，语义完全一致（左划收起、右划展开）。 */
++                const shellEl = trackListEl.parentElement;
++                /* 兜底判定的边界取**轨道头列**的右边缘：展开态是整个列宽（头行、列表、
++                   空白全在内），收起态就是 26px 窄条 ⇒ 两种形态都不必再分别写条件。
++                   （只用"是否收起"做条件会漏掉**展开态在头行上左划收起**这条：头行是
++                   滚动容器的兄弟、不在容器内，实测确实收不起来。） */
++                const colRight = () => {
++                    const r = shellEl?.getBoundingClientRect();
++                    return r ? r.right + 4 : 240;
++                };
++                const docTouchStart = (e: TouchEvent) => {
++                    const t = e.touches[0];
++                    if (!t || t.clientX > colRight()) return;
++                    onHeaderTouchStart(e);
++                };
++                const docTouchMove = (e: TouchEvent) => {
++                    if (Number.isNaN(swipeStartX)) return;
++                    onHeaderTouchMove(e);
++                };
++                shellEl?.addEventListener("touchstart", onHeaderTouchStart, { passive: true });
++                shellEl?.addEventListener("touchmove", onHeaderTouchMove, { passive: false });
++                shellEl?.addEventListener("touchend", onHeaderTouchEnd, { passive: true });
++                shellEl?.addEventListener("touchcancel", onHeaderTouchEnd, { passive: true });
++                document.addEventListener("touchstart", docTouchStart, { passive: true });
++                document.addEventListener("touchmove", docTouchMove, { passive: false });
++                document.addEventListener("touchend", onHeaderTouchEnd, { passive: true });
++                offs.push(() => {
++                    shellEl?.removeEventListener("touchstart", onHeaderTouchStart);
++                    shellEl?.removeEventListener("touchmove", onHeaderTouchMove);
++                    shellEl?.removeEventListener("touchend", onHeaderTouchEnd);
++                    shellEl?.removeEventListener("touchcancel", onHeaderTouchEnd);
++                    document.removeEventListener("touchstart", docTouchStart);
++                    document.removeEventListener("touchmove", docTouchMove);
++                    document.removeEventListener("touchend", onHeaderTouchEnd);
 +                });
 +                return true;
 +            };
