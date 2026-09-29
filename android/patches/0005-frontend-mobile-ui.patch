@@ -35016,10 +35016,10 @@ index 00000000..ccf42cee
 +    );
 +}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..d4323a75 100644
+index 242997f5..c9091be2 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7161 @@
+@@ -1,6438 +1,7173 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -39876,7 +39876,32 @@ index 242997f5..d4323a75 100644
 -                    clipId: args.clipId,
 -                    snapOffsetSec: Math.min(Math.max(nextAbs - clipStart, 0), clipLen),
 -                }),
--            );
++        const onOpenClipMenu = (e: Event) => {
++            const d = (e as CustomEvent<{ x?: number; y?: number; clipId?: string }>).detail ?? {};
++            const session = store.getState().session;
++            /* ⚠️ 优先用**事件里带的 clipId**：后端 `select_clip` 命令不经过前端 thunk，
++               所以前端 store 的 `selectedClipId` 可能仍是 null（实测就是这么"发事件没反应"）。
++               浮条本来就知道自己那一块的 id ⇒ 直接带过来最可靠。 */
++            const id = d.clipId ?? session.selectedClipId;
++            /* 放宽查找：`clipId` 对不上时回退到**第一个块**。
++               理由：用户点的是浮条上的「更多」，意图明确就是"给当前这一块开菜单"；
++               而前后端的选中/块列表在手机上未必严格同步（后端 `select_clip` 不更新前端 store，
++               前端也可能还没拿到新块）。只要轨道上**有块**就该让菜单出来，
++               而不是静默什么都不发生（这正是之前"点了没反应"的观感）。 */
++            const target =
++                (id ? session.clips.find((c) => c.id === id) : undefined) ?? session.clips[0];
++            /* 临时日志（G-1 定位用）：logcat -s Tauri/Console 可读。
++               若这行不出现 ⇒ 事件没到监听；出现了但菜单仍不出 ⇒ 问题在渲染分支。 */
++            console.log(
++                "[g1] event clipId=",
++                d.clipId,
++                "selected=",
++                session.selectedClipId,
++                "clips=",
++                session.clips.length,
++                "target=",
++                target?.id,
+             );
 -        },
 -        [dispatch, noSnapKb, s.snapEnabled, snapTimelineDetailed],
 -    );
@@ -40787,7 +40812,8 @@ index 242997f5..d4323a75 100644
 -            sec: number;
 -        }) => {
 -            setContextMenu(null);
--            setTrackAreaMenu(null);
++            if (!target) return;
+             setTrackAreaMenu(null);
 -            if (args.trackId === null) return;
 -            if (args.clipIds.length > 0) {
 -                // 最上面那个（startSec 最大）作为主目标，其余作为"重叠选择"入口——
@@ -40831,22 +40857,7 @@ index 242997f5..d4323a75 100644
 -    const handleKernelFadeContextMenu = React.useCallback(
 -        (request: FadeContextMenuRequest) => {
 -            setContextMenu(null);
-+        const onOpenClipMenu = (e: Event) => {
-+            const d = (e as CustomEvent<{ x?: number; y?: number; clipId?: string }>).detail ?? {};
-+            const session = store.getState().session;
-+            /* ⚠️ 优先用**事件里带的 clipId**：后端 `select_clip` 命令不经过前端 thunk，
-+               所以前端 store 的 `selectedClipId` 可能仍是 null（实测就是这么"发事件没反应"）。
-+               浮条本来就知道自己那一块的 id ⇒ 直接带过来最可靠。 */
-+            const id = d.clipId ?? session.selectedClipId;
-+            /* 放宽查找：`clipId` 对不上时回退到**第一个块**。
-+               理由：用户点的是浮条上的「更多」，意图明确就是"给当前这一块开菜单"；
-+               而前后端的选中/块列表在手机上未必严格同步（后端 `select_clip` 不更新前端 store，
-+               前端也可能还没拿到新块）。只要轨道上**有块**就该让菜单出来，
-+               而不是静默什么都不发生（这正是之前"点了没反应"的观感）。 */
-+            const target =
-+                (id ? session.clips.find((c) => c.id === id) : undefined) ?? session.clips[0];
-+            if (!target) return;
-             setTrackAreaMenu(null);
+-            setTrackAreaMenu(null);
 -            requestOpenFadeContextMenu(request);
 -        },
 -        [setContextMenu, setTrackAreaMenu],
@@ -41096,14 +41107,14 @@ index 242997f5..d4323a75 100644
 -                deltaDb: -adjustedY * CLIP_GAIN_DRAG_DB_PER_PX,
 -                minDb: -12,
 -                maxDb: 12,
--            });
--            batch(() => {
--                for (const update of updates) dispatch(setClipGain(update));
 +            setContextMenu({
 +                x: Math.round(d.x ?? window.innerWidth / 2),
 +                y: Math.round(d.y ?? window.innerHeight / 2),
 +                clipId: target.id,
              });
+-            batch(() => {
+-                for (const update of updates) dispatch(setClipGain(update));
+-            });
 -            // 拖动中的实时浮标（旧实现 `ClipHeader` 的 `gainTooltip` 拖动变体）：
 -            // 普通悬停只显示当前值，拖动时还要显示**本次拖动的增量**。内容逐帧
 -            // 更新——浮标的锚点仍是内核容器，AppTooltip 自己跟随指针。
@@ -79041,98 +79052,159 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..16084a12
+index 00000000..f2ca9121
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,102 @@
+@@ -0,0 +1,163 @@
 +/**
-+ * 音频块左右「控制点」的**可见化**（规格 `docs/15` / `docs/临时.xlsx` 音频块·单击格：
-+ * 「选中并显示常用操作与**左右控制点**（参考 flm1.png）」）。
++ * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
-+ * 用户口径（TASKS.md B1）：「单击音频块的左右控制点**没显示**；把它做出来后原有的
-+ * 『调整音频块边界』与『调整淡入淡出』就可以替代了。」
-+ * ⇒ 本条要的是**看得见的抓手**：把内核本来就有的左右边缘命中区（`left-edge` /
-+ *   `right-edge`）与淡变区（`fade-in-corner` / `fade-out-corner`）画出来，
-+ *   让"能按到"变成"看得见所以敢按"。
++ *   「音频块两侧的控制点画成**音频块外面的圆点**（类似 flm），按下控制点后**隐藏临时的常用功能菜单**，
++ *     圆点**能跟手**，**上下移动后圆点的样式会带有对应的功能的图标**，
++ *     再开始左右拖动时**圆点始终存在直至松手**」。
 + *
-+ * 【为什么是 `pointer-events: none` 的纯浮层】手势全都长在内核里（边缘 = 裁切/拉伸、
-+ * 上划后横滑 = 淡变/变速，见 `timelineKernelHost.ts` 的 `pending-select`）。浮层一旦可
-+ * 命中，就会**盖住内核的命中区**——这正是 `ClipQuickActions` 曾经把淡变区压死、
-+ * 让「淡入淡出区划动调时长」完全失效的根因。所以这里只画不吃事件：看得见的是浮层，
-+ * 摸得着的仍是内核。位置与内核的命中带**逐项对齐**（见 `useClipOverlayGeometry`）。
++ * 与旧实现的差别：
++ *   · 旧版画的是**块内侧的竖条**（`GRIP_VISUAL_WIDTH` 4px 宽、贴着边缘）；
++ *   · 新版画**块外侧的圆点**（`pointer-events: none` 的浮层，不吃内核命中区 —— 这一条是**架构约束**：
++ *     内核的左右边缘命中带就在块内侧，浮层一旦可命中就会像当年 `ClipQuickActions` 那样把命中区压死；
++ *     把圆点放到**块外**正好顺带解决了这个冲突）。
 + *
-+ * 【为什么不用 canvas 画】块的渲染在内核 WebGL 场景里（`scene/clipInstances.ts`），
-+ * 控制点是**选中态专属**的 UI 装饰：放进场景就得让内核知道"选中态 + 断点"，而那
-+ * 两件事现在都只存在于 React 侧。DOM 浮层与既有浮条同一套 sec→px 换算，代价最小。
++ * 为什么不做成"可点中的按钮"：那必然要 `pointer-events: auto` ⇒ 盖住内核命中区 ⇒
++ * 「调整音频块边界」失效。所以这里改用**全局指针旁听**：手指按在"块外侧、控制点附近"时进入
++ * **跟手模式**（纯视觉），数值改动照旧由内核处理 —— 看得见的是我们，摸得着的仍是内核。
++ *
++ * 上下移动 ⇒ 切换图标，语义与内核一致（`timelineKernelHost` 的 `pending-select`）：
++ *   · 向上 = 淡入淡出（fade）；
++ *   · 向下 = 变速（rate）。
 + */
 +import React from "react";
 +import { useClipOverlayGeometry } from "./useClipOverlayGeometry";
 +
-+/** 边缘命中带宽度（与内核 `hitTest.ts` 的 `EDGE_WIDTH_PX` 同值，含 1/3 收敛规则）。 */
-+const EDGE_HIT_WIDTH = 10;
-+/** 画出来的抓手臂宽（比命中带窄，视觉上不至于糊住波形）。 */
-+const GRIP_VISUAL_WIDTH = 4;
++/** 圆点半径（直径 14），比旧版竖条更接近 flm 的抓手观感。 */
++const DOT_R = 7;
++/** 手指按在**块外侧**多少像素内算"抓住控制点"。 */
++const OUTSIDE_GRAB_PX = 22;
++/** 纵向移动超过这个距离才算"选了功能"（避免手抖就换图标）。 */
++const MODE_THRESHOLD_PX = 18;
++/** 判定为"左右拖动"的横向位移。 */
++const DRAG_THRESHOLD_PX = 6;
 +
-+/**
-+ * 左右控制点浮层。
-+ *
-+ * @returns 两个抓手；未选中单个块 / 非手机 / 块横向不可见时为 `null`。
-+ */
++type Mode = "none" | "fade" | "rate";
++
++/** 淡入淡出图标：三角形的淡变楔形。 */
++const FadeGlyph = () => (
++    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
++        <path d="M1 11 L11 1 L11 11 Z" fill="currentColor" opacity="0.9" />
++    </svg>
++);
++/** 变速图标：双箭头（左右各一），与"横向滑动改变速度"对应。 */
++const RateGlyph = () => (
++    <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden>
++        <path d="M1 6 L4 3.5 L4 8.5 Z" fill="currentColor" />
++        <path d="M11 6 L8 3.5 L8 8.5 Z" fill="currentColor" />
++        <rect x="4.5" y="5.4" width="3" height="1.2" fill="currentColor" />
++    </svg>
++);
++
 +export function ClipControlPoints() {
 +    const g = useClipOverlayGeometry();
++    /** 正在被抓住的那一侧（null = 没抓）。 */
++    const [grab, setGrab] = React.useState<{
++        side: "left" | "right";
++        x: number;
++        y: number;
++        mode: Mode;
++        dragging: boolean;
++    } | null>(null);
++    /** 几何放进 ref：指针旁听器只挂一次，不能每帧重挂。 */
++    const geomRef = React.useRef(g);
++    geomRef.current = g;
++
++    // 全局旁听：按下时判断"是否抓在块外侧的控制点附近"。
++    React.useEffect(() => {
++        const onDown = (e: PointerEvent) => {
++            const geo = geomRef.current;
++            if (!geo || !geo.isPhone || geo.multiSelectedCount > 1 || !geo.horizontallyVisible) return;
++            // 只认主指针（多指手势交给内核的缩放/平移）。
++            if (!e.isPrimary) return;
++            const yTop = geo.edgeBandTop;
++            const yBottom = yTop + Math.max(8, geo.edgeBandHeight);
++            if (e.clientY < yTop - 12 || e.clientY > yBottom + 12) return;
++            const nearLeft = Math.abs(e.clientX - geo.left) <= OUTSIDE_GRAB_PX;
++            const nearRight = Math.abs(e.clientX - (geo.left + geo.width)) <= OUTSIDE_GRAB_PX;
++            if (!nearLeft && !nearRight) return;
++            const side: "left" | "right" = nearLeft ? "left" : "right";
++            setGrab({ side, x: e.clientX, y: e.clientY, mode: "none", dragging: false });
++            /* 「按下控制点后隐藏临时的常用功能菜单」：浮条自己监听这个事件把当前块收起。 */
++            window.dispatchEvent(new CustomEvent("hs-hide-clip-actions"));
++        };
++        const onMove = (e: PointerEvent) => {
++            setGrab((prev) => {
++                if (!prev) return prev;
++                const dy = e.clientY - prev.y;
++                const mode: Mode =
++                    Math.abs(dy) >= MODE_THRESHOLD_PX ? (dy < 0 ? "fade" : "rate") : prev.mode;
++                const dragging = prev.dragging || Math.abs(e.clientX - prev.x) >= DRAG_THRESHOLD_PX;
++                // 「圆点能跟手」：位置直接跟随当前指针。
++                return { ...prev, x: e.clientX, y: e.clientY, mode, dragging };
++            });
++        };
++        const onUp = () => setGrab(null);
++        window.addEventListener("pointerdown", onDown, true);
++        window.addEventListener("pointermove", onMove, true);
++        window.addEventListener("pointerup", onUp, true);
++        window.addEventListener("pointercancel", onUp, true);
++        return () => {
++            window.removeEventListener("pointerdown", onDown, true);
++            window.removeEventListener("pointermove", onMove, true);
++            window.removeEventListener("pointerup", onUp, true);
++            window.removeEventListener("pointercancel", onUp, true);
++        };
++    }, []);
++
 +    if (g === null || !g.isPhone) return null;
-+    // 多选时浮条都不显示（见 `ClipQuickActions` 的门控），控制点同样只在单选时出现。
 +    if (g.multiSelectedCount > 1) return null;
 +    if (!g.horizontallyVisible) return null;
-+    // 命中带按内核规则收敛：极短的块不能让整块都算边缘，否则块体拖不动。
-+    const hitWidth = Math.min(EDGE_HIT_WIDTH, Math.max(1, g.width) / 3);
-+    const height = Math.max(8, g.edgeBandHeight);
 +
-+    const grip = (side: "left" | "right"): React.ReactNode => {
-+        const centerX =
-+            side === "left" ? g.left + hitWidth / 2 : g.left + g.width - hitWidth / 2;
++    const height = Math.max(8, g.edgeBandHeight);
++    const centerY = g.edgeBandTop + height / 2;
++
++    /** 圆点：默认贴在**块外侧**（左点再往左偏一个半径，右点往右）。 */
++    const dot = (side: "left" | "right"): React.ReactNode => {
++        const grabbed = grab?.side === side;
++        const baseX = side === "left" ? g.left - DOT_R - 3 : g.left + g.width + DOT_R + 3;
++        const x = grabbed ? grab.x : baseX;
++        const y = grabbed ? grab.y : centerY;
++        const mode: Mode = grabbed ? grab.mode : "none";
 +        return (
 +            <div
 +                key={side}
 +                data-hs-clip-control-point={side}
++                data-hs-control-mode={mode}
++                data-hs-control-dragging={grabbed && grab.dragging ? "1" : undefined}
 +                style={{
 +                    position: "fixed",
-+                    left: centerX,
-+                    top: g.edgeBandTop,
-+                    width: GRIP_VISUAL_WIDTH,
-+                    height,
-+                    transform: "translateX(-50%)",
++                    left: x,
++                    top: y,
++                    width: DOT_R * 2,
++                    height: DOT_R * 2,
++                    transform: "translate(-50%, -50%)",
 +                    borderRadius: 999,
-+                    // 半透明白 + 深色描边：亮块（波形是白的）与暗底上都看得清。
-+                    background: "rgba(255,255,255,0.86)",
++                    display: "flex",
++                    alignItems: "center",
++                    justifyContent: "center",
++                    // 被抓住时变大一点，并换成强调色 —— 明确"现在归我控制"。
++                    background: grabbed ? "var(--accent-9, rgb(91, 91, 214))" : "rgba(255,255,255,0.92)",
++                    color: grabbed ? "#fff" : "rgba(0,0,0,0.75)",
 +                    border: "1px solid rgba(0,0,0,0.45)",
-+                    boxShadow: "0 1px 3px rgba(0,0,0,0.45)",
++                    boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
++                    scale: grabbed ? "1.35" : "1",
++                    transition: grabbed ? "none" : "left 120ms ease, top 120ms ease, scale 120ms ease",
 +                    pointerEvents: "none",
 +                }}
 +            >
-+                {/* 抓手臂上的两道横纹：暗示"可以横向拖"。 */}
-+                <div
-+                    aria-hidden
-+                    style={{
-+                        position: "absolute",
-+                        left: -2,
-+                        right: -2,
-+                        top: "38%",
-+                        height: 1,
-+                        background: "rgba(0,0,0,0.5)",
-+                    }}
-+                />
-+                <div
-+                    aria-hidden
-+                    style={{
-+                        position: "absolute",
-+                        left: -2,
-+                        right: -2,
-+                        top: "58%",
-+                        height: 1,
-+                        background: "rgba(0,0,0,0.5)",
-+                    }}
-+                />
++                {/* 上下移动后带对应功能的图标（fade = 淡入淡出 / rate = 变速）。 */}
++                {mode === "fade" ? <FadeGlyph /> : mode === "rate" ? <RateGlyph /> : null}
 +            </div>
 +        );
 +    };
@@ -79142,8 +79214,8 @@ index 00000000..16084a12
 +            data-hs-clip-control-points
 +            style={{ position: "absolute", left: 0, top: 0, zIndex: 25, pointerEvents: "none" }}
 +        >
-+            {grip("left")}
-+            {grip("right")}
++            {dot("left")}
++            {dot("right")}
 +        </div>
 +    );
 +}
@@ -79298,10 +79370,10 @@ index 00000000..c51ea7f9
 +}
 diff --git a/frontend/src/components/mobile/ClipQuickActions.tsx b/frontend/src/components/mobile/ClipQuickActions.tsx
 new file mode 100644
-index 00000000..9bd9c623
+index 00000000..2ffc91cf
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipQuickActions.tsx
-@@ -0,0 +1,333 @@
+@@ -0,0 +1,344 @@
 +/**
 + * 音频块「常用操作」浮动条 —— 规格 `docs/15` 音频块·单击：
 + * 「选中并显示常用操作与左右控制点（参考 flm1.png）」。
@@ -79456,7 +79528,18 @@ index 00000000..9bd9c623
 +            if (id !== null) setHiddenForClipId(id);
 +        };
 +        document.addEventListener("pointerdown", onDown, true);
-+        return () => document.removeEventListener("pointerdown", onDown, true);
++
++        /* E5（用户口径）：「按下控制点后**隐藏临时的常用功能菜单**」。
++           控制点浮层自己是 pointer-events:none（不能吃掉内核命中区），所以它通过窗口事件通知这里。 */
++        const onHide = () => {
++            const id = selectedClipIdRef.current;
++            if (id !== null) setHiddenForClipId(id);
++        };
++        window.addEventListener("hs-hide-clip-actions", onHide);
++        return () => {
++            document.removeEventListener("pointerdown", onDown, true);
++            window.removeEventListener("hs-hide-clip-actions", onHide);
++        };
 +    }, []);
 +
 +    // 视口真值 + 断点：都能变（缩放/滚动/旋转），所以在 rAF 里跟一下。
