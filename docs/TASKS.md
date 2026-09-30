@@ -2348,7 +2348,7 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 | E19b | 「选择」的切换向「绘制」同步 —— 点**未选中**工具**直接切换**；点**选中**工具**展开工具菜单**；菜单展开后点别处**收起** | ✅ 已实现：绘制按钮的 `onClick` 改为条件语义（不在绘制组 ⇒ 直接切换；已在绘制组 ⇒ 开关工具菜单；桌面右键仍直接开菜单）；「点别处收起」原本就有 | 🟡 已实现，待设备验收 |
 | E20 | **播放时单击拍数栏要先暂停再跳转**，否则会跳转回暂停处 | 病根：`stopAudioPlayback()` 是异步 thunk，其 fulfilled 会把引擎播放位置**回写** `playheadSec`，覆盖刚 seek 的落点（= 用户看到的"跳回暂停处"）。改为 **`.finally()` 等停止落地后再 seek**（双击路径不动，仍"跳过去并播放"）| ✅ **DONE**（真机 **2/2**：播放中单击拍数栏 ⇒ transport 变回「播放」= 已暂停；落点 `playhead=18.0s` vs 点击处 `17.81s`（差 0.19s）⇒ **没有**被回写回暂停点）|
 | E21 | **（覆盖旧口径）** 默认存储目录改到 `storage/emulated/0/HiFiShifter`（含录音、工程等）；**未授权时仍存在 android/data**；**菜单-选项 加一栏「存储设置」**：可设默认存储位置、查看并**跳转**三种授权的生效情况 | ✅ **后端全部完成并真机验证**：新增 `storage.rs`（统一入口 `resolve_storage_root`：用户设置 → 全盘访问时的 `/storage/emulated/0/HiFiShifter` → 回退私有目录），并接进**工程默认文件夹**（录音/自动备份随之落位）；三个命令 `storage_settings_state` / `set_storage_root` / `open_path_in_file_manager`。<br>真机 6/6：`effectiveRoot=/storage/emulated/0/HiFiShifter`（不再是 android/data）✓ · 三种授权状态齐全 ✓ · 自定义根可设可清（Download → 默认）✓ · 选项菜单里有「存储设置…」✓<br>⚠️ 与前一条同因：`StorageSettingsDialog` **打开即卡死** ⇒ 入口临时摘除 | 🟡 后端 DONE；UI 待修（卡死）|
-| E22 | **补充动画**：弹出分屏动画、移动轨道动画、菜单展开动画、各种拖动操作的平滑化/惯性化 等 | 与 E18 的平滑/惯性同源，统一做一套 | ⬜ TODO |
+| E22 | **补充动画**：弹出分屏动画、移动轨道动画、菜单展开动画、各种拖动操作的平滑化/惯性化 等 | 🟡 **第一刀已完成（真机 221deeb + 模拟器，3/3）**：建了「**一套**」动效层（CSS 变量 + 2 条关键帧 + `body[data-hs-no-anim]` 开关 + `prefers-reduced-motion`），覆盖**菜单展开**（`[role=menu]` —— 手机菜单是自定义 `div[role=menu]`，**不是** Radix 弹层！）、**面板弹出**（`[data-hs-pane]` + React `key`）、音频块浮条淡入。<br>⬜ 待做：**移动轨道动画（FLIP）**、**出场动画**（面板收起/菜单关闭需 presence 状态机）、拖动收尾的平滑（视口已由 E18 覆盖）|
 
 ## E 组执行顺序（我的建议）
 
@@ -3508,3 +3508,47 @@ E5 5/5 · E6 · G-1（右键菜单 17 项）· F2 3/3 · I-1/I-2/I-3 · I-4 三�
 4. **zoom in 可能被参数值域钳掉**：`pitch` 的 `span=6` 已是下限 ⇒ 一律用 **zoom out** 测竖直缩放。
 5. **参数面板的横向范围与轨道视图共享**（`resolveTimelineScrollRange`）：工程短时余量只有几十 px，
    平移会"立刻钉住" ≠ 手势坏了；要测平移/惯性请换**时间线面板**并先横向放大出余量。
+
+---
+
+## ✅ E22 动效层（第一刀，2026-09-30，真机 221deeb + 模拟器 emulator-5554）
+
+**用户口径**：「补充动画：弹出分屏动画、移动轨道动画、菜单展开动画、各种拖动操作的平滑化/惯性化 等」，
+并注明「与 E18 的平滑/惯性同源，**统一做一套**」。
+
+### 做出来的「一套」
+
+| 位置 | 内容 |
+| :--- | :--- |
+| `index.css` 末节 | `--hs-anim-dur-menu/pane`、`--hs-anim-ease` 三个变量 + `hs-menu-in`（opacity+translateY+scale）/ `hs-fade-in`（只 opacity）两条关键帧 |
+| 菜单 | `[role="menu"]` + `.rt-DropdownMenuContent / .rt-ContextMenuContent / .rt-PopoverContent / .rt-SelectContent` |
+| 面板 | `[data-hs-pane="timeline|params|files|notes"]`（App.tsx 四个面板块新增该属性 + React `key`） |
+| 浮条 | `[data-hs-clip-actions]` |
+| 开关 | `body[data-hs-no-anim]`（探针对照用，也可给用户当"嫌晃眼"开关）+ `@media (prefers-reduced-motion: reduce)` |
+
+### 🔴 四条硬约束（都是本轮实测撞出来的）
+
+1. **`[role="menu"]` 必须写**：手机端菜单是各组件自己渲染的 `div[role=menu]`
+   （`MobileTopBar` / `MobileBottomBar` / `ClipContextMenu` / `FadeContextMenu`），
+   **不是** Radix 弹层 —— 只写 `.rt-*` 的话用户日常点的菜单**一个都不会动**
+   （实测：Radix 类命中 0、`[role=menu]` 命中 1）。
+2. **含 `position: fixed` 后代的容器只能动 `opacity`**：任何 `transform`/`filter` 都会创建包含块，
+   那些浮层改按容器定位 ⇒ 一动就飞（分屏块里有 fixed 浮层；`[data-hs-clip-actions]` 里就有一个
+   `position: fixed` 的实条，坐标是视口系的）。
+3. **React 会复用同型节点，`className` 改掉也不重启 CSS 动画** ⇒ 必须给面板块 React `key`
+   （否则"关掉再打开"时节点没重建、动画不会重放；实测第一版就栽在这：25 帧里 opacity 恒 1）。
+4. **采样不能只靠 `rAF`**：挂载参数面板会把主线程独占 ~0.9s（模拟器软件 GL + 钢琴窗内核），
+   期间 `setInterval(16)` 也排不上队 ⇒ 只能改到更轻的文件面板量化，并且判据要允许"首帧 0 → 末帧 1"。
+
+### 判据（`scripts/_probe-e22-anim.mjs`，**3/3**）
+
+```
+✅ E22-① 菜单展开    animationstart=[hs-menu-in]（元素=absolute bg-qt-window border…，即手机菜单）
+                     采样 29 帧、8 帧 <1（首 0 → 末 1），期间出现过 transform
+✅ E22-② 面板弹出    前置已卸载=true；animationstart=[hs-fade-in]；42 帧、9 帧 <1（首 0 → 末 1）
+✅ E22-③ 对照        置 body[data-hs-no-anim] 后 animationstart=[]、opacity 恒 1
+```
+
+**回归**：`_probe-mobile-split` **5/5**（模拟器；面板块加 key/属性没影响分屏行为）· `tsc -b` 0 错 ·
+补丁 regen+verify 逐字节一致 · `vitest` 159 文件 / 1082 用例（一次 5 条失败是
+`EPERM … rename D://Temp//…//ssr//…` 的 **Vite SSR 缓存抖动**，**单独跑那 5 条 5/5 通过**）。

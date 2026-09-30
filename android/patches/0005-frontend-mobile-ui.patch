@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..357835a8 100644
+index 3802022a..c18b1a5c 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4632 @@
+@@ -1,4006 +1,4647 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -8367,6 +8367,8 @@ index 3802022a..357835a8 100644
 +                    >
 +                        {mobilePanels.timeline ? (
 +                            <div
++                                key="hs-pane-timeline"
++                                data-hs-pane="timeline"
 +                                className="hs-mobile-split-pane relative"
 +                                style={
 +                                    mobileHasNonTrackPanel
@@ -8403,6 +8405,7 @@ index 3802022a..357835a8 100644
 +                        ) : null}
 +                        {mobileHasNonTrackPanel ? (
 +                            <div
++                                key="hs-pane-lower"
 +                                className="hs-mobile-split-pane relative flex flex-col"
 +                                style={{ flexGrow: 1 - mobileSplitRatio }}
 +                            >
@@ -8413,7 +8416,11 @@ index 3802022a..357835a8 100644
 +                                    拖起来像"跑偏/拖不动"。工具行属于参数界面 ⇒ 只有它存在。 */}
 +                                {mobilePanels.params ? <MobileParamToolRow /> : null}
 +                                {mobilePanels.params ? (
-+                                    <div className="flex-1 min-h-0 relative">
++                                    <div
++                                        key="hs-pane-params"
++                                        data-hs-pane="params"
++                                        className="flex-1 min-h-0 relative"
++                                    >
 +                                        {/* #52：用户口径「全屏参数界面下点 ✕ ⇒ 回到全屏轨道界面」。
 +                                         *
 +                                         * 分屏时（timeline 也开着）✕ 只收起本块；
@@ -8442,12 +8449,20 @@ index 3802022a..357835a8 100644
 +                                    </div>
 +                                ) : null}
 +                                {mobilePanels.files ? (
-+                                    <div className="flex-1 min-h-0 relative">
++                                    <div
++                                        key="hs-pane-files"
++                                        data-hs-pane="files"
++                                        className="flex-1 min-h-0 relative"
++                                    >
 +                                        <FileBrowserPanel />
 +                                    </div>
 +                                ) : null}
 +                                {mobilePanels.notes ? (
-+                                    <div className="flex-1 min-h-0 relative">
++                                    <div
++                                        key="hs-pane-notes"
++                                        data-hs-pane="notes"
++                                        className="flex-1 min-h-0 relative"
++                                    >
 +                                        <NotebookPanel />
 +                                    </div>
 +                                ) : null}
@@ -97898,10 +97913,10 @@ index 176638e2..a9b2b8d9 100644
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..9dd5e075 100644
+index d42792c8..5cff5620 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
-@@ -1,471 +1,1242 @@
+@@ -1,471 +1,1335 @@
 -@tailwind base;
 -@tailwind components;
 -@tailwind utilities;
@@ -99237,12 +99252,29 @@ index d42792c8..9dd5e075 100644
 -    --qt-font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
 -    --default-font-family: var(--qt-font-family);
 -    font-family: var(--qt-font-family);
--}
++/* E9（用户口径）：「轨道+参数分屏下**开启同步位置与缩放**后应**隐藏参数界面左上角的速度映射键**」。
++   `body[data-hs-paramsync="on"]` 正是"分屏 + 同步开启"这个状态（App.tsx 里按
++   `paramEditorSyncTimeline && mobilePanels.params && mobilePanels.timeline` 设置）。
++   两颗速度映射键在同步态下功能一体、且并排容易误按 ⇒ 参数侧那颗隐藏。 */
++body[data-hs-paramsync="on"] [data-hs-params-tempo-map] {
++    display: none !important;
+ }
 -
 -:root[data-theme="dark"] {
 -    color-scheme: dark;
--}
--
++/* ── 手机端分屏的两块（C5/C6）───────────────────────────────────────────────
++   `flex-basis: 0` **必须走类、不能只写内联样式**：
++   实测（真机 221deeb，2026-09-30）内联的 `flexBasis` 会在 React 的 style diff 里被漏写
++   —— 下方块的 `style` 属性只剩 `flex-grow: 0.299`、**没有 flex-basis**
++   ⇒ 它的高度改由**内容**决定（文件浏览器 / 钢琴窗的 min-content）⇒ 轨道块被压到 0，
++   正是用户报的「调整分屏高度有明显问题」。
++   放进类里之后无论内联样式怎么被漏写，`flex-basis: 0` 都稳定生效。
++   （拖动时 `paintRatio()` 只改内联 `flex-grow`，两者互不覆盖。） */
++.hs-mobile-split-pane {
++    flex-basis: 0;
++    min-height: 0;
+ }
+ 
 -:root[data-theme="light"] {
 -    color-scheme: light;
 -}
@@ -99310,7 +99342,11 @@ index d42792c8..9dd5e075 100644
 -
 -/*
 - * Qt/DAW 风格滚动条（标准 CSS 滚动条属性）。
-- *
++/* ── E22 统一动效层（2026-09-30）─────────────────────────────────────────────
++ * 用户口径：「补充动画：弹出分屏动画、移动轨道动画、菜单展开动画、各种拖动操作的
++ * 平滑化/惯性化 等」，并明确「**统一做一套**」⇒ 这里给出**一套**变量 + 三条关键帧，
++ * 各表面只挑一条用，不再各写各的。
+  *
 - * 不用 ::-webkit-scrollbar 自绘：WebView2/Chromium 在分数设备缩放
 - * （Windows 125%/150%、浏览器缩放）下，作者自绘滚动条的滑块命中与
 - * 拖拽映射有缺陷 —— 实测拖拽滑块时内容滚动速度被放大约 dpr² 倍，滑块
@@ -99318,12 +99354,21 @@ index d42792c8..9dd5e075 100644
 - * 主题渲染，任意缩放下命中与拖拽映射都正确，也是各引擎的标准化方向
 - * （::-webkit-scrollbar 非标准且已废弃）。主题色经 scrollbar-color
 - * 保留；hover 变色与圆角自绘无法用标准属性表达，让位给交互正确性。
-- *
++ * 两条硬性约束（都是踩出来的）：
++ *  ① **含 `position: fixed` 后代的容器只能动 `opacity`**：任何 `transform` / `filter`
++ *     都会让该容器成为包含块，那些浮层会改成"相对容器"定位 —— 分屏块里有 fixed 浮层、
++ *     音频块浮条里就有一个 `position: fixed` 的实条（坐标是视口系的）⇒ 一动就飞。
++ *     所以：菜单可以 `translateY + scale`（内容只有普通项），面板/浮条只做淡入。
++ *  ② 必须尊重 `prefers-reduced-motion`，并留一个**全局开关** `body[data-hs-no-anim]`
++ *     —— 验收探针靠它做"有动画 / 无动画"的对照（也方便用户嫌晃眼时一键关掉）。
+  *
 - * 两个属性都是**继承**的（CSS Scrollbars L1）：挂在 `:root` 即可全局生效，
 - * 通配选择器只是保守起见保持显式（旧的全局 ::-webkit-scrollbar 语义）。
 - * 标准滚动条属性 Chromium 121+ 才支持；此前的 WebView2 会回退到无样式的
 - * 默认滚动条（可接受：Tauri WebView2 是常青更新）。
-- */
++ * 出场动画（面板收起、菜单关闭）暂不做：Radix 关闭即卸载内容、面板也是直接卸载，
++ * 要做就得引入 presence 状态机（保留挂载 + 等动画结束）。留作 E22 的下一刀。
+  */
 -* {
 -    scrollbar-width: thin;
 -    scrollbar-color: var(--qt-scrollbar-thumb, #555555) var(--qt-base, #303030);
@@ -99366,13 +99411,7 @@ index d42792c8..9dd5e075 100644
 -.rt-DialogOverlay {
 -    background: var(--qt-overlay) !important;
 -    backdrop-filter: blur(2px);
-+/* E9（用户口径）：「轨道+参数分屏下**开启同步位置与缩放**后应**隐藏参数界面左上角的速度映射键**」。
-+   `body[data-hs-paramsync="on"]` 正是"分屏 + 同步开启"这个状态（App.tsx 里按
-+   `paramEditorSyncTimeline && mobilePanels.params && mobilePanels.timeline` 设置）。
-+   两颗速度映射键在同步态下功能一体、且并排容易误按 ⇒ 参数侧那颗隐藏。 */
-+body[data-hs-paramsync="on"] [data-hs-params-tempo-map] {
-+    display: none !important;
- }
+-}
 -
 -/*
 - * 层级约定（高 → 低）：
@@ -99391,15 +99430,28 @@ index d42792c8..9dd5e075 100644
 -.rt-DialogOverlay,
 -.rt-DialogContent {
 -    z-index: 1000 !important;
--}
--
++:root {
++    --hs-anim-dur-menu: 150ms;
++    --hs-anim-dur-pane: 190ms;
++    --hs-anim-ease: cubic-bezier(0.22, 1, 0.36, 1);
+ }
+ 
 -.rt-DropdownMenuContent,
 -.rt-SelectContent,
 -.rt-ContextMenuContent,
 -.rt-PopoverContent {
 -    z-index: 1000 !important;
--}
--
++@keyframes hs-menu-in {
++    from {
++        opacity: 0;
++        transform: translateY(-4px) scale(0.98);
++    }
++    to {
++        opacity: 1;
++        transform: none;
++    }
+ }
+ 
 -.rt-DialogContent,
 -.rt-DropdownMenuContent,
 -.rt-SelectContent,
@@ -99410,8 +99462,15 @@ index d42792c8..9dd5e075 100644
 -    border: 1px solid var(--qt-border) !important;
 -    border-radius: 10px !important;
 -    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28) !important;
--}
--
++@keyframes hs-fade-in {
++    from {
++        opacity: 0;
++    }
++    to {
++        opacity: 1;
++    }
+ }
+ 
 -/* Ensure Radix controls follow custom font everywhere */
 -.rt-Theme,
 -.rt-BaseButton,
@@ -99419,11 +99478,18 @@ index d42792c8..9dd5e075 100644
 -.rt-TextFieldInput,
 -.rt-TextArea,
 -.rt-DialogContent,
--.rt-DropdownMenuContent,
++/* ① 菜单展开（关闭时会卸载内容 ⇒ 这里只做进场）。
++ * `[role="menu"]` 这一条是**关键**：手机端的菜单**不是** Radix 弹层，而是各组件
++ * 自己渲染的 `div[role=menu]`（`MobileTopBar` / `MobileBottomBar` / `ClipContextMenu` /
++ * `FadeContextMenu` …）—— 只写 `.rt-*` 的话，用户日常点的那几个菜单**一个都不会动**
++ * （实测：Radix 类命中 0 个、`[role=menu]` 命中 1 个）。
++ * 用 role 选择器而不是类名：类的 Tailwind 样式随时会变，role 是语义契约。 */
++[role="menu"],
+ .rt-DropdownMenuContent,
 -.rt-SelectContent,
 -.rt-SelectItem,
--.rt-ContextMenuContent,
--.rt-PopoverContent,
+ .rt-ContextMenuContent,
+ .rt-PopoverContent,
 -.rt-TooltipContent {
 -    font-family: var(--qt-font-family) !important;
 -}
@@ -99561,27 +99627,48 @@ index d42792c8..9dd5e075 100644
 -    border: none;
 -    border-radius: 50%;
 -    background: var(--accent-9);
--}
--
++.rt-SelectContent {
++    animation: hs-menu-in var(--hs-anim-dur-menu) var(--hs-anim-ease) both;
+ }
+ 
 -.rt-DropdownMenuItem,
 -.rt-SelectItem,
 -.rt-ContextMenuItem {
 -    border-radius: 7px !important;
--}
--
++/* ② 手机面板弹出（**只淡入**：块内有 fixed 浮层）。
++ * 挂在 `[data-hs-pane]` 而不是 `.hs-mobile-split-pane`：后者是**两个容器块**，
++ * 而用户感知的"面板"是里面的 timeline / params / files / notes 四块 ——
++ * 切页时容器不换、只有内容换。四块都给了 React `key`（见 App.tsx），
++ * 于是每次出现都是**新节点**，`animation` 才会重新跑。 */
++[data-hs-pane] {
++    animation: hs-fade-in var(--hs-anim-dur-pane) var(--hs-anim-ease) both;
+ }
+ 
 -.rt-DropdownMenuItem[data-highlighted],
 -.rt-SelectItem[data-highlighted],
 -.rt-ContextMenuItem[data-highlighted] {
 -    background: color-mix(in oklab, var(--qt-highlight) 24%, transparent) !important;
 -    color: var(--qt-text) !important;
--}
--
++/* ③ 音频块浮动操作条（根节点是 absolute、内含 fixed 实条 ⇒ 同样只淡入） */
++[data-hs-clip-actions] {
++    animation: hs-fade-in calc(var(--hs-anim-dur-pane) * 0.8) var(--hs-anim-ease) both;
+ }
+ 
 -.rt-DropdownMenuSeparator,
 -.rt-SelectSeparator,
 -.rt-ContextMenuSeparator {
 -    background: var(--qt-divider) !important;
--}
--
++/* 开关：探针对照 / 用户嫌晃眼 */
++body[data-hs-no-anim] [role="menu"],
++body[data-hs-no-anim] .rt-DropdownMenuContent,
++body[data-hs-no-anim] .rt-ContextMenuContent,
++body[data-hs-no-anim] .rt-PopoverContent,
++body[data-hs-no-anim] .rt-SelectContent,
++body[data-hs-no-anim] [data-hs-pane],
++body[data-hs-no-anim] [data-hs-clip-actions] {
++    animation: none !important;
+ }
+ 
 -/* Unified app tooltip (shared by gain knobs and all data-tooltip elements) */
 -.app-tooltip {
 -    position: fixed;
@@ -99600,17 +99687,16 @@ index d42792c8..9dd5e075 100644
 -       短文案不受影响（只在内容超过 320px 时才会用满更宽的气泡）。 */
 -    max-width: 400px;
 -    tab-size: 4;
-+/* ── 手机端分屏的两块（C5/C6）───────────────────────────────────────────────
-+   `flex-basis: 0` **必须走类、不能只写内联样式**：
-+   实测（真机 221deeb，2026-09-30）内联的 `flexBasis` 会在 React 的 style diff 里被漏写
-+   —— 下方块的 `style` 属性只剩 `flex-grow: 0.299`、**没有 flex-basis**
-+   ⇒ 它的高度改由**内容**决定（文件浏览器 / 钢琴窗的 min-content）⇒ 轨道块被压到 0，
-+   正是用户报的「调整分屏高度有明显问题」。
-+   放进类里之后无论内联样式怎么被漏写，`flex-basis: 0` 都稳定生效。
-+   （拖动时 `paintRatio()` 只改内联 `flex-grow`，两者互不覆盖。） */
-+.hs-mobile-split-pane {
-+    flex-basis: 0;
-+    min-height: 0;
++@media (prefers-reduced-motion: reduce) {
++    [role="menu"],
++    .rt-DropdownMenuContent,
++    .rt-ContextMenuContent,
++    .rt-PopoverContent,
++    .rt-SelectContent,
++    [data-hs-pane],
++    [data-hs-clip-actions] {
++        animation: none !important;
++    }
  }
 diff --git a/frontend/src/services/api/core.ts b/frontend/src/services/api/core.ts
 index cf451bd3..f8f4233b 100644
