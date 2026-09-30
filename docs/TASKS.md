@@ -2349,6 +2349,12 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 | E20 | **播放时单击拍数栏要先暂停再跳转**，否则会跳转回暂停处 | 病根：`stopAudioPlayback()` 是异步 thunk，其 fulfilled 会把引擎播放位置**回写** `playheadSec`，覆盖刚 seek 的落点（= 用户看到的"跳回暂停处"）。改为 **`.finally()` 等停止落地后再 seek**（双击路径不动，仍"跳过去并播放"）| ✅ **DONE**（真机 **2/2**：播放中单击拍数栏 ⇒ transport 变回「播放」= 已暂停；落点 `playhead=18.0s` vs 点击处 `17.81s`（差 0.19s）⇒ **没有**被回写回暂停点）|
 | E21 | **（覆盖旧口径）** 默认存储目录改到 `storage/emulated/0/HiFiShifter`（含录音、工程等）；**未授权时仍存在 android/data**；**菜单-选项 加一栏「存储设置」**：可设默认存储位置、查看并**跳转**三种授权的生效情况 | ✅ **后端全部完成并真机验证**：新增 `storage.rs`（统一入口 `resolve_storage_root`：用户设置 → 全盘访问时的 `/storage/emulated/0/HiFiShifter` → 回退私有目录），并接进**工程默认文件夹**（录音/自动备份随之落位）；三个命令 `storage_settings_state` / `set_storage_root` / `open_path_in_file_manager`。<br>真机 6/6：`effectiveRoot=/storage/emulated/0/HiFiShifter`（不再是 android/data）✓ · 三种授权状态齐全 ✓ · 自定义根可设可清（Download → 默认）✓ · 选项菜单里有「存储设置…」✓<br>⚠️ 与前一条同因：`StorageSettingsDialog` **打开即卡死** ⇒ 入口临时摘除 | 🟡 后端 DONE；UI 待修（卡死）|
 | E22 | **补充动画**：弹出分屏动画、移动轨道动画、菜单展开动画、各种拖动操作的平滑化/惯性化 等 | 🟡 **第一刀已完成（真机 221deeb + 模拟器，3/3）**：建了「**一套**」动效层（CSS 变量 + 2 条关键帧 + `body[data-hs-no-anim]` 开关 + `prefers-reduced-motion`），覆盖**菜单展开**（`[role=menu]` —— 手机菜单是自定义 `div[role=menu]`，**不是** Radix 弹层！）、**面板弹出**（`[data-hs-pane]` + React `key`）、音频块浮条淡入。<br>⬜ 待做：**移动轨道动画（FLIP）**、**出场动画**（面板收起/菜单关闭需 presence 状态机）、拖动收尾的平滑（视口已由 E18 覆盖）|
+| E24 | 音频块**浮条上的按钮全部点不动**（用户只注意到「…」：点击后打不开菜单）| ✅ **已修并验证（模拟器）**：真因＝B2 的"点别处收起"写在 `pointerdown` 的**捕获阶段**，对浮条**自己内部的按钮**也执行 ⇒ 浮条在 `click` 派发**之前**就被卸载 ⇒ `click` 没有 target ⇒ 7 个按钮（复制/剪切/粘贴/删除/分割/编辑/更多）**全都无效**。实测事件序列 `BAR-REMOVED → pointerdown → touchstart → touchend`（没有 click）。修法：捕获阶段只判"浮条以外"；E6 的"点选项后收起"挪进 `click`；另给 `ClipContextMenu` 加捕获阶段派发 `hs-hide-clip-actions`。验证后事件序列补齐 `… → pointerup → click`、`[role=menu]=1` |
+| E25 | **三屏及以上分屏无法分别调节每个窗口的高度** | 待做。现状：`mobileSplitRatio` 只描述"轨道块 vs 下方块"两段；≥3 块时需要推广成"每块一个比例 + 相邻分界各自可拖"，属 C5/C6 的扩展 |
+| E26 | 「存储设置」窗口**层级在参数界面之后**（被参数界面盖住）| 记录待做；用户口径「设计统一化（E23）之后应该会自动被修」⇒ 与 E23 一并处理（z-index / 面板统一容器）|
+| E10-③ | 剪贴板节拍（"剪贴板没有可粘贴的内容"闪现）| 🅿️ **暂挂**：用户 2026-09-30 反馈「近期没有遇见了」——不再排期，复现再加回 |
+| E7 | 轨道头菜单调整**辈分**后选中跳到第一个导入的音频 | ⏳ 用户 2026-09-30 说「可以按此前描述尝试复现」——待做（此前一直未能复现）|
+
 
 ## E 组执行顺序（我的建议）
 
@@ -3552,3 +3558,41 @@ E5 5/5 · E6 · G-1（右键菜单 17 项）· F2 3/3 · I-1/I-2/I-3 · I-4 三�
 **回归**：`_probe-mobile-split` **5/5**（模拟器；面板块加 key/属性没影响分屏行为）· `tsc -b` 0 错 ·
 补丁 regen+verify 逐字节一致 · `vitest` 159 文件 / 1082 用例（一次 5 条失败是
 `EPERM … rename D://Temp//…//ssr//…` 的 **Vite SSR 缓存抖动**，**单独跑那 5 条 5/5 通过**）。
+
+---
+
+## 🔬 E10-② 白屏：真凶查到 **WebGL context 泄漏**（2026-09-30，模拟器）
+
+**用户给的复现口径**：「拖动上工具栏反复切换『参数全屏 ⇄ 参数+轨道分屏』，10 次之内通常就能触发参数界面白屏」。
+按此写了 `scripts/_dbg-e10b-whitescreen.mjs`（每轮 = 拖手柄到参数全屏 → 桥接恢复分屏；同时读 DOM 健康度、
+**每个 canvas 的 `isContextLost()`**，并落 `logcat`）。
+
+### 决定性证据（修前，模拟器 8 轮）
+
+```
+logcat: WARNING: Too many active WebGL contexts. Oldest context will be lost.   ×4
+        WebGL: INVALID_OPERATION: useProgram: object does not belong to this context   ← 120 行同类
+        WebGL: INVALID_OPERATION: bindVertexArray / uniform2f / drawArraysInstanced: no valid shader program in use
+```
+
+⇒ **Chrome 每页只允许约 16 个活跃 WebGL context**。面板每次挂载都要给 3~5 张画布新建 context
+（钢琴窗 gl/axis/overlay 三张 + 时间线 1 张 + 波形/块渲染若干），而卸载时**从不释放**
+⇒ 反复切换把预算耗尽 ⇒ 浏览器**强制丢失最旧的那个** ⇒ 那块画布之后所有 GL 调用全部失败、
+**画不出任何东西 = 白屏**（用户看到的"参数界面白屏"就是它）。
+
+### 本轮改了什么（`releaseGlContext` + `restoreContext`）
+
+| 位置 | 改动 |
+| :--- | :--- |
+| `renderKernel/gl/glContext.ts` | 新增导出 `releaseGlContext(gl)`（`WEBGL_lose_context.loseContext()`）；`dispose()` 由"刻意不释放"改为**释放**；`createGlCanvas()` 里若拿到的 context 已被丢失（同一 canvas 复用 / StrictMode 双挂载）则调 `restoreContext()` 兜住 |
+| `timeline/runtime/timelineClipGlRenderer.ts` · `waveform/surfaceRenderer.ts` | `dispose()` 同样释放（各留一份 6 行本地实现，避免 `waveform/` 反向依赖 `components/`） |
+
+**修后实测（8 轮）**：`INVALID_OPERATION` 类报错 **120 行 → 0 行**（自愈路径生效，不再有"永久白屏"）；
+但 logcat 里仍有 6 次 "Too many active WebGL contexts" ⇒ **context 数量本身还是超**。
+
+### ⚠️ 尚未收口（下一轮第一件事）
+
+10 轮后页面出现过一次**整页空**（`#root` 有、子节点 0 —— React 整棵树被卸载；进程未崩、logcat 无 RenderProcessGone）
+⇒ 说明还有一个**未捕获异常**在反复切换中被打出来。下一步：
+1. 在页面里先装 `window.onerror` + `unhandledrejection` 记录器，再跑同一套循环 ⇒ 抓出那段错误栈；
+2. 从根上**减少每面板的 context 数**（或做 context 池化），别再撞 16 上限。

@@ -35082,10 +35082,10 @@ index 00000000..ccf42cee
 +    );
 +}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..c9091be2 100644
+index 242997f5..c4358571 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7173 @@
+@@ -1,6438 +1,7161 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -35678,1966 +35678,7 @@ index 242997f5..c9091be2 100644
 -    // 按住鼠标拖拽期间开始播放时，吸附竖线高亮必须立即消失，而不是冻结在原地
 -    // 直到松手才被手势结束逻辑清理。
 -    const timelineRuntimeIsPlaying = useAppSelector((state) => state.session.runtime.isPlaying);
-+/**
-+ * TimelinePanel — Timeline 面板 UI 组件（精简后）
-+ *
-+ * 所有业务逻辑已拆分至 4 个 hook：
-+ * - useTimelineState        → state / ref / viewport / scroll / 坐标转换
-+ * - useTimelineDragDrop     → Tauri 原生拖放 + 文件浏览器面板自定义拖拽
-+ * - useTimelineClipActions  → Clip 多选 + 操作回调
-+ * - useTimelineEventHandlers→ 全局事件监听
-+ *
-+ * 此文件只保留：JSX 渲染 + 胶水 + 拖拽 hooks 桥接
-+ *
-+ * 【播放头桥接】`TimelineTransportBridge` 逐帧写标尺播放头（React 声明式元素），
-+ * 并调用 `kernelHostRef.invalidatePlayhead()` 请求内核重绘**轨道区**播放头——
-+ * 后者只在宿主 `draw()` 内被写，而内核渲染循环是纯脏标记驱动的，镜像变化不会
-+ * 自动标脏（不请求就永不重绘）。
-+ *
-+ * 【渲染路径】轨道区**恒由** `TimelineKernelView`（WebGL2 渲染内核）承载。
-+ * 旧实现（原生滚动 + Canvas2D 的 `TimelineScrollArea` / `TimelineSurface` /
-+ * `TrackLane` / `ClipItem` 等）已随"唯一路径"改造删除，此处**没有运行期二选一、
-+ * 也没有可回退的第二条路径**。
-+ *
-+ * 【失败处理】WebGL2 不可用时内核视图回报失败（`handleKernelUnavailable`），本面板改
-+ * 渲染 `KernelUnavailableNotice` —— 一个可自助排障的界面（原因 + 排查清单 + 可复制的
-+ * 诊断信息）。实测 WebGL2 在纯 CPU 环境（含无 GPU）可用（ANGLE + SwiftShader），只有
-+ * 显式禁止软件光栅一类配置才会失败。
-+ *
-+ * 【历史背景（勿删）】内核曾是 opt-in 且默认值跟随 `import.meta.env.DEV`，导致打包后
-+ * **静默退回旧渲染器**（Phase 3 计划 R8）。结论是"绝不静默降级"：失败必须显式告知。
-+ *
-+ * @see docs/superpowers/specs/2026-09-13-timeline-single-path-design.md
-+ */
-+import React, { useMemo, Profiler } from "react";
-+import { Flex, Dialog, Button, Text } from "@radix-ui/themes";
-+import { useI18n } from "../../i18n/I18nProvider";
-+import { useAppTheme } from "../../theme/AppThemeProvider";
-+import { useAppSelector } from "../../app/hooks";
-+import { shallowEqual } from "react-redux";
-+import { isModifierActive } from "../../features/keybindings/keybindingsSlice";
-+import { resolveClipDragCopyMode } from "./timeline/hooks/clipDragCopyMode";
-+import { copyClipsFromDrag } from "./timeline/hooks/copyClipsFromDrag";
-+import {    createNewTrackForKernelDrop,
-+    createTrackIdsForDrop,
-+} from "./timeline/hooks/createNewTrackForDrop";
-+import { resolveKernelDropTarget } from "./timeline/hooks/kernelDropCommit";
-+import { normalizedTrackColorCss } from "./timeline/runtime/timelineCanvasStyle";
-+import {    defaultFadeDirFor,
-+    FADE_PRESETS,
-+    resolveCurvatureEditBase,
-+    resolveCurvePointer,
-+    solveNearestCurveDir,
-+} from "./timeline/reaperFade";
-+import {
-+    buildCrossfadeGripInfoContent,
-+    buildSingleFadeInfoContent,
-+    publishFadeRichTooltip,
-+    type FadeLabelLookup,
-+    type FadeLengthFormatContext,
-+} from "./timeline/fadeTooltipText";
-+import { effectiveFadeSec } from "./timeline/kernel/interaction/fadeTargets";
-+import type { ClipHitRegion } from "./timeline/kernel/interaction/hitTest";
-+import type { ClipHeaderControl } from "./timeline/kernel/interaction/clipHeaderControls";
-+import { planSeekGesture, type SeekGesturePhase } from "./timeline/kernel/interaction/seekGesture";
-+import { FadeContextMenuHost } from "./timeline/FadeContextMenuHost";
-+import {
-+    requestOpenFadeContextMenu,
-+    type FadeContextMenuRequest,
-+} from "./timeline/fadeContextMenuBus";
-+import { createPortal } from "react-dom";
-+import {
-+    addTrackRemote,
-+    closeClipFormantToolWindow,
-+    openClipFormantToolWindow,
-+    duplicateTrackRemote,
-+    removeTrackRemote,
-+    selectTrackRemote,
-+    setClipFormantToolWindowPosition,
-+    setTrackStateRemote,
-+    seekPlayhead,
-+    moveTrackRemote,
-+    setClipMuted,
-+    importAudioAtPosition,
-+    importAudioFileAtPosition,
-+    importMidiAsClip,
-+    replaceMidiClipDataRemote,
-+    importMultipleAudioAtPosition,
-+    setClipStateRemote,
-+    setClipsStateBulkRemote,
-+    setClipFades,
-+    setClipGain,
-+    setClipPlaybackRate,
-+    setClipActiveTakeRemote,
-+    glueClipsRemote,
-+    convertClipsToPitchReferenceRemote,
-+    updatePitchReferenceRemote,
-+    removeClipsRemote,
-+    closeTrackGapsRemote,
-+    persistUiSettings,
-+    setPrimaryTimeUnit,
-+    setSecondaryTimeUnit,
-+    setTempoMap,
-+    setTrackName,
-+    setTrackVolume,
-+    setPendingPlayheadReveal,
-+    setplayheadSec,
-+    moveClipStart,
-+    moveClipTrack,
-+    checkpointHistory,
-+    bumpParamsEpoch,
-+    setClipLength,
-+    setClipSourceRange,
-+    setClipSnapOffset,
-+    setClipAutoFades,
-+    selectClipRemote,
-+    beginInteraction,
-+    endInteraction,
-+    playOriginal,
-+    stopAudioPlayback,
-+    showMobilePanel,
-+} from "../../features/session/sessionSlice";
-+import { beginSnapGesture, endSnapGesture } from "../../utils/timelineSnapping";
-+import { batch } from "react-redux";
-+import { moveClipRemote, moveClipsRemote } from "../../features/session/thunks/timelineThunks";
-+import { computeTimelineRectSelection } from "./timeline/useTimelineSelectionRect";
-+import { setTempoMapRemote } from "../../features/session/thunks/tempoMapThunks";
-+
-+import { NEW_TRACK_SENTINEL } from "./timeline/hooks/useClipDrag";
-+import { getBulkEditableClipIds } from "./timeline/hooks/bulkClipEdit";
-+import { registerDragAbort } from "./timeline/gestureFocusGuard";
-+import { getInsertBelowTargetIndex } from "./timeline/trackContextMenuPlacement";
-+import { collectFadeContextClips } from "./timeline/clipFadeContext";
-+import { emitExternalFileAction } from "../../features/session/projectOpenEvents";
-+import { webApi } from "../../services/webviewApi";
-+import { useClipPitchDrag } from "./timeline/hooks/useClipPitchDrag";
-+import { AppTooltipBubble } from "../AppTooltip";
-+import { formatPitchDragCents } from "./timeline/clipPitchDrag";
-+import { coreApi } from "../../services/api/core";
-+import { paramsApi } from "../../services/api/params";
-+import { resolveRootTrackId } from "../../features/session/trackUtils";
-+import { SCALE_NOTES } from "../../utils/musicalScales";
-+import { QuickClipExportDialog } from "./QuickClipExportDialog";
-+import { SilenceDetectionDialog } from "./timeline/SilenceDetectionDialog";
-+import { MidiTrackSelectDialog } from "./MidiTrackSelectDialog";
-+
-+import {
-+    ClipContextMenu,
-+    TrackAreaContextMenu,
-+    TimeRuler,
-+    TrackList,
-+    detectExternalPathAction,
-+    extractLocalFilePath,
-+    formatCursorTime,
-+    hasFileDrag,
-+    isAcceptedDropFile,
-+    isAcceptedDropPath,
-+} from "./timeline";
-+import { timeRulerHeightPx } from "./timeline/rulerHeight";
-+import type { TimeFormatContext, TimeUnit, TimeUnitChoice } from "./timeline";
-+import { formatEditNumber, formatGainDbValue, gainToDb } from "./timeline/math";
-+import { requestResetFadeCurvature } from "./timeline/fadeContextMenuBus";
-+import { parsePlaybackRateInput } from "./timeline/runtime/timelineCanvasStyle";
-+import {
-+    SNAP_HIGHLIGHT_GROUP,
-+    buildLoopBoundaryHighlightEntry,
-+    clearSnapHighlights,
-+    publishSnapHighlights,
-+} from "../../utils/snapHighlight";
-+import {
-+    loopSnapThresholdSec,
-+    nearestBoundarySnapOffsetSec,
-+    slipBoundaryAlignedSides,
-+} from "../../utils/loopSnap";
-+import type { TempoMap } from "../../utils/tempoMap";
-+import { TimelineKernelView } from "./timeline/kernel/TimelineKernelView";
-+import { isKernelAvailable } from "./timeline/kernel/kernelAvailability";
-+import { KernelUnavailableNotice } from "./timeline/kernel/KernelUnavailableNotice";
-+import type { TimelineKernelHost } from "./timeline/kernel/host/timelineKernelHost";
-+/* E 组（触屏修饰键）：双指长按会点亮"虚拟 Alt"，使拖块走 slip。 */
-+import {
-+    setTouchModifiers,
-+    clearTouchModifiers,
-+} from "./timeline/kernel/host/timelineKernelHost";
-+
-+import type { ScaleLike } from "../../utils/musicalScales";
-+import { TimelineDisplaySettingsDialog } from "./TimelineDisplaySettingsDialog";
-+import { resolveTimelineScrollRange } from "./timeline/runtime/timelineScrollRange";
-+
-+// ── 拆分出的 hooks ──────────────────────────────────────────
-+import { useTimelineState } from "./timeline/hooks/useTimelineState";
-+import { useTimelineDragDrop } from "./timeline/hooks/useTimelineDragDrop";
-+import {
-+    createTimelineViewportAccess,
-+    type TimelineViewportAccess,
-+} from "./timeline/hooks/timelineViewportAccess";
-+import {
-+    applyKernelEditDelta,
-+    resolveKernelEditParticipants,
-+    type KernelEditParticipant,
-+} from "./timeline/hooks/kernelEditSet";
-+// 拖拽起手的陈旧选区收敛判定（纯函数，见该模块文件头）。
-+import { shouldCollapseStaleSelectionOnDrag } from "./timeline/kernel/interaction/primeSelection";
-+import {
-+    applyRippleFollowerShift,
-+    buildRippleFollowers,
-+    type RippleFollowerMap,
-+} from "../../features/session/ripplePreview";
-+import {
-+    applyAutoCrossfade,
-+    applyDetachedAutoCrossfadeClears,
-+    computeInitialCrossfadeSides,
-+    previewAutoCrossfade,
-+} from "./timeline/hooks/autoCrossfade";
-+import { computeEffectiveSnap } from "../../utils/timelineSnapping";
-+import { store } from "../../app/store";
-+import { applyBulkFadeValue, applyBulkGainDeltaDb } from "./timeline/hooks/bulkClipEdit";
-+import { advanceFineAxisDrag, type FineAxisDragState } from "./timeline/fineAxisDrag";
-+import { CLIP_GAIN_DRAG_DB_PER_PX } from "./timeline/constants";
-+import { isLegacyMouseEventFromStylus } from "../../utils/penInput";
-+import {
-+    buildStretchGroupState,
-+    computeClipStretch,
-+    computeRegionRightEdgeDelta,
-+    computeStretchGroupUpdate,
-+    scaleSnapOffsetForStretch,
-+    type StretchGroupState,
-+} from "./timeline/hooks/stretchGroup";
-+import {
-+    stretchLinkedParams,
-+    stretchTrackLinkedParams,
-+    type StretchRangeMapping,
-+} from "./timeline/hooks/stretchParams";
-+import { computeSlipWindow, readSlipClip, toBoundarySnapClip } from "./timeline/hooks/slipWindow";
-+import { IS_ANDROID } from "../../utils/platform";
-+import { TwoFingerGestureController, suppressTwoFingerScroll, type GestureViewport } from "./touchGesture";
-+import {
-+    computeCrossfadeGrip,
-+    type CrossfadeGripClipBase,
-+} from "./timeline/hooks/crossfadeGripWindow";
-+import { useTimelineClipActions } from "./timeline/hooks/useTimelineClipActions";
-+import { useTimelineEventHandlers } from "./timeline/hooks/useTimelineEventHandlers";
-+import { expandClipIdsWithGroups } from "./timeline/hooks/useGroupExpansion";
-+import { useVisualPlayhead } from "../../hooks/useVisualPlayhead";
-+import { useDebouncedPersist } from "../../hooks/useDebouncedPersist";
-+import { ClipRateEditorDialog } from "./timeline/ClipRateEditorDialog";
-+import {
-+    computeAutoFollowScrollLeft,
-+    computeFocusCursorScrollLeft,
-+} from "../../utils/autoFollowScroll";
-+import { readDevicePixelRatio, snapToDevicePx } from "../../utils/devicePixelLine";
-+import { resolveQuickExportClipIds } from "./timeline/quickExportSelection";
-+import { isMirrorEcho } from "./timeline/scrollEcho";
-+import {
-+    activeClipTakeName,
-+    clipDisplayName,
-+    type ClipFormantMorph,
-+} from "../../features/session/sessionTypes";
-+import { ClipFormantToolWindow } from "./timeline/clip/ClipFormantToolWindow";
-+import { dispatchClipEdgeLongPressHint } from "../mobile/ClipEdgeLongPressHint";
-+
-+const TimelineTransportBridge = React.memo(function TimelineTransportBridge(props: {
-+    pxPerSecRef: React.MutableRefObject<number>;
-+    rulerPlayheadLineRef: React.MutableRefObject<HTMLDivElement | null>;
-+    rulerPlayheadHeadRef: React.MutableRefObject<HTMLDivElement | null>;
-+    /**
-+     * 模式无关的视口访问器。
-+     *
-+     * 自动滚屏与播放头定位都需要「视口宽度 + 当前横向滚动量」，内核模式下这些
-+     * 量由 `ScrollKernel` 持有（DOM 容器的 scrollLeft 恒为 0），因此不能再直接读
-+     * 原生 scroller。
-+     */
-+    viewport: TimelineViewportAccess;
-+    /** 接收每帧视觉插值播放头（秒），供缩放锚点等命令式读取（与绘制同源）。 */
-+    visualPlayheadRef: React.MutableRefObject<number>;
-+    syncScrollLeft: (next: number) => void;
-+    autoScrollEnabled: boolean;
-+    projectSec: number;
-+    /** 请求时间轴内核重绘播放头（见 kernelHost.invalidatePlayhead 的说明）。 */
-+    requestPlayheadRepaint: () => void;
-+}) {
-+    const {
-+        pxPerSecRef,
-+        rulerPlayheadLineRef,
-+        rulerPlayheadHeadRef,
-+        viewport,
-+        visualPlayheadRef,
-+        syncScrollLeft,
-+        autoScrollEnabled,
-+        projectSec,
-+        requestPlayheadRepaint,
-+    } = props;
-+    const transport = useAppSelector(
-+        (state) => ({
-+            playheadSec: state.session.playheadSec,
-+            playheadSampledAtMs: state.session.playheadSampledAtMs,
-+            isPlaying: state.session.runtime.isPlaying,
-+            playbackWaitingForRender: state.session.runtime.playbackWaitingForRender,
-+            playbackPositionSec: state.session.runtime.playbackPositionSec,
-+        }),
-+        // 无 shallowEqual 时每次 dispatch 都产生新对象引用，
-+        // 该桥接组件会在任意 store 更新（含 33Hz 播放轮询）时重渲染。
-+        shallowEqual,
-+    );
-+
-+    // 原地等待渲染（位置冻结）期间不得推进视觉插值：否则 RAF 会以 1x 从
-+    // 冻结前锚点持续外推整个等待时长，恢复采样到达时光标大幅回跳
-+    // （往复跳动的根源）。positionSec 条件是等待标志缺省时的兼容兜底。
-+    const isTransportAdvancing =
-+        transport.isPlaying &&
-+        !transport.playbackWaitingForRender &&
-+        transport.playbackPositionSec > 1e-4;
-+
-+    useVisualPlayhead({
-+        syncedPlayheadSec: transport.playheadSec,
-+        syncedAtMs: transport.playheadSampledAtMs,
-+        isTransportAdvancing,
-+        onFrame: React.useCallback(
-+            (visualPlayheadSec: number) => {
-+                // 同步共享 ref：缩放锚点（以播放头为锚时的锚点解析）读取的必须是
-+                // 与绘制同源的插值播放头，否则播放中缩放会以滞后的 store 值锚定
-+                // 造成跳变。内核宿主也经 `playheadSec` getter 读同一份真值
-+                // （见 `timelineKernelHost.readPlayheadSec`）。
-+                visualPlayheadRef.current = visualPlayheadSec;
-+                const playheadLeftPx = visualPlayheadSec * pxPerSecRef.current;
-+
-+                // 自动滚动先行：syncScrollLeft 内部会用 Redux 同步播放头（滞后于
-+                // 视觉插值）重写播放头位置 —— 若先定位播放头再滚动，播放头每帧
-+                // 会在"视觉位置"与"同步位置"之间跳动（自动滚屏抽搐的根因）。
-+                // 滚动先行、播放头定位收尾，最终写入获胜。
-+                if (autoScrollEnabled && transport.isPlaying) {
-+                    const next = computeAutoFollowScrollLeft({
-+                        playheadSec: visualPlayheadSec,
-+                        pxPerSec: pxPerSecRef.current,
-+                        viewportWidth: viewport.getViewportWidth(),
-+                        contentWidth: projectSec * pxPerSecRef.current,
-+                    });
-+                    if (Math.abs(viewport.getScrollLeft() - next) > 0.5) {
-+                        // 写后回读实际生效值再广播：跟随滚动接近工程右端时请求值
-+                        // 可能被载体钳制，跟随视口的图层必须与真实视口同源。
-+                        syncScrollLeft(viewport.setScrollLeft(next));
-+                    }
-+                }
-+
-+                // 标尺播放头定位（在自动滚动之后，用最新的视觉插值位置）。
-+                // 写入前吸附到设备像素边界（readDevicePixelRatio 每帧现读，
-+                // 浏览器缩放/跨屏后下一帧自愈）：分数 DPR 下不吸附的落点相位
-+                // 随播放连续变化，1/2 物理像素交替 —— 即"播放时粗细不一"。
-+                // 轨道区播放头不在这里写：它由内核在 draw() 内自绘（见下方重绘请求）。
-+                const dpr = readDevicePixelRatio();
-+                if (rulerPlayheadLineRef.current) {
-+                    rulerPlayheadLineRef.current.style.left = `${snapToDevicePx(playheadLeftPx, dpr)}px`;
-+                }
-+                if (rulerPlayheadHeadRef.current) {
-+                    rulerPlayheadHeadRef.current.style.left = `${snapToDevicePx(playheadLeftPx, dpr)}px`;
-+                }
-+
-+                // 请求内核重绘轨道区播放头。
-+                //
-+                // 【为什么必须显式请求】内核的渲染循环是纯脏标记驱动的
-+                // （`renderKernel/renderLoop`：`start()` 不绘制、无常驻 rAF），而
-+                // 轨道区播放头元素**只在 `draw()` 内被写**。播放头位置经数据镜像
-+                // 流入内核，镜像变化本身不会标脏——不请求就永远不重绘：点标尺
-+                // seek 后标尺播放头（React 声明式）动了，网格上的播放头却冻结在
-+                // 旧位置（缺陷 #2 的根因）。自动滚屏开着时之所以看不到，是因为它
-+                // 每帧写 scrollLeft 触发滚动订阅顺带标脏；而它默认关闭。
-+                requestPlayheadRepaint();
-+            },
-+            [
-+                autoScrollEnabled,
-+                pxPerSecRef,
-+                rulerPlayheadHeadRef,
-+                rulerPlayheadLineRef,
-+                viewport,
-+                syncScrollLeft,
-+                transport.isPlaying,
-+                projectSec,
-+                visualPlayheadRef,
-+                requestPlayheadRepaint,
-+            ],
-+        ),
-+    });
-+
-+    return null;
-+});
-+
-+interface TimelinePanelProps {
-+    midiClipDialogOpen: boolean;
-+    midiClipPath: string | null;
-+    midiClipStartSec: number;
-+    midiClipTrackId: string | null;
-+    fillGaps: boolean;
-+    multiTrackMerge: boolean;
-+    importBpmAsProject: boolean;
-+    noteBpmMode: string;
-+    specifiedBpm: number;
-+    onMidiClipDialogOpenChange: (open: boolean) => void;
-+    onMidiClipPathChange: (path: string | null) => void;
-+    onMidiClipStartSecChange: (sec: number) => void;
-+    onMidiClipTrackIdChange: (trackId: string | null) => void;
-+    onFillGapsChange: (v: boolean) => void;
-+    onMultiTrackMergeChange: (v: boolean) => void;
-+    onImportBpmAsProjectChange: (v: boolean) => void;
-+    onNoteBpmModeChange: (v: string) => void;
-+    onSpecifiedBpmChange: (v: number) => void;
-+    midiClipClipboardGuid?: string | null;
-+    importPosition: string;
-+    onImportPositionChange: (position: string) => void;
-+    closeLeadingGap: boolean;
-+    onCloseLeadingGapChange: (v: boolean) => void;
-+    midiDialogSource: "menu" | "dragDrop";
-+    onMidiDialogSourceChange: (v: "menu" | "dragDrop") => void;
-+    importTargetMenu?: string;
-+    onImportTargetMenuChange?: (v: string) => void;
-+    importTargetDragDrop?: string;
-+    onImportTargetDragDropChange?: (v: string) => void;
-+    importTempoMapEnabled?: boolean;
-+    onImportTempoMapEnabledChange?: (v: boolean) => void;
-+    importTempoMapTempo?: boolean;
-+    onImportTempoMapTempoChange?: (v: boolean) => void;
-+    importTempoMapTimeSignature?: boolean;
-+    onImportTempoMapTimeSignatureChange?: (v: boolean) => void;
-+    importTempoMapKeySignature?: boolean;
-+    onImportTempoMapKeySignatureChange?: (v: boolean) => void;
-+}
-+
-+export const TimelinePanel: React.FC<TimelinePanelProps> = ({
-+    midiClipDialogOpen,
-+    midiClipPath,
-+    midiClipStartSec,
-+    midiClipTrackId,
-+    fillGaps,
-+    multiTrackMerge,
-+    importBpmAsProject,
-+    noteBpmMode,
-+    specifiedBpm,
-+    onMidiClipDialogOpenChange,
-+    onMidiClipPathChange,
-+    onMidiClipStartSecChange,
-+    onMidiClipTrackIdChange,
-+    onFillGapsChange,
-+    onMultiTrackMergeChange,
-+    onImportBpmAsProjectChange,
-+    onNoteBpmModeChange,
-+    onSpecifiedBpmChange,
-+    midiClipClipboardGuid,
-+    importPosition,
-+    onImportPositionChange,
-+    closeLeadingGap,
-+    onCloseLeadingGapChange,
-+    midiDialogSource,
-+    onMidiDialogSourceChange,
-+    importTargetMenu,
-+    onImportTargetMenuChange,
-+    importTargetDragDrop,
-+    onImportTargetDragDropChange,
-+    importTempoMapEnabled,
-+    onImportTempoMapEnabledChange,
-+    importTempoMapTempo,
-+    onImportTempoMapTempoChange,
-+    importTempoMapTimeSignature,
-+    onImportTempoMapTimeSignatureChange,
-+    importTempoMapKeySignature,
-+    onImportTempoMapKeySignatureChange,
-+}) => {
-+    const importTarget = midiDialogSource === "dragDrop" ? importTargetDragDrop : importTargetMenu;
-+    const onImportTargetChange =
-+        midiDialogSource === "dragDrop" ? onImportTargetDragDropChange : onImportTargetMenuChange;
-+    const { t } = useI18n();
-+    const tAny = t as (key: string) => string;
-+    const ignoreGrouping = useAppSelector((state) => state.session.ignoreGrouping);
-+    const disabledGroupIds = useAppSelector((state) => state.session.disabledGroupIds);
-+    /**
-+     * 静音检测预览区段（内核模式用）。
-+     *
-+     * 由静音检测对话框实时写入；内核把它画成半透明红色覆盖层。`TimelineSessionSlice`
-+     * 不含该字段，因此在这里单独选择（与旧实现 `ClipItem` 的取值方式一致）。
-+     */
-+    const silencePreviewSegments = useAppSelector((state) => state.session.silencePreviewSegments);
-+    // 时间轴 scroller 水平滚动条的占用高度（offsetHeight - clientHeight）。
-+    // 轨道头底部按此留出同高占位（bottomGutterHeightPx），保证轨道头与
-+    // 时间轴区域的竖直滚动范围严格一致。
-+    const [horizontalScrollbarGutterPx, setHorizontalScrollbarGutterPx] = React.useState(0);
-+    // 【已删除：timelineViewportHeightPx】它只为旧实现的 `TimelineSurface` 的
-+    // `playheadHeightPx` 供数（把播放光标延伸到时间轴可视区底部）。内核路径的
-+    // 播放头是内核容器（视口元素）的直接子节点、恒 `top-0 bottom-0`，高度天然
-+    // 等于可视区高度，无需测量——留着这个 state 只会是永不读取的死状态。
-+    const [quickExportDialog, setQuickExportDialog] = React.useState<{
-+        open: boolean;
-+        clipIds: string[];
-+    }>({ open: false, clipIds: [] });
-+    const [silenceDialogIds, setSilenceDialogIds] = React.useState<string[] | null>(null);
-+
-+    const [replaceMidiDialog, setReplaceMidiDialog] = React.useState<{
-+        open: boolean;
-+        clipId: string | null;
-+        midiPath: string | null;
-+    }>({ open: false, clipId: null, midiPath: null });
-+    const [timeDisplaySettingsOpen, setTimeDisplaySettingsOpen] = React.useState(false);
-+
-+    // 文件浏览器拖入 HiFiShifter 工程（hshp/hsp）时的「打开工程 / 导入工程」菜单。
-+    const [projectActionMenu, setProjectActionMenu] = React.useState<{
-+        x: number;
-+        y: number;
-+        path: string;
-+    } | null>(null);
-+
-+    // ── 1. State / refs / viewport / scroll / 坐标转换 ──────
-+    /**
-+     * 内核宿主句柄（仅内核模式下非空）。
-+     *
-+     * 用途：把「轨道头滚动」这类外部意图转发给内核（`setScrollTop`），以及让
-+     * 标尺点击 seek / 拖入落点 / 参数编辑器同步等需要「当前视口」的逻辑在两种
-+     * 模式下共用一份取值。
-+     *
-+     * 特殊说明：必须在 `useTimelineState()` **之前**声明——该 hook 需要它来
-+     * 落地「参数编辑器视图同步」（内核模式没有原生 scroller 可写）。
-+     */
-+    const kernelHostRef = React.useRef<TimelineKernelHost | null>(null);
-+
-+    /**
-+     * 内核运行期失败的原因（`null` = 未失败）。
-+     *
-+     * 【为什么需要】WebGL2 不可用（老驱动 / 远程桌面 / GPU 黑名单 / 上下文数超限）
-+     * 是预期内的环境差异。内核是**唯一**渲染路径，没有回退可走，因此必须让用户能
-+     * 自助排障——失败界面（`KernelUnavailableNotice`）要展示具体原因。
-+     *
-+     * 【为什么用 state 而不是 ref】它决定渲染内核还是失败界面，必须触发重渲染。
-+     *
-+     * 【为什么置位后不再尝试】失败原因（无 GL）在会话内不会自愈，而每次重渲染都重挂
-+     * 一次内核会反复失败并刷日志。要恢复只需刷新页面。
-+     */
-+    const [kernelUnavailableReason, setKernelUnavailableReason] = React.useState<string | null>(
-+        null,
-+    );
-+
-+    /**
-+     * `TimelineKernelView` 回报内核不可用：记录原因并告警。
-+     *
-+     * 流程：记录原因（触发重渲染，切到失败界面）→ 控制台告警（带原因，供诊断）。
-+     *
-+     * 特殊说明 1：**没有回退**。旧实现（原生滚动 + Canvas2D）已随阶段 2/3 删除，
-+     * 因此这里不会、也无法切回任何第二套渲染实现；唯一出路是失败界面 + 重启。
-+     *
-+     * 特殊说明 2：用 `useCallback` 保持引用稳定——它经 props 传给内核视图，而视图把
-+     * 它放进「回调镜像」ref；引用抖动虽不会重建宿主，但稳定引用更省心。
-+     *
-+     * @param reason 失败原因（来自内核创建的 catch）。
-+     */
-+    const handleKernelUnavailable = React.useCallback((reason: string) => {
-+        console.warn(`[TimelinePanel] 时间轴内核不可用（${reason}），当前没有回退渲染路径`);
-+        setKernelUnavailableReason(reason);
-+    }, []);
-+
-+    /**
-+     * 「clip 左键按下拦截」句柄（内核在启动自己的手势之前调用）。
-+     *
-+     * 【为什么用 ref 中转】拦截需要复用旧实现的 `useClipPitchDrag`（它在面板里
-+     * 于渲染流程的**后段**才实例化），而内核交互对象在**前段**构建。用 ref 中转
-+     * 既避免把 hook 调用提前（改动面大），也不产生 TDZ。
-+     *
-+     * @returns true = 面板已接管，内核不得再启动自己的手势。
-+     */
-+    const kernelClipInterceptRef = React.useRef<
-+        | ((args: {
-+              clipId: string;
-+              clientX: number;
-+              clientY: number;
-+              pointerId: number;
-+              modifiers: { ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean };
-+              container: HTMLElement;
-+          }) => boolean)
-+        | null
-+    >(null);
-+    const state = useTimelineState({ kernelHostRef });
-+    // 视觉插值播放头的共享读取点：bridge 的 onFrame 每帧写入（与绘制同源），
-+    // 缩放锚点与内核宿主（经 `playheadSec` getter）读取同一值——播放中缩放不得
-+    // 以 33Hz 轮询的 store 滞后值锚定，否则播放头会跳变 δ·Δpx（δ = 轮询间隔内的
-+    // 插值领先量）。
-+    const visualPlayheadSecRef = React.useRef(0);
-+    const getVisualPlayheadSec = React.useCallback(() => visualPlayheadSecRef.current, []);
-+    /**
-+     * 请求时间轴内核重绘播放头。
-+     *
-+     * 【为什么走 hostRef 而不是 React state】播放头每帧都可能移动，走 React 会
-+     * 把 60fps 的更新灌进渲染；这里只做一次命令式标脏。
-+     *
-+     * 特殊说明：**不是** `invalidateScene()`——那个会置 `sceneDirty` 并在下一帧
-+     * 重建全部 GPU 几何，播放中每帧重建等于自毁性能（见宿主接口说明）。
-+     */
-+    const handleRequestPlayheadRepaint = React.useCallback(() => {
-+        kernelHostRef.current?.invalidatePlayhead();
-+    }, []);
-+    // 面板卸载时清空吸附竖线高亮（拖拽手势异常中断的兜底）。
-+    React.useEffect(() => {
-+        return () => {
-+            clearSnapHighlights();
-+        };
-+    }, []);
-+
-+    // 安卓触控手势层：双指缩放/平移 → 内核视口（仅 Android；桌面零改动，ADR-005 / docs/08）。
-+    // 宿主子组件（TimelineKernelView）的 effect 先于本面板 effect 运行，故此处 kernelHostRef
-+    // 已就绪；为稳妥仍做一次 rAF 重试兜底。
-+    // 拍数栏触摸 seek 的落点函数（由 `setPlayheadFromClientX` 填，见下方那个 effect）。
-+    const rulerSeekRef = React.useRef<
-+        ((clientX: number, bounds: DOMRect, scrollLeft: number, commit: boolean) => void) | null
-+    >(null);
-+    React.useEffect(() => {
-+        if (!IS_ANDROID) return;
-+        const dbg = window as unknown as { __hsViewport?: () => unknown };
-+        let raf = 0;
-+        const tryAttach = () => {
-+            const host = kernelHostRef.current;
-+            if (host === null) {
-+                raf = requestAnimationFrame(tryAttach);
-+                return;
-+            }
-+            const container = host.getContainer();
-+            const viewport: GestureViewport = {
-+                get() {
-+                    const v = host.getViewport();
-+                    return {
-+                        scrollLeft: v.scrollLeft,
-+                        scrollTop: v.scrollTop,
-+                        pxPerSec: v.pxPerSec,
-+                        rowHeight: host.getRowHeight(),
-+                    };
-+                },
-+                getPxPerSecBounds() {
-+                    return host.getPxPerSecBounds();
-+                },
-+                getRowHeightBounds() {
-+                    return host.getRowHeightBounds();
-+                },
-+                setHorizontal(pxPerSec, scrollLeft) {
-+                    host.setViewport({ pxPerSec, scrollLeft });
-+                },
-+                setVertical(rowHeight, scrollTop) {
-+                    host.setRowHeightAndScrollTop(rowHeight, scrollTop);
-+                },
-+                reclamp() {
-+                    host.reclamp();
-+                },
-+            };
-+            const controller = new TwoFingerGestureController(container, viewport, {
-+                deadZonePx: 16,
-+                axisLockPx: 24,
-+                cooldownMs: 150,
-+            });
-+            controller.attach();
-+            // 轴向受限表面（用户口径）：
-+            //   · 拍数栏 → 只能横向（缩放 pxPerSec / 平移时间轴）
-+            //   · 轨道列 → 只能纵向（缩放 rowHeight / 平移轨道）
-+            // 这两块是**窄条**，另一轴在其上既没有对应内容也没意义；不挂的话
-+            // 它们连"双指会话"都进不去（此前只挂了滚动容器）⇒ 用户实测
-+            // 「拍数栏无法横向缩放、轨道列无法纵向缩放」。
-+            // 挂点与参数面板同一约定：拍数栏挂**整行根节点**（内容层 `absolute
-+            // inset-0` 之外还有 tempo 标签等兄弟浮层，挂内容层会收不到事件）。
-+            /**
-+             * 拍数栏「点一下就移动播放红线」（用户口径）。
-+             *
-+             * 既有的 seek 走 `TimeRuler` 的 `onMouseDown`，而它第一行就是
-+             * `if (isLegacyMouseEventFromStylus()) return;` —— 该函数对 **touch 也返回 true**
-+             * （见 `utils/penInput.ts`），所以手机上点/拖拍数栏**完全没有反应**。
-+             * 这里补一条**指针事件**路径：
-+             *   · 单指按下即定位（commit）；拖动期间预览，抬手再提交一次；
-+             *   · 鼠标不接管（仍走原路径，桌面语义不变）；
-+             *   · 第二指落下（双指缩放/平移）时立刻让位，不抢事件。
-+             */
-+            const bindRulerTouchSeek = (el: HTMLElement): (() => void) => {
-+                const gestureActive = (): boolean =>
-+                    Boolean((window as unknown as { __hsGestureActive?: boolean }).__hsGestureActive);
-+                let activeId: number | null = null;
-+                /**
-+                 * 🔴 2026-09-22 用户报「轨道界面的单指拖拍数栏平移位置没了」。
-+                 *
-+                 * 原实现**按下即 seek、拖动全程 seek**（`onDown` 就 commit 一次，`onMove`
-+                 * 继续 commit）—— 于是单指在拍数栏上一划，动作全被"拖播放红线"吃掉了，
-+                 * 视口平移根本没机会发生。
-+                 *
-+                 * 用户口径是**按意图分派**：
-+                 *   · 点一下（没超过阈值）→ 拖时间线（seek）
-+                 *   · 横向划动（超过阈值）→ 平移视口（scrollLeft）
-+                 * 所以这里改成"**先不决定，等位移说话**"：抬手时仍没超过阈值才算点击。
-+                 * 阈值取 8px（比手势层的 16px 死区小，拍数栏上"点"的手感更接近原版；
-+                 * 又不能是 0，否则手指的微小抖动会把点击误判成划动）。
-+                 */
-+                const PAN_THRESHOLD = 8;
-+                let mode: "undecided" | "pan" = "undecided";
-+                let startX = 0;
-+                let startScrollLeft = 0;
-+                /* 自实现的双击判定（拍数栏「双击 = 移动进度条并开始播放」）：
-+                   320ms 与 40px 是 Android 系统的典型双击间隔/容差量级。 */
-+                const DBL_TAP_MS = 320;
-+                const DBL_TAP_SLOP = 40;
-+                let lastTapAt = 0;
-+                let lastTapX = 0;
-+                const seekAt = (clientX: number, commit: boolean): void => {
-+                    const fn = rulerSeekRef.current;
-+                    const host = kernelHostRef.current;
-+                    if (!fn || !host) return;
-+                    fn(clientX, el.getBoundingClientRect(), host.getViewport().scrollLeft, commit);
-+                };
-+                const onDown = (e: PointerEvent) => {
-+                    // 只认单指；鼠标/笔走既有路径。
-+                    if (e.pointerType === "mouse") return;
-+                    if (!e.isPrimary || activeId !== null || gestureActive()) return;
-+                    activeId = e.pointerId;
-+                    mode = "undecided";
-+                    startX = e.clientX;
-+                    startScrollLeft = kernelHostRef.current?.getViewport().scrollLeft ?? 0;
-+                    try {
-+                        el.setPointerCapture(e.pointerId);
-+                    } catch {
-+                        /* capture 可能失败，忽略即可 */
-+                    }
-+                    // 吃掉这次触摸的兼容鼠标事件，避免与 onMouseDown 路径重复提交。
-+                    // 注意这里**不再 seek** —— 见上面「按意图分派」。
-+                    e.preventDefault();
-+                };
-+                const onMove = (e: PointerEvent) => {
-+                    if (e.pointerId !== activeId) return;
-+                    if (gestureActive()) {
-+                        // 第二指落下 → 整段让给控制器。
-+                        activeId = null;
-+                        mode = "undecided";
-+                        return;
-+                    }
-+                    const dx = e.clientX - startX;
-+                    if (mode === "undecided") {
-+                        if (Math.abs(dx) < PAN_THRESHOLD) return; // 还没判定，先什么都不做
-+                        mode = "pan";
-+                    }
-+                    e.preventDefault();
-+                    // 平移量 = 手指位移的反向（内容跟着手指走），钳制交给 ScrollKernel。
-+                    kernelHostRef.current?.setScrollLeft(startScrollLeft - dx);
-+                };
-+                const onUp = (e: PointerEvent) => {
-+                    if (e.pointerId !== activeId) return;
-+                    activeId = null;
-+                    if (mode === "undecided") {
-+                        /* 规格（docs/15 拍数栏-双击）：**移动进度条并开始播放**。
-+                           ⚠️ 不能只靠 `dblclick` —— 那是**浏览器原生手势识别**的产物，
-+                           而这条触摸路径是自己收 pointer 事件的；真机上双击间隔稍长
-+                           就退化成两次单击（= 只 seek、不起播）。
-+                           ⇒ 自己按「两次轻点 + 时间/位移阈值」判定双击，不依赖浏览器。 */
-+                        const now = performance.now();
-+                        const isDoubleTap =
-+                            now - lastTapAt < DBL_TAP_MS && Math.abs(e.clientX - lastTapX) < DBL_TAP_SLOP;
-+                        lastTapAt = now;
-+                        lastTapX = e.clientX;
-+                        if (isDoubleTap) {
-+                            lastTapAt = 0; // 避免三击被当成第二次双击
-+                            seekAt(e.clientX, true);
-+                            if (!store.getState().session.runtime.isPlaying) {
-+                                void dispatch(playOriginal());
-+                            }
-+                            mode = "undecided";
-+                            return;
-+                        }
-+                        // 没超过阈值 = 单击 ⇒ 拖时间线。
-+                        /* #32 / E20：**播放中单击拍数栏：先暂停、再跳转**。
-+                           用户口径（E20）：「播放时单击拍数栏**先暂停后跳转**，否则会跳转回暂停处」。
-+                           ⚠️ 关键在**顺序要等落地**：`stopAudioPlayback()` 是异步 thunk，
-+                           它的 fulfilled reducer 会把引擎的播放位置写回 `playheadSec` ——
-+                           如果先 seek 再去停，那一拍的回写就把刚设好的位置**覆盖**回暂停处
-+                           （用户看到的正是"跳转回暂停处"）。⇒ 用 `.finally()` 等停止完成后再 seek。
-+                           双击路径不在此列：双击要"跳过去并开始播放"，不能被停掉。 */
-+                        const doSeek = () => seekAt(e.clientX, true);
-+                        if (store.getState().session.runtime.isPlaying) {
-+                            void dispatch(stopAudioPlayback()).finally(doSeek);
-+                        } else {
-+                            doSeek();
-+                        }
-+                    }
-+                    mode = "undecided";
-+                };
-+                const onCancel = (e: PointerEvent) => {
-+                    if (e.pointerId !== activeId) return;
-+                    activeId = null;
-+                    mode = "undecided";
-+                };
-+                el.addEventListener("pointerdown", onDown);
-+                el.addEventListener("pointermove", onMove);
-+                el.addEventListener("pointerup", onUp);
-+                el.addEventListener("pointercancel", onCancel);
-+                return () => {
-+                    el.removeEventListener("pointerdown", onDown);
-+                    el.removeEventListener("pointermove", onMove);
-+                    el.removeEventListener("pointerup", onUp);
-+                    el.removeEventListener("pointercancel", onCancel);
-+                };
-+            };
-+            const offs: Array<() => void> = [];
-+            const attachAxisSurfaces = (): boolean => {
-+                const rulerContent = rulerContentRef.current;
-+                const rulerEl = rulerContent?.parentElement ?? rulerContent;
-+                const trackListEl = trackListScrollRef.current;
-+                if (!rulerEl || !trackListEl) return false;
-+                // 拍数栏自己不滚动（内容靠内核 transform 驱动）⇒ 直接禁掉浏览器手势，
-+                // 双指缩放/平移才能稳定收到事件。它同时承担「点一下移动播放红线」，
-+                // 那条路径是 pointer 事件 + preventDefault，不受影响。
-+                rulerEl.style.touchAction = "none";
-+                offs.push(controller.attachSurface(rulerEl, "x"));
-+                // 轨道列**本身是原生竖向滚动容器**：不能设 touch-action:none（会丢掉
-+                // 「单指滚轨道」）。改为只压制双指的默认行为，单指滚动照旧。
-+                offs.push(controller.attachSurface(trackListEl, "y"));
-+                offs.push(suppressTwoFingerScroll(trackListEl));
-+                offs.push(bindRulerTouchSeek(rulerEl));
-+
-+                /* E 组：拍数栏**双击 = 移动进度条并开始播放**（与参数编辑器同一口径）。
-+                   单击的 seek 由 `bindRulerTouchSeek` 负责，这里只补起播 ——
-+                   且**仅在未播放时**，免得双击把正在播放的曲子停掉。 */
-+                const onRulerDblClick = () => {
-+                    const st = store.getState().session;
-+                    if (!st.runtime.isPlaying) void dispatch(playOriginal());
-+                };
-+                rulerEl.addEventListener("dblclick", onRulerDblClick);
-+                offs.push(() => rulerEl.removeEventListener("dblclick", onRulerDblClick));
-+
-+                /* E 组（轨道列）：**双击轨道 = 展开编辑区**（手机语义）。
-+                   内核的双击分支全都依赖 `hit.clip`（名称区/旋钮/徽标/块），
-+                   **空白处双击没有落点** ⇒ 这里在容器级补一次。
-+                   与音频块那条同一出口，所以"双击块"与"双击轨道"在手机上结果一致
-+                   （规格表这两列都写「展开全屏编辑」）。 */
-+                const timelineContainer = host.getContainer();
-+                const onTrackDblClickPhone = () => {
-+                    if (window.innerWidth >= 600) return; // 只手机
-+                    dispatch(showMobilePanel("params"));
-+                };
-+                if (timelineContainer) {
-+                    timelineContainer.addEventListener("dblclick", onTrackDblClickPhone);
-+                    offs.push(() =>
-+                        timelineContainer.removeEventListener("dblclick", onTrackDblClickPhone),
-+                    );
-+                }
-+
-+                /* E 组（轨道列）：**双指单击 = 单击非选中轨道**。
-+                   ⚠️ 不改 `touchGesture.ts`（那是双指缩放/平移的核心状态机，
-+                   且被多个表面共用）⇒ 这里用**独立监听**：两指同时按下、
-+                   都没怎么动、且总时长短 ⇒ 判定为双指 tap，按坐标切轨道。 */
-+                if (timelineContainer) {
-+                    const TAP_MS = 300;
-+                    const TAP_SLOP = 12;
-+                    let tapIds: number[] = [];
-+                    const tapStart = new Map<number, { x: number; y: number }>();
-+                    /** 各指针的**最新**位置。slip 要按位移量算，必须用最新位置算两指中点
-+                        （`tapStart` 是按下位置，拿来算位移会恒为 0）。 */
-+                    const tapLast = new Map<number, { x: number; y: number }>();
-+                    let tapAt = 0;
-+                    let tapFired = false;
-+                    /* E 组（最后一格）：**双指长按并划动 = slip（调整音频相对块位置）**。
-+                       触屏没有 Alt，而内核的 slip/copy/免吸附全靠修饰键
-+                       （`dragModifiersOf`）⇒ 这里在两指按住满 500ms 时
-+                       点亮"虚拟 Alt"，抬手清掉。 */
-+                    let twoTimer: number | null = null;
-+                    /* #41：**双指拖动 vs 双指长按**互斥 —— 手指一动就不算长按。
-+                       否则"双指缩放"会在 0.5s 后悄悄点亮 Alt，把后续拖动变成 slip，
-+                       用户看到的就是"缩放/平移和 slip 混在一起"。 */
-+                    let twoMoved = false;
-+                    /* A3：本轮双指交互里"Alt 是否已经点亮过"。
-+                       点亮之后**不再撤销**——见 `onTwoMove` 的说明。 */
-+                    let altLit = false;
-+                    /* ── A3：双指长按并划动 = slip 的会话 ────────────────────────────
-+                       桥到面板既有的 slip 通道（`hifi:slipPreview` / `hifi:slipCommit`
-+                       → `handleKernelDragPreview` / `handleKernelDragCommit`）。
-+
-+                       🔴 为什么**不**借内核那份拖拽手势（三条都实测过）：
-+                        ① 第二指落下时内核的手势已被收掉：`TwoFingerGestureController`
-+                           在 1→2 指过渡里对第一指派发 window 级 `pointercancel`/`pointerup`
-+                           （`abortPointer`，docs/08 §4.1 的设计），而内核的收尾监听恰在
-+                           window 上 ⇒ 500ms 长按到点时内核早已没有活动手势，此后移动
-+                           不产生任何手势（实测：合成 `altKey:true` 的单指拖拽**能** slip
-+                           ⇒ 内核 slip 通道本身没问题，缺的是"起手时机"）；
-+                        ② 即便重新武装，内核的 move 分派**不按 pointerId 过滤**（一份
-+                           `gesture` 消费所有指针的 move）⇒ 两指各自的 move 轮流驱动同一份
-+                           位移，读值在两指位置之间跳，跳幅恒等于两指间距。
-+                       ⇒ 位移取**两指中点**（与捏合缩放同一锚点），既不抖也无间距偏移。 */
-+                    let slipClipId: string | null = null;
-+                    let slipTrackId = "";
-+                    let slipMidX0 = 0;
-+                    let slipSec = 0;
-+                    let slipPreviewed = false;
-+                    const clearTwoTimer = () => {
-+                        if (twoTimer !== null) {
-+                            window.clearTimeout(twoTimer);
-+                            twoTimer = null;
-+                        }
-+                    };
-+                    /** 两指中点的 x（按各指针**最新**位置；还没动过则退回按下位置）。 */
-+                    const twoMidX = (): number => {
-+                        const xs: number[] = [];
-+                        for (const id of tapIds) {
-+                            const p = tapLast.get(id) ?? tapStart.get(id);
-+                            if (p) xs.push(p.x);
-+                        }
-+                        if (xs.length === 0) return 0;
-+                        return xs.reduce((sum, x) => sum + x, 0) / xs.length;
-+                    };
-+                    /** 长按到点：记住"哪一块要被 slip"（命中用内核自己的 hitTest，不另写一套）。 */
-+                    const beginSlip = () => {
-+                        const p0 = tapStart.get(tapIds[0]);
-+                        const host = kernelHostRef.current;
-+                        if (p0 === undefined || host === null) return;
-+                        const hit = host.debugHitAt(p0.x, p0.y);
-+                        if (hit.kind !== "clip" || !hit.clipId) return;
-+                        slipClipId = hit.clipId;
-+                        slipTrackId =
-+                            sessionRef.current.clips.find((entry) => entry.id === hit.clipId)
-+                                ?.trackId ?? "";
-+                        slipMidX0 = twoMidX();
-+                        slipSec = 0;
-+                        slipPreviewed = false;
-+                    };
-+                    const stepSlip = () => {
-+                        if (slipClipId === null) return;
-+                        const host = kernelHostRef.current;
-+                        if (host === null) return;
-+                        const pxPerSec = host.getViewport().pxPerSec;
-+                        if (!(pxPerSec > 0)) return;
-+                        const deltaSec = (twoMidX() - slipMidX0) / pxPerSec;
-+                        // 去重：面板每次预览都写 Redux，而不去重时指针静止也会持续重建几何。
-+                        if (Math.abs(deltaSec - slipSec) < 1e-4) return;
-+                        slipSec = deltaSec;
-+                        slipPreviewed = true;
-+                        window.dispatchEvent(
-+                            new CustomEvent("hifi:slipPreview", {
-+                                detail: {
-+                                    clipId: slipClipId,
-+                                    deltaSec,
-+                                    targetTrackId: slipTrackId,
-+                                },
-+                            }),
-+                        );
-+                    };
-+                    /** 收尾：**只有真产生过位移才提交**（否则面板侧 origin 为空，提交是空操作；
-+                        取消时才需要让它去回滚）。 */
-+                    const endSlip = (cancelled: boolean) => {
-+                        const clipId = slipClipId;
-+                        if (clipId === null) return;
-+                        slipClipId = null;
-+                        if (!slipPreviewed && !cancelled) return;
-+                        window.dispatchEvent(
-+                            new CustomEvent("hifi:slipCommit", {
-+                                detail: {
-+                                    clipId,
-+                                    deltaSec: slipSec,
-+                                    targetTrackId: slipTrackId,
-+                                    cancelled,
-+                                },
-+                            }),
-+                        );
-+                    };
-+                    const onTwoDown = (e: PointerEvent) => {
-+                        if (e.pointerType === "mouse") return;
-+                        if (tapIds.length === 0) {
-+                            tapAt = performance.now();
-+                            twoMoved = false;
-+                            altLit = false;
-+                            slipClipId = null;
-+                        }
-+                        tapIds.push(e.pointerId);
-+                        tapStart.set(e.pointerId, { x: e.clientX, y: e.clientY });
-+                        tapLast.set(e.pointerId, { x: e.clientX, y: e.clientY });
-+                        tapFired = false;
-+                        // 两指都按下后才启动长按计时（单指不算）。
-+                        if (tapIds.length === 2 && twoTimer === null) {
-+                            twoTimer = window.setTimeout(() => {
-+                                // ⚠️ 到点时再确认"这两指一直没动"才点亮。
-+                                if (!twoMoved && tapIds.length >= 2) {
-+                                    altLit = true;
-+                                    setTouchModifiers({ alt: true });
-+                                    beginSlip();
-+                                }
-+                            }, 500);
-+                        }
-+                    };
-+                    /**
-+                     * #41：双指在动 ⇒ 走"平移且缩放"，**取消长按候选**。
-+                     *
-+                     * 🔴 A3 修正（2026-09-28）：**已点亮的 Alt 不能在这里被撤销**。
-+                     * 「双指长按**并划动**」的"划动"本来就是长按之后的动作，而这里原先
-+                     * 一见 8px 位移就 `clearTouchModifiers()` ⇒ 一动手就把虚拟 Alt 清掉，
-+                     * slip 永远起不来。撤销只对"**还没点亮**的候选"有意义。
-+                     * 点亮之后改走 slip 通道：只累计位移，不再管"是否算长按"。
-+                     */
-+                    const onTwoMove = (e: PointerEvent) => {
-+                        if (e.pointerType === "mouse") return;
-+                        tapLast.set(e.pointerId, { x: e.clientX, y: e.clientY });
-+                        if (tapIds.length < 2) return;
-+                        if (altLit) {
-+                            stepSlip();
-+                            return;
-+                        }
-+                        if (twoMoved) return;
-+                        for (const id of tapIds) {
-+                            const st = tapStart.get(id);
-+                            if (!st) continue;
-+                            // 用 event 的坐标只对当前指针准，简化：任一指针动够就算。
-+                            if (
-+                                Math.abs(e.clientX - st.x) > 8 ||
-+                                Math.abs(e.clientY - st.y) > 8
-+                            ) {
-+                                twoMoved = true;
-+                                tapFired = true; // 也别被当双指 tap
-+                                clearTwoTimer();
-+                                clearTouchModifiers();
-+                                break;
-+                            }
-+                        }
-+                    };
-+                    const onTwoUp = (e: PointerEvent) => {
-+                        if (!tapIds.includes(e.pointerId)) return;
-+                        clearTwoTimer();
-+                        // 长按已点亮 ⇒ 这一轮是 slip：先收尾再清修饰键（提交要读 origin 的
-+                        // `slipMode`，它是按下时快照的，与此刻的修饰键无关，但顺序上更清楚）。
-+                        if (altLit && tapIds.length <= 2) endSlip(false);
-+                        clearTouchModifiers();
-+                        const st = tapStart.get(e.pointerId);
-+                        const moved =
-+                            st && (Math.abs(e.clientX - st.x) > TAP_SLOP ||
-+                                   Math.abs(e.clientY - st.y) > TAP_SLOP);
-+                        tapIds = tapIds.filter((id) => id !== e.pointerId);
-+                        tapStart.delete(e.pointerId);
-+                        tapLast.delete(e.pointerId);
-+                        if (tapIds.length === 0) altLit = false;
-+                        if (moved) tapFired = true; // 有人动过 ⇒ 不算 tap
-+                        if (tapIds.length > 0 || tapFired) return;
-+                        // 双指都抬起且没人动过、总时长够短 ⇒ 双指 tap
-+                        if (performance.now() - tapAt > TAP_MS) return;
-+                        const trackId = resolveTrackIdAtClientY(e.clientY);
-+                        if (trackId) handleSelectTrack(trackId);
-+                    };
-+                    const onTwoCancel = (e: PointerEvent) => {
-+                        if (altLit) endSlip(true);
-+                        tapIds = tapIds.filter((id) => id !== e.pointerId);
-+                        tapStart.delete(e.pointerId);
-+                        tapLast.delete(e.pointerId);
-+                        if (tapIds.length === 0) altLit = false;
-+                        clearTwoTimer();
-+                        clearTouchModifiers();
-+                    };
-+                    timelineContainer.addEventListener("pointerdown", onTwoDown);
-+                    timelineContainer.addEventListener("pointermove", onTwoMove);
-+                    timelineContainer.addEventListener("pointerup", onTwoUp);
-+                    timelineContainer.addEventListener("pointercancel", onTwoCancel);
-+                    offs.push(() => {
-+                        timelineContainer.removeEventListener("pointerdown", onTwoDown);
-+                        timelineContainer.removeEventListener("pointermove", onTwoMove);
-+                        timelineContainer.removeEventListener("pointerup", onTwoUp);
-+                        timelineContainer.removeEventListener("pointercancel", onTwoCancel);
-+                    });
-+                }
-+
-+                /* E 组：轨道头列**左划 = 收窄轨道头**（flm 交互表）。
-+                   ⚠️ #35 修正（真机无效、模拟器能过）：
-+                   轨道列**是原生竖向滚动容器**，真实触摸里浏览器接管滚动后会发
-+                   `pointercancel`，原来的 `pointermove` 在判定前就被取消了；
-+                   而 CDP 的**合成事件**不会 cancel ⇒ "模拟器过、真机不过"。
-+                   ⇒ 改用**原生 touch 事件** + `passive:false`，命中即 preventDefault。 */
-+                let swipeStartX = NaN;
-+                let swipeStartY = 0;
-+                let swipeFired = false;
-+                const onHeaderTouchStart = (e: TouchEvent) => {
-+                    if (e.touches.length !== 1) {
-+                        // 多指交给手势层（缩放/平移），不参与左划判定。
-+                        swipeStartX = NaN;
-+                        return;
-+                    }
-+                    swipeStartX = e.touches[0].clientX;
-+                    swipeStartY = e.touches[0].clientY;
-+                    swipeFired = false;
-+                };
-+                const onHeaderTouchMove = (e: TouchEvent) => {
-+                    if (swipeFired || Number.isNaN(swipeStartX)) return;
-+                    const tt = e.touches[0];
-+                    if (!tt) return;
-+                    const dx = tt.clientX - swipeStartX;
-+                    const dy = Math.abs(tt.clientY - swipeStartY);
-+                    /* 规格（docs/15 轨道头-划动）：**左划隐藏、右划再展开**。
-+                       ⚠️ 原实现只判了左划（`dx > -48` 直接 return，右划被排除），
-+                       虽然命中后写的是 toggle —— 于是「右划展开」永远走不到。
-+                       现在按方向给明确语义：左划=收起、右划=展开（与规格逐字一致）。 */
-+                    if (Math.abs(dx) < 48 || dy > 24) return;
-+                    swipeFired = true;
-+                    e.preventDefault(); // 拦掉这次滚动
-+                    if (dx < 0) document.body.setAttribute("data-hs-header-collapsed", "1");
-+                    else document.body.removeAttribute("data-hs-header-collapsed");
-+                };
-+                const onHeaderTouchEnd = () => {
-+                    swipeStartX = NaN;
-+                    swipeFired = false;
-+                };
-+                trackListEl.addEventListener("touchstart", onHeaderTouchStart, { passive: true });
-+                trackListEl.addEventListener("touchmove", onHeaderTouchMove, { passive: false });
-+                trackListEl.addEventListener("touchend", onHeaderTouchEnd, { passive: true });
-+                trackListEl.addEventListener("touchcancel", onHeaderTouchEnd, { passive: true });
-+                offs.push(() => {
-+                    trackListEl.removeEventListener("touchstart", onHeaderTouchStart);
-+                    trackListEl.removeEventListener("touchmove", onHeaderTouchMove);
-+                    trackListEl.removeEventListener("touchend", onHeaderTouchEnd);
-+                    trackListEl.removeEventListener("touchcancel", onHeaderTouchEnd);
-+                });
-+
-+                /* E13（用户口径）：「轨道头缩小后**从无轨道处右滑无法展开**轨道头，需修」。
-+
-+                   病根：上面这套「左划收起 / 右划展开」只挂在**滚动容器**
-+                   `[data-track-list-panel]` 上，而收起后那是一条 26px 的窄条 ——
-+                   手指很容易落在**头行**（`[data-hs-tracklist-head-bar]`，它是滚动容器的
-+                   **兄弟**、不在容器内）或外壳的空白处 ⇒ 事件根本到不了容器，展不开。
-+                   （这也是 E3 探针里"合成触摸收起不生效"的同一个原因。）
-+
-+                   修法：同一套判定**再挂两处**——
-+                     · 外壳（`trackListEl.parentElement`，覆盖头行 + 列表 + 空白）；
-+                     · 文档级兜底：**仅在收起态且起点落在左侧 40px 内**时参与判定
-+                       （避免与时间线区域的横滑手势抢事件）。
-+                   三处共用同一组回调，语义完全一致（左划收起、右划展开）。 */
-+                const shellEl = trackListEl.parentElement;
-+                /* 兜底判定的边界取**轨道头列**的右边缘：展开态是整个列宽（头行、列表、
-+                   空白全在内），收起态就是 26px 窄条 ⇒ 两种形态都不必再分别写条件。
-+                   （只用"是否收起"做条件会漏掉**展开态在头行上左划收起**这条：头行是
-+                   滚动容器的兄弟、不在容器内，实测确实收不起来。） */
-+                const colRight = () => {
-+                    const r = shellEl?.getBoundingClientRect();
-+                    return r ? r.right + 4 : 240;
-+                };
-+                const docTouchStart = (e: TouchEvent) => {
-+                    const t = e.touches[0];
-+                    if (!t || t.clientX > colRight()) return;
-+                    onHeaderTouchStart(e);
-+                };
-+                const docTouchMove = (e: TouchEvent) => {
-+                    if (Number.isNaN(swipeStartX)) return;
-+                    onHeaderTouchMove(e);
-+                };
-+                shellEl?.addEventListener("touchstart", onHeaderTouchStart, { passive: true });
-+                shellEl?.addEventListener("touchmove", onHeaderTouchMove, { passive: false });
-+                shellEl?.addEventListener("touchend", onHeaderTouchEnd, { passive: true });
-+                shellEl?.addEventListener("touchcancel", onHeaderTouchEnd, { passive: true });
-+                document.addEventListener("touchstart", docTouchStart, { passive: true });
-+                document.addEventListener("touchmove", docTouchMove, { passive: false });
-+                document.addEventListener("touchend", onHeaderTouchEnd, { passive: true });
-+                offs.push(() => {
-+                    shellEl?.removeEventListener("touchstart", onHeaderTouchStart);
-+                    shellEl?.removeEventListener("touchmove", onHeaderTouchMove);
-+                    shellEl?.removeEventListener("touchend", onHeaderTouchEnd);
-+                    shellEl?.removeEventListener("touchcancel", onHeaderTouchEnd);
-+                    document.removeEventListener("touchstart", docTouchStart);
-+                    document.removeEventListener("touchmove", docTouchMove);
-+                    document.removeEventListener("touchend", onHeaderTouchEnd);
-+                });
-+                return true;
-+            };
-+            // 首帧 refs 可能还没落位：有限次重试（≈1 秒），不做无限 rAF。
-+            if (!attachAxisSurfaces()) {
-+                let tries = 0;
-+                const retry = () => {
-+                    if (attachAxisSurfaces() || ++tries > 60) return;
-+                    raf = requestAnimationFrame(retry);
-+                };
-+                raf = requestAnimationFrame(retry);
-+            }
-+            // 调试钩子：CDP / 真机验收时读取内核视口真值，验证 docs/08 §8.1 不变量。
-+            dbg.__hsViewport = () => {
-+                const v = host.getViewport();
-+                const r = container.getBoundingClientRect();
-+                return {
-+                    ...v,
-+                    rowHeight: host.getRowHeight(),
-+                    // 容器偏移：验收脚本要把锚点换算到容器坐标系（与 scrollLeft/scrollTop 同域）。
-+                    containerRect: { left: r.left, top: r.top, width: r.width, height: r.height },
-+                };
-+            };
-+            teardown = () => {
-+                for (const off of offs) off();
-+            };
-+        };
-+        let teardown: (() => void) | null = null;
-+        tryAttach();
-+        return () => {
-+            if (raf !== 0) cancelAnimationFrame(raf);
-+            teardown?.();
-+            delete dbg.__hsViewport;
-+        };
-+    }, []);
-+
-+    // 播放开始（键盘快捷键 / 播放按钮 / 远端传输皆可触发）＝拖拽视觉语境终止：
-+    // 按住鼠标拖拽期间开始播放时，吸附竖线高亮必须立即消失，而不是冻结在原地
-+    // 直到松手才被手势结束逻辑清理。
-+    const timelineRuntimeIsPlaying = useAppSelector((state) => state.session.runtime.isPlaying);
-+    React.useEffect(() => {
-+        if (timelineRuntimeIsPlaying) {
-+            clearSnapHighlights();
-+        }
-+    }, [timelineRuntimeIsPlaying]);
-+    const {
-+        dispatch,
-+        s,
-+        sessionRef,
-+        scrollRef,
-+        trackListScrollRef,
-+        rulerContentRef,
-+        rulerPlayheadLineRef,
-+        rulerPlayheadHeadRef,
-+        dropPreviewRef,
-+        lastClickedClipIdRef,
-+        pxPerSecRef,
-+        viewportWidthRef,
-+        rowHeightRef,
-+        pxPerSec,
-+        setPxPerSec,
-+        viewportWidth,
-+        setViewportWidth,
-+        rowHeight,
-+        setRowHeight,
-+        trackVolumeUi,
-+
-+        setTrackVolumeUi,
-+        sameSourceConfirmOpen,
-+        setSameSourceConfirmOpen,
-+        sameSourceConfirmResolverRef,
-+        pxPerBeat,
-+        contentWidth,
-+        contentHeight,
-+        dynamicProjectSec,
-+        timelineTicks,
-+        rulerScrollLeft,
-+        verticalZoomKb,
-+        paramFineAdjustKb,
-+        slipEditKb,
-+        crossfadeGripKb,
-+        fadeCurvatureKb,
-+        stretchKbRef,
-+        pitchDragKb,
-+        noSnapKb,
-+        copyDragKb,
-+        clipMultiSelectToggleKb,
-+        dropPreview,
-+        setDropPreview,
-+        pendingDropDurationPathRef,
-+        syncScrollLeft,
-+        setScrollLeftState,
-+        beatFromClientX,
-+        trackIdFromClientY,
-+        rowTopForTrackId,
-+        ensureDropPreviewDuration,
-+        getDropPreviewWidthPx,
-+        snapTimeline,
-+        snapTimelineDetailed,
-+        setPlayheadFromClientX,
-+        keyboardZoomPendingRef,
-+    } = state;
-+
-+    // 把 seek 落点函数交给「拍数栏触摸 seek」那条路径（见上方手势 effect）。
-+    // 必须放在本解构之后；effect 顺序保证它在手势 effect 的 rAF 重试之前填好。
-+    React.useEffect(() => {
-+        rulerSeekRef.current = setPlayheadFromClientX;
-+    }, [setPlayheadFromClientX]);
-+
-+    /**
-+     * 模式无关的视口访问器。
-+     *
-+     * 内核模式下旧滚动容器不挂载（`scrollRef.current === null`），凡是「读/写视口」
-+     * 的逻辑（拖入落点、自动滚屏、键盘缩放、聚焦光标、参数编辑器同步）都必须经它，
-+     * 而不是各自判断模式。
-+     *
-+     * 特殊说明：引用必须**稳定**——下游 hook 把它作为 effect 依赖，随渲染重建会
-+     * 导致事件监听反复重注册。因此惰性创建一次并缓存。
-+     */
-+    const viewportAccessRef = React.useRef<TimelineViewportAccess | null>(null);
-+    if (viewportAccessRef.current === null) {
-+        viewportAccessRef.current = createTimelineViewportAccess({ scrollRef, kernelHostRef });
-+    }
-+    const viewportAccess = viewportAccessRef.current;
-+
-+    /**
-+     * clientY → 轨道 id（模式无关）。
-+     *
-+     * 旧实现读原生 scroller 的 `scrollTop`；内核模式下容器不再滚动（真值在宿主里），
-+     * 必须改用「容器矩形 + 宿主缓存的 scrollTop」。
-+     *
-+     * 特殊说明：宿主存在时走内核分支；宿主为 null（挂载前 / 测试环境）时委托给
-+     * `trackIdFromClientY` 兜底。旧的原生 scroller 实现已随"渲染内核唯一路径"改造删除，
-+     * `scrollRef` 已无 JSX 挂载点，因此这里**不是**在两种渲染模式之间做选择。
-+     */
-+    const resolveTrackIdAtClientY = React.useCallback(
-+        (clientY: number): string | null => {
-+            const host = kernelHostRef.current;
-+            if (host === null) return trackIdFromClientY(clientY);
-+            const rect = host.getContainerRect();
-+            if (rect === null) return null;
-+            const y = clientY - rect.top + host.getViewport().scrollTop;
-+            const idx = Math.floor(y / rowHeight);
-+            const tracks = sessionRef.current.tracks;
-+            if (idx < 0 || idx >= tracks.length) return null;
-+            return tracks[idx]?.id ?? null;
-+        },
-+        [rowHeight, sessionRef, trackIdFromClientY],
-+    );
-+
-+    /**
-+     * 内核水平滚动提交（每跨过 256px 一次）。
-+     *
-+     * 走旧实现的同一条通知链（`syncScrollLeft`）：更新 React state（标尺刻度
-+     * 窗口）**并**把视口写入 `timelineViewportSync`（参数编辑器同步的写侧）。
-+     * 若直接传 `setScrollLeftState`，同步写侧会被漏掉——表现为「内核滚动时
-+     * 参数编辑器不跟随」。
-+     */
-+    const handleKernelScrollLeftCommit = React.useCallback(
-+        (next: number) => {
-+            syncScrollLeft(next);
-+        },
-+        [syncScrollLeft],
-+    );
-+
-+    /**
-+     * 滚轮缩放的**待落地目标**（内核请求、React 落地）。
-+     *
-+     * 标尺是 DOM、由 React 用 `pxPerSec` 布局，轨道区归内核。内核若自己先切缩放，
-+     * 缩放过程中标尺会整整落后一个滚轮步（约 10% 缩放 → 视口宽 1000px 时末端差
-+     * 上百像素），就是「标尺抽动 / 网格与标尺没对齐」。旧实现没有这个问题，因为
-+     * 缩放只有 React 一个真值源、画布也在 React 提交后才画。
-+     *
-+     * 因此这里照旧：内核只"请求"，React 用 `setPxPerSec` 触发重排，并在**同一次
-+     * 提交的 layout effect** 里把缩放应用到内核——DOM 重排与内核缩放落在同一帧的
-+     * 绘制中，两层不可能分叉。
-+     */
-+    const pendingKernelZoomRef = React.useRef<{ pxPerSec: number; scrollLeft: number } | null>(
-+        null,
-+    );
-+    const handleKernelZoomRequest = React.useCallback(
-+        (next: { pxPerSec: number; scrollLeft: number }) => {
-+            if (next.pxPerSec === pxPerSec) {
-+                // 缩放已在上/下限（或该步被钳制回原值）：请求退化为"位置无变化"，
-+                // 直接应用一次即可。**不能**留成待落地——`setPxPerSec` 传同值不会
-+                // 触发重渲染，下面的 layout effect 也就永远不会跑，请求会被搁置。
-+                pendingKernelZoomRef.current = null;
-+                viewportAccess.setZoomAndScroll(next.pxPerSec, next.scrollLeft);
-+                return;
-+            }
-+            pendingKernelZoomRef.current = next;
-+            // 只改缩放：位置由下面的 layout effect 与缩放**原子**应用（分两次写会让
-+            // 中间那一帧出现"新缩放 + 旧位置"的错位）。
-+            setPxPerSec(next.pxPerSec);
-+        },
-+        [pxPerSec, viewportAccess],
-+    );
-+    React.useLayoutEffect(() => {
-+        const pending = pendingKernelZoomRef.current;
-+        if (pending === null) return;
-+        pendingKernelZoomRef.current = null;
-+        viewportAccess.setZoomAndScroll(pending.pxPerSec, pending.scrollLeft);
-+        // 【同任务把内核画出来】本提交已经把**标尺文本**按新缩放排好了（React 布局），
-+        // 而网格 / clip / 波形（GL）与标尺内容层的 translate 由内核绘制。若等下一次
-+        // rAF，被绘制出来的那一帧就是"新文本 + 旧网格"，缩放过程中标尺文本看起来在
-+        // 闪。这里同步提交一帧，文本与网格同帧切换（与参数编辑器的 `commitViewportNow`
-+        // 同一手法）。
-+        kernelHostRef.current?.paintNow();
-+    }, [pxPerSec, viewportAccess]);
-+
-+    // ── 轨道头与时间轴区域的竖直滚动对齐 ─────────────────
-+    // 右侧时间轴 scroller 常驻水平滚动条（占高 h），其竖直滚动范围因此比
-+    // 轨道头少 h 像素：内容同为「轨道数 × rowHeight」时，轨道头滚到底会
-+    // 比时间轴多滚 h 像素，行无法对齐。这里实测 h（offsetHeight 减去
-+    // clientHeight），平台/样式自适应（overlay 滚动条占位为 0）。
-+    React.useLayoutEffect(() => {
-+        const scroller = scrollRef.current;
-+        if (!scroller) return;
-+        const measure = () => {
-+            setHorizontalScrollbarGutterPx(scroller.offsetHeight - scroller.clientHeight);
-+        };
-+        measure();
-+        if (typeof ResizeObserver !== "undefined") {
-+            const observer = new ResizeObserver(measure);
-+            observer.observe(scroller);
-+            return () => observer.disconnect();
-+        }
-+        window.addEventListener("resize", measure);
-+        return () => window.removeEventListener("resize", measure);
-+    }, [scrollRef]);
-+
-+    // ── 粘贴后“聚焦播放光标”（提交后执行）────────────────────
-+    // 粘贴可能大幅扩充工程全长（dynamicProjectSec / 水平可滚动范围随之
-+    // 扩大）。滚动必须在本状态与对应 DOM（paddedContentWidth）都提交后
-+    // 执行，否则会被旧的滚动上限钳制，导致光标无法进入画面。
-+    // pendingPlayheadRevealSec 由粘贴 fulfilled reducer 记录，这里在
-+    // useLayoutEffect 中消费并立即清除。
-+    const pendingPlayheadRevealSec = s.pendingPlayheadRevealSec;
-+    React.useLayoutEffect(() => {
-+        if (pendingPlayheadRevealSec == null) return;
-+        // 仅当新光标位置不在可视范围内时才滚动（需求语义：画面内不扰动视图）。
-+        // 视口来源必须模式无关：内核模式下旧滚动容器不挂载，若在这里早退会
-+        // **静默丢弃**聚焦请求（表现为「粘贴后视图不跟随」）。
-+        const x = Math.max(0, pendingPlayheadRevealSec) * pxPerSec;
-+        const left = viewportAccess.getScrollLeft();
-+        const right = left + viewportAccess.getViewportWidth();
-+        if (x >= left && x <= right) {
-+            dispatch(setPendingPlayheadReveal(null));
-+            return;
-+        }
-+        const next = computeFocusCursorScrollLeft({
-+            playheadSec: pendingPlayheadRevealSec,
-+            pxPerSec,
-+            contentWidth: dynamicProjectSec * pxPerSec,
-+        });
-+        if (Math.abs(viewportAccess.getScrollLeft() - next) > 0.5) {
-+            syncScrollLeft(viewportAccess.setScrollLeft(next));
-+        }
-+        dispatch(setPendingPlayheadReveal(null));
-+    }, [
-+        pendingPlayheadRevealSec,
-+        pxPerSec,
-+        dynamicProjectSec,
-+        viewportAccess,
-+        syncScrollLeft,
-+        dispatch,
-+    ]);
-+
-+    const timeContext = React.useMemo<TimeFormatContext>(
-+        () => ({
-+            bpm: s.bpm,
-+            beatsPerBar: Math.max(1, Math.round(s.beats || 4)),
-+            grid: s.grid,
-+            tempoMap: s.tempoMap,
-+        }),
-+        [s.bpm, s.beats, s.grid, s.tempoMap],
-+    );
-+
-+    // 淡化长度 ToolTips 的相对时长上下文：主/副时间单位 + 工程计时参数。
-+    const fadeLengthFormatCtx = React.useMemo<FadeLengthFormatContext>(
-+        () => ({
-+            primaryTimeUnit: s.primaryTimeUnit,
-+            secondaryTimeUnit: s.secondaryTimeUnit,
-+            bpm: s.bpm,
-+            beatsPerBar: Math.max(1, Math.round(s.beats || 4)),
-+            grid: s.grid,
-+        }),
-+        [s.primaryTimeUnit, s.secondaryTimeUnit, s.bpm, s.beats, s.grid],
-+    );
-+
-+    const projectScale = React.useMemo<ScaleLike | null>(
-+        () =>
-+            s.project.useCustomScale && s.project.customScale
-+                ? s.project.customScale.notes
-+                : s.project.baseScale,
-+        [s.project.baseScale, s.project.customScale, s.project.useCustomScale],
-+    );
-+
-+    const handleTempoMapChange = React.useCallback(
-+        (next: TempoMap | null) => {
-+            dispatch(setTempoMap(next));
-+        },
-+        [dispatch],
-+    );
-+    const handleTempoMapCommit = React.useCallback(
-+        (next: TempoMap | null) => {
-+            dispatch(setTempoMap(next));
-+            void dispatch(setTempoMapRemote(next));
-+        },
-+        [dispatch],
-+    );
-+    const handlePrimaryUnitChange = React.useCallback(
-+        (unit: TimeUnit) => {
-+            dispatch(setPrimaryTimeUnit(unit));
-+            void dispatch(persistUiSettings());
-+        },
-+        [dispatch],
-+    );
-+    const handleSecondaryUnitChange = React.useCallback(
-+        (unit: TimeUnitChoice) => {
-+            dispatch(setSecondaryTimeUnit(unit));
-+            void dispatch(persistUiSettings());
-+        },
-+        [dispatch],
-+    );
-+    const handleCopyPlayheadTime = React.useCallback(async () => {
-+        const text = formatCursorTime(
-+            s.primaryTimeUnit,
-+            s.secondaryTimeUnit,
-+            Number(sessionRef.current.playheadSec ?? 0) || 0,
-+            timeContext,
-+        ).combined;
-+        try {
-+            await navigator.clipboard.writeText(text);
-+        } catch {
-+            try {
-+                const textarea = document.createElement("textarea");
-+                textarea.value = text;
-+                textarea.style.position = "fixed";
-+                textarea.style.opacity = "0";
-+                document.body.appendChild(textarea);
-+                textarea.select();
-+                document.execCommand("copy");
-+                textarea.remove();
-+            } catch {
-+                // 忽略复制失败
-+            }
-+        }
-+    }, [s.primaryTimeUnit, s.secondaryTimeUnit, sessionRef, timeContext]);
-+
-+    // ── 记录最近点击的 clientX，用于 Shift 范围选择的锚点位置
-+    const lastClickedClientXRef = React.useRef<number | null>(null);
-+
-+    // ── 时间轴缩放与行高的持久化 ─────────────────────────────
-+    //
-+    // 旧实现由 `TimelineScrollArea`（原生滚动容器）负责写这两个键；"内核唯一路径"
-+    // 改造删掉该组件时**没有把写入点接回来**，于是读取侧（`useTimelineState` 初始化
-+    // 读 `hifishifter.pxPerSec` / `hifishifter.rowHeight`）一直在，但再没有人写
-+    // ——表现为每次重启都回到默认缩放与行高。这里接回同一对键名与取值语义。
-+    //
-+    // 用防抖 hook 而不是直接 `localStorage.setItem`：滚轮缩放是高频事件，同步落盘
-+    // 会与同帧的渲染 / 重绘挤在一起（见 `useDebouncedPersist` 文件头）。
-+    useDebouncedPersist("hifishifter.pxPerSec", pxPerSec);
-+    useDebouncedPersist("hifishifter.rowHeight", rowHeight);
-+
-+    // ── 2. Clip 多选 + 操作回调 ─────────────────────────────
-+    const clipActions = useTimelineClipActions({
-+        sessionRef,
-+        scrollRef,
-+        // 模式无关视口：范围选择的「点击位置 → 工程秒」换算需要它（内核模式下
-+        // 原生 scroller 不存在，缺了它会退化成用 clip 起点近似）。
-+        viewport: viewportAccess,
-+        lastClickedClipIdRef,
-+        lastClickedClientXRef,
-+        pxPerSec,
-+        pxPerBeat,
-+        rowHeight,
-+        ignoreGrouping,
-+        disabledGroupIds,
-+        dispatch,
-+        sameSourceConfirmResolverRef,
-+        setSameSourceConfirmOpen,
-+        setPlayheadFromClientX,
-+    });
-+    const {
-+        multiSelectedClipIds,
-+        multiSelectedSet,
-+        setMultiSelectedClipIds,
-+        setMultiSelectedClipIdsFromAction,
-+        contextMenu,
-+        setContextMenu,
-+        trackAreaMenu,
-+        setTrackAreaMenu,
-+        importModeMenu,
-+        setImportModeMenu,
-+        clipboardAvailable,
-+        copyClips,
-+        cutClips,
-+        groupClips,
-+        ungroupClips,
-+        toggleGroupDisabled,
-+        normalizeClips,
-+        replaceClipSources,
-+        splitClipIdsAtPlayhead,
-+        splitSelectedAtPlayhead,
-+        selectClipRangeByRect,
-+        recordLastClickPosition,
-+        pasteClipsAtPlayhead,
-+        clearContextMenu,
-+        ensureTrackLaneSelected,
-+        selectTrackLaneClipRemote,
-+        deselectAllTrackLaneClips,
-+        toggleTrackLaneClipMuted,
-+        toggleTrackLaneCtrlSelection,
-+        commitTrackLaneRename,
-+        commitTrackLaneGain,
-+        commitTrackLaneRate,
-+    } = clipActions;
-+    // 右键播放速率角标 → 高级编辑浮层（BPM 换算）的目标 Clip 与锚点。
-+    const [rateEditorClipId, setRateEditorClipId] = React.useState<string | null>(null);
-+    const [rateEditorPosition, setRateEditorPosition] = React.useState<{
-+        x: number;
-+        y: number;
-+    } | null>(null);
-+    const openRateBadgeMenu = React.useCallback(
-+        (clipId: string, screenX: number, screenY: number) => {
-+            setRateEditorClipId(clipId);
-+            setRateEditorPosition({ x: screenX, y: screenY });
-+        },
-+        [],
-+    );
-+
-+    // 角标行内编辑提交：按字段路由到速率（自动调整时长）/增益提交。
-+    // 传给 React.memo 化的 TrackList / TrackLane 的回调必须引用稳定，
-+    // 否则每次 TimelinePanel 渲染（播放头提交值、滚动、修饰键）都会击穿 memo。
-+    const handleToggleGroupDisabled = React.useCallback(
-+        (groupId: string) => {
-+            toggleGroupDisabled(groupId);
-+        },
-+        [toggleGroupDisabled],
-+    );
-+    const commitTrackLaneFormantMorph = React.useCallback(
-+        (clipId: string, value: ClipFormantMorph, checkpoint: boolean) => {
-+            void dispatch(
-+                setClipStateRemote({
-+                    clipId,
-+                    formantMorph: value,
-+                    checkpoint,
-+                }),
-+            );
-+        },
-+        [dispatch],
-+    );
-+    const activateTrackLaneTake = React.useCallback(
-+        (clipId: string, takeId: string) => {
-+            void dispatch(setClipActiveTakeRemote({ clipId, takeId }));
-+        },
-+        [dispatch],
-+    );
-+    /**
-+     * 单侧循环到下一个形状并重置默认曲率。
-+     *
-+     * 多选：重点 clip 属于选区时应用到全部选中（与淡变菜单同一判定），
-+     * 每个 clip 从**自身**当前形状循环前进；一次 bulk 提交 = 单撤销步。
-+     *
-+     * @param checkpoint 单独调用默认 true（一笔后端写入 = 一个撤销步）；
-+     *                   交叉点双列循环时传 false 并由调用方开 undo group
-+     *                   合并为单步。
-+     */
-+    const cycleOneFade = React.useCallback(
-+        (clipId: string, side: "in" | "out", checkpoint = true) => {
-+            const targets = getBulkEditableClipIds({
-+                activeClipId: clipId,
-+                multiSelectedClipIds,
-+                multiSelectedSet,
-+            });
-+            const updates: Array<{
-+                clipId: string;
-+                fadeInShape?: number;
-+                fadeInDir?: number;
-+                fadeOutShape?: number;
-+                fadeOutDir?: number;
-+            }> = [];
-+            for (const targetId of targets) {
-+                const clip = sessionRef.current.clips.find((entry) => entry.id === targetId);
-+                if (!clip) continue;
-+                const rawShape = side === "in" ? clip.fadeInShape : clip.fadeOutShape;
-+                const currentShape = Number.isFinite(rawShape) ? Math.trunc(rawShape) : 0;
-+                const index = FADE_PRESETS.findIndex((preset) => preset.shape === currentShape);
-+                const nextPreset =
-+                    FADE_PRESETS[(index + 1 + FADE_PRESETS.length) % FADE_PRESETS.length];
-+                const nextDir = defaultFadeDirFor(nextPreset.shape, side === "out");
-+                dispatch(
-+                    setClipFades({
-+                        clipId: targetId,
-+                        ...(side === "in"
-+                            ? { fadeInShape: nextPreset.shape, fadeInDir: nextDir }
-+                            : { fadeOutShape: nextPreset.shape, fadeOutDir: nextDir }),
-+                    }),
-+                );
-+                updates.push({
-+                    clipId: targetId,
-+                    ...(side === "in"
-+                        ? { fadeInShape: nextPreset.shape, fadeInDir: nextDir }
-+                        : { fadeOutShape: nextPreset.shape, fadeOutDir: nextDir }),
-+                });
-+            }
-+            if (updates.length > 0) {
-+                void dispatch(setClipsStateBulkRemote({ updates, checkpoint }));
-+            }
-+        },
-+        [dispatch, sessionRef, multiSelectedClipIds, multiSelectedSet],
-+    );
-+
-+    // Ctrl+点击循环切换：普通包络线只切该线；交叉点抓手同时切换两侧
-+    // （前者淡出 + 后者淡入）。
-+    const handleFadeShapeCycleClick = React.useCallback(
-+        (clipId: string, side: "in" | "out") => {
-+            cycleOneFade(clipId, side);
-+        },
-+        [cycleOneFade],
-+    );
-+    const handleCrossfadeCycleClick = React.useCallback(
-+        (sides: Array<{ clipId: string; isOut: boolean }>) => {
-+            // 交叉点双列循环 = 一次手势：开 undo group 把两侧循环合并为
-+            // 单个撤销步（否则两笔 checkpoint:true 会变成两个撤销步）。
-+            void (async () => {
-+                await webApi.beginUndoGroup("edit_clip");
-+                try {
-+                    for (const side of sides) {
-+                        cycleOneFade(side.clipId, side.isOut ? "out" : "in", false);
-+                    }
-+                } finally {
-+                    await webApi.endUndoGroup();
-+                }
-+            })().catch(() => undefined);
-+        },
-+        [cycleOneFade],
-+    );
-+    const activeFormantToolClip = React.useMemo(
-+        () =>
-+            s.clipFormantToolWindow.clipId
-+                ? (s.clips.find((clip) => clip.id === s.clipFormantToolWindow.clipId) ?? null)
-+                : null,
-+        [s.clipFormantToolWindow.clipId, s.clips],
-+    );
-+
-+    // ── MIDI clip drag-drop handler ──────────────────────
-+    const handleMidiClipImport = React.useCallback(
-+        (result: {
-+            trackIndices: number[];
-+            notesCount: number;
-+            midiPath: string;
-+            fillGaps: boolean;
-+            multiTrackMerge?: boolean;
-+            noteBpmMode?: string;
-+            specifiedBpm?: number;
-+            importBpmAsProject?: boolean;
-+            clipboardGuid?: string;
-+            closeLeadingGap?: boolean;
-+            importAsTempoMap?: boolean;
-+            importTempo?: boolean;
-+            importTimeSignature?: boolean;
-+            importKeySignature?: boolean;
-+        }) => {
-+            void dispatch(
-+                importMidiAsClip({
-+                    midiPath: result.midiPath,
-+                    trackIndices: result.trackIndices,
-+                    trackId: midiClipTrackId,
-+                    startSec: midiClipStartSec,
-+                    fillGaps: result.fillGaps || undefined,
-+                    multiTrackMerge: result.multiTrackMerge,
-+                    noteBpmMode: result.noteBpmMode,
-+                    specifiedBpm: result.specifiedBpm,
-+                    importBpmAsProject: result.importBpmAsProject,
-+                    clipboardGuid: result.clipboardGuid,
-+                    closeLeadingGap: result.closeLeadingGap,
-+                    importAsTempoMap: result.importAsTempoMap,
-+                    importTempo: result.importTempo,
-+                    importTimeSignature: result.importTimeSignature,
-+                    importKeySignature: result.importKeySignature,
-+                }),
-+            );
-+        },
-+        [dispatch, midiClipTrackId, midiClipStartSec],
-+    );
-+
-+    // ── Replace MIDI ──
-+    const handleReplaceMidiImport = React.useCallback(
-+        (result: {
-+            trackIndices: number[];
-+            notesCount: number;
-+            midiPath: string;
-+            fillGaps: boolean;
-+            multiTrackMerge?: boolean;
-+            noteBpmMode?: string;
-+            specifiedBpm?: number;
-+            importBpmAsProject?: boolean;
-+            closeLeadingGap?: boolean;
-+        }) => {
-+            const clipId = replaceMidiDialog.clipId;
-+            if (!clipId) return;
-+            void dispatch(
-+                replaceMidiClipDataRemote({
-+                    clipId,
-+                    midiPath: result.midiPath,
-+                    trackIndices: result.trackIndices,
-+                    fillGaps: result.fillGaps || undefined,
-+                    noteBpmMode: result.noteBpmMode,
-+                    specifiedBpm: result.specifiedBpm,
-+                    importMidiBpmAsProject: result.importBpmAsProject,
-+                    closeLeadingGap: result.closeLeadingGap,
-+                }),
-+            );
-+            setReplaceMidiDialog({ open: false, clipId: null, midiPath: null });
-+        },
-+        [dispatch, replaceMidiDialog.clipId],
-+    );
-+
-+    const openReplaceMidiForClip = React.useCallback(async (clipId: string) => {
-+        const picked = await webApi.openMidiDialog();
-+        if (!picked.ok || picked.canceled || !picked.path) return;
-+        setReplaceMidiDialog({ open: true, clipId, midiPath: picked.path });
-+    }, []);
-+
-+    const midiClipRootTrackComposeEnabled = React.useMemo(() => {
-+        if (!midiClipTrackId) return true;
-+        const rootId = resolveRootTrackId(s.tracks, midiClipTrackId);
-+        if (!rootId) return true;
-+        const rootTrack = s.tracks.find((t) => t.id === rootId);
-+        return rootTrack?.composeEnabled ?? true;
-+    }, [midiClipTrackId, s.tracks]);
-+
-+    const handleRequestEnableCompose = React.useCallback(() => {
-+        if (!midiClipTrackId) return;
-+        const rootId = resolveRootTrackId(s.tracks, midiClipTrackId);
-+        if (!rootId) return;
-+        dispatch(
-+            setTrackStateRemote({
-+                trackId: rootId,
-+                composeEnabled: true,
-+            }),
-+        );
-+    }, [dispatch, midiClipTrackId, s.tracks]);
-+
-+    const handleExportMidi = React.useCallback(
-+        async (clipIds: string[]) => {
-+            const saveResult = await coreApi.pickMidiOutputPath();
-+            if (!saveResult.ok || saveResult.canceled || !saveResult.path) return;
-+
-+            const s = sessionRef.current;
-+            const clipsMap = new Map(s.clips.map((c) => [c.id, c]));
-+            const trackMap = new Map(s.tracks.map((t) => [t.id, t]));
-+
-+            const entries: Array<{
-+                trackId: string;
-+                rootTrackId: string;
-+                name: string;
-+                startSec: number;
-+                endSec: number;
-+                clipId?: string;
-+            }> = [];
-+            const seenComposeRoots = new Set<string>();
-+
-+            for (const id of clipIds) {
-+                const clip = clipsMap.get(id);
-+                if (!clip) continue;
-+                const rootId = resolveRootTrackId(s.tracks, clip.trackId);
-+                if (!rootId) continue;
-+                const rootTrack = trackMap.get(rootId);
-+                const isComposeEnabled = rootTrack?.composeEnabled ?? false;
-+
-+                if (isComposeEnabled) {
-+                    // Compose 轨道：按 rootTrackId 去重（共享 track 级音高数据）
-+                    if (seenComposeRoots.has(rootId)) continue;
-+                    seenComposeRoots.add(rootId);
-+                }
-+
-+                const track = trackMap.get(clip.trackId);
-+                entries.push({
-+                    trackId: clip.trackId,
-+                    rootTrackId: rootId,
-+                    name: track?.name ?? clip.name,
-+                    startSec: clip.startSec,
-+                    endSec: clip.startSec + clip.lengthSec,
-+                    ...(isComposeEnabled ? {} : { clipId: clip.id }),
-+                });
-+            }
-+
-+            if (entries.length === 0) return;
-+
-+            const scaleNotes =
-+                SCALE_NOTES[(s.project?.baseScale as keyof typeof SCALE_NOTES) ?? "C"] ??
-+                SCALE_NOTES.C;
-+
-+            await paramsApi.exportPitchToMidi({
-+                outputPath: saveResult.path,
-+                tracks: entries,
-+                bpm: s.bpm,
-+                beatsPerBar: s.project?.beatsPerBar ?? 4,
-+                baseScale: s.project?.baseScale ?? "C",
-+                projectScaleNotes: scaleNotes,
-+            });
-+        },
-+        [sessionRef],
-+    );
-+
-+    // ── 3. DragDrop (Tauri + 文件浏览器) ─────────────────────
-+    const { tauriDraggedPathRef, tauriLastDropPathRef, tauriDropHandledAtRef } =
-+        useTimelineDragDrop({
-+            dispatch,
-+            viewport: viewportAccess,
-+            sessionRef,
-+            pxPerSecRef,
-+            rowHeightRef,
-+            dropPreviewRef,
-+            pendingDropDurationPathRef,
-+            beatFromClientX,
-+            snapTimeline,
-+            trackIdFromClientY: resolveTrackIdAtClientY,
-+            rowTopForTrackId,
-+            setDropPreview,
-+            ensureDropPreviewDuration,
-+            getDropPreviewWidthPx,
-+            setImportModeMenu,
-+            setProjectActionMenu,
-+            pxPerSec,
-+            rowHeight,
-+            onMidiDrop: (payload) => {
-+                onMidiDialogSourceChange("dragDrop");
-+                onMidiClipPathChange(payload.midiPath);
-+                onMidiClipStartSecChange(payload.startSec);
-+                onMidiClipTrackIdChange(payload.trackId);
-+                onMidiClipDialogOpenChange(true);
-+            },
-+        });
-+
-+    /**
-+     * 拖入几何用的水平滚动量（模式无关）。
-+     *
-+     * 内核模式下时间轴是**自绘滚动**，DOM 容器的 scrollLeft 恒为 0——真值在内核
-+     * 宿主里。旧模式仍取容器自身的 scrollLeft。
-+     *
-+     * @param el 事件目标容器（旧模式下即滚动容器）。
-+     * @returns 当前水平滚动量（CSS px）。
-+     */
-+    function dragScrollLeftOf(el: HTMLElement): number {
-+        const host = kernelHostRef.current;
-+        if (host !== null) return host.getViewport().scrollLeft;
-+        return el.scrollLeft;
-+    }
-+
-+    /** 内核 seek 的待提交位置与 rAF 句柄（拖拽期间按帧节流，松手立即提交）。 */
-+    const kernelSeekPendingRef = React.useRef<number | null>(null);
-+    const kernelSeekRafRef = React.useRef<number | null>(null);
-+
-+    /**
-+     * 内核 seek 回调：单击或拖拽空白处跳转播放头。
-+     *
-+     * 拖拽帧以 rAF 节流提交（内核按 rAF 频率回调），避免每个指针事件都打一次
-+     * 后端 seek；松手（commit）时取消待提交帧并立即提交最终位置，保证落点精确。
-+     *
-+     * 特殊说明（**必须与 seek 一起乐观写 playheadSec**）：`seekPlayhead.fulfilled`
-+     * 只在「后端返回值与请求值不同」（如被 clamp 修正）时才采纳后端值，其余情况
-+     * 依赖调用方**已经**写好 `state.playheadSec`；真实后端 `set_transport` 对
-+     * 非负请求原样回显（`playhead_sec = v.max(0.0)`），于是后端值恒等于请求值、
-+     * 采纳分支永不命中——只派发 `seekPlayhead` 时引擎动了而 store 的
-+     * `playheadSec` 纹丝不动（"点空白处播放头不跟随"的根因；播放中 30Hz 轮询
-+     * 重新锚定才让它"偶尔"生效）。此处与标尺路径
-+     * （`useTimelineState.setPlayheadFromClientX`：`setplayheadSec` + `seekPlayhead`
-+     * 成对派发）保持同一契约，两个分支都不得只派发 seek。
-+     */
-+    /**
-+     * 把请求的秒数按旧实现的「光标吸附」规则规范化（**不改状态**）。
-+     *
-+     * 所有播放头落点路径（标尺 / 轨道空白 / clip 点击）在旧实现里都汇入
-+     * `setPlayheadFromClientX`：先 `snapTimelineDetailed(…, "cursor", …)` 吸附，
-+     * 再写 `setplayheadSec` + `seekPlayhead`；`commit=true` 表示手势语境结束，
-+     * 顺带清除瞬态吸附高亮。内核原先直接写**裸**秒数——标尺路径吸附、轨道空白
-+     * 路径不吸附，同一个界面里两条 seek 行为不一致。
-+     *
-+     * @param sec 目标秒（未吸附）。
-+     * @param commit true = 提交式落点（单击 / 拖拽松手），false = 拖拽中间帧。
-+     * @returns 吸附后的秒。
-+     */
-+    const resolveKernelSeekSec = React.useCallback(
-+        (sec: number, commit: boolean): number =>
-+            snapTimelineDetailed(
-+                sec,
-+                "cursor",
-+                // 高亮只在拖拽期间发布（单击跳转完全不走高亮通道），与旧实现一致。
-+                commit ? undefined : { highlight: { sources: [] } },
-+            ).sec,
-+        [snapTimelineDetailed],
-+    );
-+
-+    /**
-+     * 纯粹的播放头落点（吸附 + 乐观写 + 高亮收口）——**不含**空白点击的
-+     * 「清空选中 / 切换轨道」语义。
-+     *
-+     * 旧实现的 clip 单击 seek（`ClipItem` / `ClipEdgeHandles` / `FadeHitLayer`
-+     * 的 `seekFromClientX`）只移动播放头；把"清空选中"混进来会让「点一下 clip
-+     * 把播放头带过去」顺带取消选中，与旧实现完全相反。
-+     *
-+     * @param sec 目标秒。
-+     * @returns 无返回值。
-+     */
-+    /* F1（用户口径）：临时菜单（浮条）上的「更多」应当展开**右键会出现的那个菜单**
-+       （`ClipContextMenu`），而不是另做一个小菜单。浮条只派发事件，这里复用已装配好的
-+       那个实例 —— 它的 40 个 props（删除/静音/重命名/复制/切割/编组/规范化/反转…）
-+       都在下面统一装配，复制一份到浮条必然漂移。 */
-     React.useEffect(() => {
+-    React.useEffect(() => {
 -        if (timelineRuntimeIsPlaying) {
 -            clearSnapHighlights();
 -        }
@@ -39942,32 +37983,7 @@ index 242997f5..c9091be2 100644
 -                    clipId: args.clipId,
 -                    snapOffsetSec: Math.min(Math.max(nextAbs - clipStart, 0), clipLen),
 -                }),
-+        const onOpenClipMenu = (e: Event) => {
-+            const d = (e as CustomEvent<{ x?: number; y?: number; clipId?: string }>).detail ?? {};
-+            const session = store.getState().session;
-+            /* ⚠️ 优先用**事件里带的 clipId**：后端 `select_clip` 命令不经过前端 thunk，
-+               所以前端 store 的 `selectedClipId` 可能仍是 null（实测就是这么"发事件没反应"）。
-+               浮条本来就知道自己那一块的 id ⇒ 直接带过来最可靠。 */
-+            const id = d.clipId ?? session.selectedClipId;
-+            /* 放宽查找：`clipId` 对不上时回退到**第一个块**。
-+               理由：用户点的是浮条上的「更多」，意图明确就是"给当前这一块开菜单"；
-+               而前后端的选中/块列表在手机上未必严格同步（后端 `select_clip` 不更新前端 store，
-+               前端也可能还没拿到新块）。只要轨道上**有块**就该让菜单出来，
-+               而不是静默什么都不发生（这正是之前"点了没反应"的观感）。 */
-+            const target =
-+                (id ? session.clips.find((c) => c.id === id) : undefined) ?? session.clips[0];
-+            /* 临时日志（G-1 定位用）：logcat -s Tauri/Console 可读。
-+               若这行不出现 ⇒ 事件没到监听；出现了但菜单仍不出 ⇒ 问题在渲染分支。 */
-+            console.log(
-+                "[g1] event clipId=",
-+                d.clipId,
-+                "selected=",
-+                session.selectedClipId,
-+                "clips=",
-+                session.clips.length,
-+                "target=",
-+                target?.id,
-             );
+-            );
 -        },
 -        [dispatch, noSnapKb, s.snapEnabled, snapTimelineDetailed],
 -    );
@@ -40878,8 +38894,7 @@ index 242997f5..c9091be2 100644
 -            sec: number;
 -        }) => {
 -            setContextMenu(null);
-+            if (!target) return;
-             setTrackAreaMenu(null);
+-            setTrackAreaMenu(null);
 -            if (args.trackId === null) return;
 -            if (args.clipIds.length > 0) {
 -                // 最上面那个（startSec 最大）作为主目标，其余作为"重叠选择"入口——
@@ -41173,11 +39188,7 @@ index 242997f5..c9091be2 100644
 -                deltaDb: -adjustedY * CLIP_GAIN_DRAG_DB_PER_PX,
 -                minDb: -12,
 -                maxDb: 12,
-+            setContextMenu({
-+                x: Math.round(d.x ?? window.innerWidth / 2),
-+                y: Math.round(d.y ?? window.innerHeight / 2),
-+                clipId: target.id,
-             });
+-            });
 -            batch(() => {
 -                for (const update of updates) dispatch(setClipGain(update));
 -            });
@@ -41396,7 +39407,7 @@ index 242997f5..c9091be2 100644
 -                shape: number;
 -                baseDir: number;
 -            };
-         };
+-        };
 -        /**
 -         * 本次手势作用的两个 clip（自动交叉淡化重算 / 清理的作用集合）。
 -         *
@@ -42303,10 +40314,8 @@ index 242997f5..c9091be2 100644
 -        }
 -        // 宿主不可用（挂载前）时不回灌：旧的原生 scroller 分支已删除——
 -        // `scrollRef` 无 JSX 挂载点，`scrollRef.current` 恒为 null。
-+        window.addEventListener("hs-open-clip-context-menu", onOpenClipMenu);
-+        return () => window.removeEventListener("hs-open-clip-context-menu", onOpenClipMenu);
-     }, []);
- 
+-    }, []);
+-
 -    const activeGroupIds = useMemo(() => {
 -        const ids = new Set<string>();
 -        for (const cid of multiSelectedClipIds) {
@@ -43515,6 +41524,1992 @@ index 242997f5..c9091be2 100644
 -        </Profiler>
 -    );
 -};
++/**
++ * TimelinePanel — Timeline 面板 UI 组件（精简后）
++ *
++ * 所有业务逻辑已拆分至 4 个 hook：
++ * - useTimelineState        → state / ref / viewport / scroll / 坐标转换
++ * - useTimelineDragDrop     → Tauri 原生拖放 + 文件浏览器面板自定义拖拽
++ * - useTimelineClipActions  → Clip 多选 + 操作回调
++ * - useTimelineEventHandlers→ 全局事件监听
++ *
++ * 此文件只保留：JSX 渲染 + 胶水 + 拖拽 hooks 桥接
++ *
++ * 【播放头桥接】`TimelineTransportBridge` 逐帧写标尺播放头（React 声明式元素），
++ * 并调用 `kernelHostRef.invalidatePlayhead()` 请求内核重绘**轨道区**播放头——
++ * 后者只在宿主 `draw()` 内被写，而内核渲染循环是纯脏标记驱动的，镜像变化不会
++ * 自动标脏（不请求就永不重绘）。
++ *
++ * 【渲染路径】轨道区**恒由** `TimelineKernelView`（WebGL2 渲染内核）承载。
++ * 旧实现（原生滚动 + Canvas2D 的 `TimelineScrollArea` / `TimelineSurface` /
++ * `TrackLane` / `ClipItem` 等）已随"唯一路径"改造删除，此处**没有运行期二选一、
++ * 也没有可回退的第二条路径**。
++ *
++ * 【失败处理】WebGL2 不可用时内核视图回报失败（`handleKernelUnavailable`），本面板改
++ * 渲染 `KernelUnavailableNotice` —— 一个可自助排障的界面（原因 + 排查清单 + 可复制的
++ * 诊断信息）。实测 WebGL2 在纯 CPU 环境（含无 GPU）可用（ANGLE + SwiftShader），只有
++ * 显式禁止软件光栅一类配置才会失败。
++ *
++ * 【历史背景（勿删）】内核曾是 opt-in 且默认值跟随 `import.meta.env.DEV`，导致打包后
++ * **静默退回旧渲染器**（Phase 3 计划 R8）。结论是"绝不静默降级"：失败必须显式告知。
++ *
++ * @see docs/superpowers/specs/2026-09-13-timeline-single-path-design.md
++ */
++import React, { useMemo, Profiler } from "react";
++import { Flex, Dialog, Button, Text } from "@radix-ui/themes";
++import { useI18n } from "../../i18n/I18nProvider";
++import { useAppTheme } from "../../theme/AppThemeProvider";
++import { useAppSelector } from "../../app/hooks";
++import { shallowEqual } from "react-redux";
++import { isModifierActive } from "../../features/keybindings/keybindingsSlice";
++import { resolveClipDragCopyMode } from "./timeline/hooks/clipDragCopyMode";
++import { copyClipsFromDrag } from "./timeline/hooks/copyClipsFromDrag";
++import {    createNewTrackForKernelDrop,
++    createTrackIdsForDrop,
++} from "./timeline/hooks/createNewTrackForDrop";
++import { resolveKernelDropTarget } from "./timeline/hooks/kernelDropCommit";
++import { normalizedTrackColorCss } from "./timeline/runtime/timelineCanvasStyle";
++import {    defaultFadeDirFor,
++    FADE_PRESETS,
++    resolveCurvatureEditBase,
++    resolveCurvePointer,
++    solveNearestCurveDir,
++} from "./timeline/reaperFade";
++import {
++    buildCrossfadeGripInfoContent,
++    buildSingleFadeInfoContent,
++    publishFadeRichTooltip,
++    type FadeLabelLookup,
++    type FadeLengthFormatContext,
++} from "./timeline/fadeTooltipText";
++import { effectiveFadeSec } from "./timeline/kernel/interaction/fadeTargets";
++import type { ClipHitRegion } from "./timeline/kernel/interaction/hitTest";
++import type { ClipHeaderControl } from "./timeline/kernel/interaction/clipHeaderControls";
++import { planSeekGesture, type SeekGesturePhase } from "./timeline/kernel/interaction/seekGesture";
++import { FadeContextMenuHost } from "./timeline/FadeContextMenuHost";
++import {
++    requestOpenFadeContextMenu,
++    type FadeContextMenuRequest,
++} from "./timeline/fadeContextMenuBus";
++import { createPortal } from "react-dom";
++import {
++    addTrackRemote,
++    closeClipFormantToolWindow,
++    openClipFormantToolWindow,
++    duplicateTrackRemote,
++    removeTrackRemote,
++    selectTrackRemote,
++    setClipFormantToolWindowPosition,
++    setTrackStateRemote,
++    seekPlayhead,
++    moveTrackRemote,
++    setClipMuted,
++    importAudioAtPosition,
++    importAudioFileAtPosition,
++    importMidiAsClip,
++    replaceMidiClipDataRemote,
++    importMultipleAudioAtPosition,
++    setClipStateRemote,
++    setClipsStateBulkRemote,
++    setClipFades,
++    setClipGain,
++    setClipPlaybackRate,
++    setClipActiveTakeRemote,
++    glueClipsRemote,
++    convertClipsToPitchReferenceRemote,
++    updatePitchReferenceRemote,
++    removeClipsRemote,
++    closeTrackGapsRemote,
++    persistUiSettings,
++    setPrimaryTimeUnit,
++    setSecondaryTimeUnit,
++    setTempoMap,
++    setTrackName,
++    setTrackVolume,
++    setPendingPlayheadReveal,
++    setplayheadSec,
++    moveClipStart,
++    moveClipTrack,
++    checkpointHistory,
++    bumpParamsEpoch,
++    setClipLength,
++    setClipSourceRange,
++    setClipSnapOffset,
++    setClipAutoFades,
++    selectClipRemote,
++    beginInteraction,
++    endInteraction,
++    playOriginal,
++    stopAudioPlayback,
++    showMobilePanel,
++} from "../../features/session/sessionSlice";
++import { beginSnapGesture, endSnapGesture } from "../../utils/timelineSnapping";
++import { batch } from "react-redux";
++import { moveClipRemote, moveClipsRemote } from "../../features/session/thunks/timelineThunks";
++import { computeTimelineRectSelection } from "./timeline/useTimelineSelectionRect";
++import { setTempoMapRemote } from "../../features/session/thunks/tempoMapThunks";
++
++import { NEW_TRACK_SENTINEL } from "./timeline/hooks/useClipDrag";
++import { getBulkEditableClipIds } from "./timeline/hooks/bulkClipEdit";
++import { registerDragAbort } from "./timeline/gestureFocusGuard";
++import { getInsertBelowTargetIndex } from "./timeline/trackContextMenuPlacement";
++import { collectFadeContextClips } from "./timeline/clipFadeContext";
++import { emitExternalFileAction } from "../../features/session/projectOpenEvents";
++import { webApi } from "../../services/webviewApi";
++import { useClipPitchDrag } from "./timeline/hooks/useClipPitchDrag";
++import { AppTooltipBubble } from "../AppTooltip";
++import { formatPitchDragCents } from "./timeline/clipPitchDrag";
++import { coreApi } from "../../services/api/core";
++import { paramsApi } from "../../services/api/params";
++import { resolveRootTrackId } from "../../features/session/trackUtils";
++import { SCALE_NOTES } from "../../utils/musicalScales";
++import { QuickClipExportDialog } from "./QuickClipExportDialog";
++import { SilenceDetectionDialog } from "./timeline/SilenceDetectionDialog";
++import { MidiTrackSelectDialog } from "./MidiTrackSelectDialog";
++
++import {
++    ClipContextMenu,
++    TrackAreaContextMenu,
++    TimeRuler,
++    TrackList,
++    detectExternalPathAction,
++    extractLocalFilePath,
++    formatCursorTime,
++    hasFileDrag,
++    isAcceptedDropFile,
++    isAcceptedDropPath,
++} from "./timeline";
++import { timeRulerHeightPx } from "./timeline/rulerHeight";
++import type { TimeFormatContext, TimeUnit, TimeUnitChoice } from "./timeline";
++import { formatEditNumber, formatGainDbValue, gainToDb } from "./timeline/math";
++import { requestResetFadeCurvature } from "./timeline/fadeContextMenuBus";
++import { parsePlaybackRateInput } from "./timeline/runtime/timelineCanvasStyle";
++import {
++    SNAP_HIGHLIGHT_GROUP,
++    buildLoopBoundaryHighlightEntry,
++    clearSnapHighlights,
++    publishSnapHighlights,
++} from "../../utils/snapHighlight";
++import {
++    loopSnapThresholdSec,
++    nearestBoundarySnapOffsetSec,
++    slipBoundaryAlignedSides,
++} from "../../utils/loopSnap";
++import type { TempoMap } from "../../utils/tempoMap";
++import { TimelineKernelView } from "./timeline/kernel/TimelineKernelView";
++import { isKernelAvailable } from "./timeline/kernel/kernelAvailability";
++import { KernelUnavailableNotice } from "./timeline/kernel/KernelUnavailableNotice";
++import type { TimelineKernelHost } from "./timeline/kernel/host/timelineKernelHost";
++/* E 组（触屏修饰键）：双指长按会点亮"虚拟 Alt"，使拖块走 slip。 */
++import {
++    setTouchModifiers,
++    clearTouchModifiers,
++} from "./timeline/kernel/host/timelineKernelHost";
++
++import type { ScaleLike } from "../../utils/musicalScales";
++import { TimelineDisplaySettingsDialog } from "./TimelineDisplaySettingsDialog";
++import { resolveTimelineScrollRange } from "./timeline/runtime/timelineScrollRange";
++
++// ── 拆分出的 hooks ──────────────────────────────────────────
++import { useTimelineState } from "./timeline/hooks/useTimelineState";
++import { useTimelineDragDrop } from "./timeline/hooks/useTimelineDragDrop";
++import {
++    createTimelineViewportAccess,
++    type TimelineViewportAccess,
++} from "./timeline/hooks/timelineViewportAccess";
++import {
++    applyKernelEditDelta,
++    resolveKernelEditParticipants,
++    type KernelEditParticipant,
++} from "./timeline/hooks/kernelEditSet";
++// 拖拽起手的陈旧选区收敛判定（纯函数，见该模块文件头）。
++import { shouldCollapseStaleSelectionOnDrag } from "./timeline/kernel/interaction/primeSelection";
++import {
++    applyRippleFollowerShift,
++    buildRippleFollowers,
++    type RippleFollowerMap,
++} from "../../features/session/ripplePreview";
++import {
++    applyAutoCrossfade,
++    applyDetachedAutoCrossfadeClears,
++    computeInitialCrossfadeSides,
++    previewAutoCrossfade,
++} from "./timeline/hooks/autoCrossfade";
++import { computeEffectiveSnap } from "../../utils/timelineSnapping";
++import { store } from "../../app/store";
++import { applyBulkFadeValue, applyBulkGainDeltaDb } from "./timeline/hooks/bulkClipEdit";
++import { advanceFineAxisDrag, type FineAxisDragState } from "./timeline/fineAxisDrag";
++import { CLIP_GAIN_DRAG_DB_PER_PX } from "./timeline/constants";
++import { isLegacyMouseEventFromStylus } from "../../utils/penInput";
++import {
++    buildStretchGroupState,
++    computeClipStretch,
++    computeRegionRightEdgeDelta,
++    computeStretchGroupUpdate,
++    scaleSnapOffsetForStretch,
++    type StretchGroupState,
++} from "./timeline/hooks/stretchGroup";
++import {
++    stretchLinkedParams,
++    stretchTrackLinkedParams,
++    type StretchRangeMapping,
++} from "./timeline/hooks/stretchParams";
++import { computeSlipWindow, readSlipClip, toBoundarySnapClip } from "./timeline/hooks/slipWindow";
++import { IS_ANDROID } from "../../utils/platform";
++import { TwoFingerGestureController, suppressTwoFingerScroll, type GestureViewport } from "./touchGesture";
++import {
++    computeCrossfadeGrip,
++    type CrossfadeGripClipBase,
++} from "./timeline/hooks/crossfadeGripWindow";
++import { useTimelineClipActions } from "./timeline/hooks/useTimelineClipActions";
++import { useTimelineEventHandlers } from "./timeline/hooks/useTimelineEventHandlers";
++import { expandClipIdsWithGroups } from "./timeline/hooks/useGroupExpansion";
++import { useVisualPlayhead } from "../../hooks/useVisualPlayhead";
++import { useDebouncedPersist } from "../../hooks/useDebouncedPersist";
++import { ClipRateEditorDialog } from "./timeline/ClipRateEditorDialog";
++import {
++    computeAutoFollowScrollLeft,
++    computeFocusCursorScrollLeft,
++} from "../../utils/autoFollowScroll";
++import { readDevicePixelRatio, snapToDevicePx } from "../../utils/devicePixelLine";
++import { resolveQuickExportClipIds } from "./timeline/quickExportSelection";
++import { isMirrorEcho } from "./timeline/scrollEcho";
++import {
++    activeClipTakeName,
++    clipDisplayName,
++    type ClipFormantMorph,
++} from "../../features/session/sessionTypes";
++import { ClipFormantToolWindow } from "./timeline/clip/ClipFormantToolWindow";
++import { dispatchClipEdgeLongPressHint } from "../mobile/ClipEdgeLongPressHint";
++
++const TimelineTransportBridge = React.memo(function TimelineTransportBridge(props: {
++    pxPerSecRef: React.MutableRefObject<number>;
++    rulerPlayheadLineRef: React.MutableRefObject<HTMLDivElement | null>;
++    rulerPlayheadHeadRef: React.MutableRefObject<HTMLDivElement | null>;
++    /**
++     * 模式无关的视口访问器。
++     *
++     * 自动滚屏与播放头定位都需要「视口宽度 + 当前横向滚动量」，内核模式下这些
++     * 量由 `ScrollKernel` 持有（DOM 容器的 scrollLeft 恒为 0），因此不能再直接读
++     * 原生 scroller。
++     */
++    viewport: TimelineViewportAccess;
++    /** 接收每帧视觉插值播放头（秒），供缩放锚点等命令式读取（与绘制同源）。 */
++    visualPlayheadRef: React.MutableRefObject<number>;
++    syncScrollLeft: (next: number) => void;
++    autoScrollEnabled: boolean;
++    projectSec: number;
++    /** 请求时间轴内核重绘播放头（见 kernelHost.invalidatePlayhead 的说明）。 */
++    requestPlayheadRepaint: () => void;
++}) {
++    const {
++        pxPerSecRef,
++        rulerPlayheadLineRef,
++        rulerPlayheadHeadRef,
++        viewport,
++        visualPlayheadRef,
++        syncScrollLeft,
++        autoScrollEnabled,
++        projectSec,
++        requestPlayheadRepaint,
++    } = props;
++    const transport = useAppSelector(
++        (state) => ({
++            playheadSec: state.session.playheadSec,
++            playheadSampledAtMs: state.session.playheadSampledAtMs,
++            isPlaying: state.session.runtime.isPlaying,
++            playbackWaitingForRender: state.session.runtime.playbackWaitingForRender,
++            playbackPositionSec: state.session.runtime.playbackPositionSec,
++        }),
++        // 无 shallowEqual 时每次 dispatch 都产生新对象引用，
++        // 该桥接组件会在任意 store 更新（含 33Hz 播放轮询）时重渲染。
++        shallowEqual,
++    );
++
++    // 原地等待渲染（位置冻结）期间不得推进视觉插值：否则 RAF 会以 1x 从
++    // 冻结前锚点持续外推整个等待时长，恢复采样到达时光标大幅回跳
++    // （往复跳动的根源）。positionSec 条件是等待标志缺省时的兼容兜底。
++    const isTransportAdvancing =
++        transport.isPlaying &&
++        !transport.playbackWaitingForRender &&
++        transport.playbackPositionSec > 1e-4;
++
++    useVisualPlayhead({
++        syncedPlayheadSec: transport.playheadSec,
++        syncedAtMs: transport.playheadSampledAtMs,
++        isTransportAdvancing,
++        onFrame: React.useCallback(
++            (visualPlayheadSec: number) => {
++                // 同步共享 ref：缩放锚点（以播放头为锚时的锚点解析）读取的必须是
++                // 与绘制同源的插值播放头，否则播放中缩放会以滞后的 store 值锚定
++                // 造成跳变。内核宿主也经 `playheadSec` getter 读同一份真值
++                // （见 `timelineKernelHost.readPlayheadSec`）。
++                visualPlayheadRef.current = visualPlayheadSec;
++                const playheadLeftPx = visualPlayheadSec * pxPerSecRef.current;
++
++                // 自动滚动先行：syncScrollLeft 内部会用 Redux 同步播放头（滞后于
++                // 视觉插值）重写播放头位置 —— 若先定位播放头再滚动，播放头每帧
++                // 会在"视觉位置"与"同步位置"之间跳动（自动滚屏抽搐的根因）。
++                // 滚动先行、播放头定位收尾，最终写入获胜。
++                if (autoScrollEnabled && transport.isPlaying) {
++                    const next = computeAutoFollowScrollLeft({
++                        playheadSec: visualPlayheadSec,
++                        pxPerSec: pxPerSecRef.current,
++                        viewportWidth: viewport.getViewportWidth(),
++                        contentWidth: projectSec * pxPerSecRef.current,
++                    });
++                    if (Math.abs(viewport.getScrollLeft() - next) > 0.5) {
++                        // 写后回读实际生效值再广播：跟随滚动接近工程右端时请求值
++                        // 可能被载体钳制，跟随视口的图层必须与真实视口同源。
++                        syncScrollLeft(viewport.setScrollLeft(next));
++                    }
++                }
++
++                // 标尺播放头定位（在自动滚动之后，用最新的视觉插值位置）。
++                // 写入前吸附到设备像素边界（readDevicePixelRatio 每帧现读，
++                // 浏览器缩放/跨屏后下一帧自愈）：分数 DPR 下不吸附的落点相位
++                // 随播放连续变化，1/2 物理像素交替 —— 即"播放时粗细不一"。
++                // 轨道区播放头不在这里写：它由内核在 draw() 内自绘（见下方重绘请求）。
++                const dpr = readDevicePixelRatio();
++                if (rulerPlayheadLineRef.current) {
++                    rulerPlayheadLineRef.current.style.left = `${snapToDevicePx(playheadLeftPx, dpr)}px`;
++                }
++                if (rulerPlayheadHeadRef.current) {
++                    rulerPlayheadHeadRef.current.style.left = `${snapToDevicePx(playheadLeftPx, dpr)}px`;
++                }
++
++                // 请求内核重绘轨道区播放头。
++                //
++                // 【为什么必须显式请求】内核的渲染循环是纯脏标记驱动的
++                // （`renderKernel/renderLoop`：`start()` 不绘制、无常驻 rAF），而
++                // 轨道区播放头元素**只在 `draw()` 内被写**。播放头位置经数据镜像
++                // 流入内核，镜像变化本身不会标脏——不请求就永远不重绘：点标尺
++                // seek 后标尺播放头（React 声明式）动了，网格上的播放头却冻结在
++                // 旧位置（缺陷 #2 的根因）。自动滚屏开着时之所以看不到，是因为它
++                // 每帧写 scrollLeft 触发滚动订阅顺带标脏；而它默认关闭。
++                requestPlayheadRepaint();
++            },
++            [
++                autoScrollEnabled,
++                pxPerSecRef,
++                rulerPlayheadHeadRef,
++                rulerPlayheadLineRef,
++                viewport,
++                syncScrollLeft,
++                transport.isPlaying,
++                projectSec,
++                visualPlayheadRef,
++                requestPlayheadRepaint,
++            ],
++        ),
++    });
++
++    return null;
++});
++
++interface TimelinePanelProps {
++    midiClipDialogOpen: boolean;
++    midiClipPath: string | null;
++    midiClipStartSec: number;
++    midiClipTrackId: string | null;
++    fillGaps: boolean;
++    multiTrackMerge: boolean;
++    importBpmAsProject: boolean;
++    noteBpmMode: string;
++    specifiedBpm: number;
++    onMidiClipDialogOpenChange: (open: boolean) => void;
++    onMidiClipPathChange: (path: string | null) => void;
++    onMidiClipStartSecChange: (sec: number) => void;
++    onMidiClipTrackIdChange: (trackId: string | null) => void;
++    onFillGapsChange: (v: boolean) => void;
++    onMultiTrackMergeChange: (v: boolean) => void;
++    onImportBpmAsProjectChange: (v: boolean) => void;
++    onNoteBpmModeChange: (v: string) => void;
++    onSpecifiedBpmChange: (v: number) => void;
++    midiClipClipboardGuid?: string | null;
++    importPosition: string;
++    onImportPositionChange: (position: string) => void;
++    closeLeadingGap: boolean;
++    onCloseLeadingGapChange: (v: boolean) => void;
++    midiDialogSource: "menu" | "dragDrop";
++    onMidiDialogSourceChange: (v: "menu" | "dragDrop") => void;
++    importTargetMenu?: string;
++    onImportTargetMenuChange?: (v: string) => void;
++    importTargetDragDrop?: string;
++    onImportTargetDragDropChange?: (v: string) => void;
++    importTempoMapEnabled?: boolean;
++    onImportTempoMapEnabledChange?: (v: boolean) => void;
++    importTempoMapTempo?: boolean;
++    onImportTempoMapTempoChange?: (v: boolean) => void;
++    importTempoMapTimeSignature?: boolean;
++    onImportTempoMapTimeSignatureChange?: (v: boolean) => void;
++    importTempoMapKeySignature?: boolean;
++    onImportTempoMapKeySignatureChange?: (v: boolean) => void;
++}
++
++export const TimelinePanel: React.FC<TimelinePanelProps> = ({
++    midiClipDialogOpen,
++    midiClipPath,
++    midiClipStartSec,
++    midiClipTrackId,
++    fillGaps,
++    multiTrackMerge,
++    importBpmAsProject,
++    noteBpmMode,
++    specifiedBpm,
++    onMidiClipDialogOpenChange,
++    onMidiClipPathChange,
++    onMidiClipStartSecChange,
++    onMidiClipTrackIdChange,
++    onFillGapsChange,
++    onMultiTrackMergeChange,
++    onImportBpmAsProjectChange,
++    onNoteBpmModeChange,
++    onSpecifiedBpmChange,
++    midiClipClipboardGuid,
++    importPosition,
++    onImportPositionChange,
++    closeLeadingGap,
++    onCloseLeadingGapChange,
++    midiDialogSource,
++    onMidiDialogSourceChange,
++    importTargetMenu,
++    onImportTargetMenuChange,
++    importTargetDragDrop,
++    onImportTargetDragDropChange,
++    importTempoMapEnabled,
++    onImportTempoMapEnabledChange,
++    importTempoMapTempo,
++    onImportTempoMapTempoChange,
++    importTempoMapTimeSignature,
++    onImportTempoMapTimeSignatureChange,
++    importTempoMapKeySignature,
++    onImportTempoMapKeySignatureChange,
++}) => {
++    const importTarget = midiDialogSource === "dragDrop" ? importTargetDragDrop : importTargetMenu;
++    const onImportTargetChange =
++        midiDialogSource === "dragDrop" ? onImportTargetDragDropChange : onImportTargetMenuChange;
++    const { t } = useI18n();
++    const tAny = t as (key: string) => string;
++    const ignoreGrouping = useAppSelector((state) => state.session.ignoreGrouping);
++    const disabledGroupIds = useAppSelector((state) => state.session.disabledGroupIds);
++    /**
++     * 静音检测预览区段（内核模式用）。
++     *
++     * 由静音检测对话框实时写入；内核把它画成半透明红色覆盖层。`TimelineSessionSlice`
++     * 不含该字段，因此在这里单独选择（与旧实现 `ClipItem` 的取值方式一致）。
++     */
++    const silencePreviewSegments = useAppSelector((state) => state.session.silencePreviewSegments);
++    // 时间轴 scroller 水平滚动条的占用高度（offsetHeight - clientHeight）。
++    // 轨道头底部按此留出同高占位（bottomGutterHeightPx），保证轨道头与
++    // 时间轴区域的竖直滚动范围严格一致。
++    const [horizontalScrollbarGutterPx, setHorizontalScrollbarGutterPx] = React.useState(0);
++    // 【已删除：timelineViewportHeightPx】它只为旧实现的 `TimelineSurface` 的
++    // `playheadHeightPx` 供数（把播放光标延伸到时间轴可视区底部）。内核路径的
++    // 播放头是内核容器（视口元素）的直接子节点、恒 `top-0 bottom-0`，高度天然
++    // 等于可视区高度，无需测量——留着这个 state 只会是永不读取的死状态。
++    const [quickExportDialog, setQuickExportDialog] = React.useState<{
++        open: boolean;
++        clipIds: string[];
++    }>({ open: false, clipIds: [] });
++    const [silenceDialogIds, setSilenceDialogIds] = React.useState<string[] | null>(null);
++
++    const [replaceMidiDialog, setReplaceMidiDialog] = React.useState<{
++        open: boolean;
++        clipId: string | null;
++        midiPath: string | null;
++    }>({ open: false, clipId: null, midiPath: null });
++    const [timeDisplaySettingsOpen, setTimeDisplaySettingsOpen] = React.useState(false);
++
++    // 文件浏览器拖入 HiFiShifter 工程（hshp/hsp）时的「打开工程 / 导入工程」菜单。
++    const [projectActionMenu, setProjectActionMenu] = React.useState<{
++        x: number;
++        y: number;
++        path: string;
++    } | null>(null);
++
++    // ── 1. State / refs / viewport / scroll / 坐标转换 ──────
++    /**
++     * 内核宿主句柄（仅内核模式下非空）。
++     *
++     * 用途：把「轨道头滚动」这类外部意图转发给内核（`setScrollTop`），以及让
++     * 标尺点击 seek / 拖入落点 / 参数编辑器同步等需要「当前视口」的逻辑在两种
++     * 模式下共用一份取值。
++     *
++     * 特殊说明：必须在 `useTimelineState()` **之前**声明——该 hook 需要它来
++     * 落地「参数编辑器视图同步」（内核模式没有原生 scroller 可写）。
++     */
++    const kernelHostRef = React.useRef<TimelineKernelHost | null>(null);
++
++    /**
++     * 内核运行期失败的原因（`null` = 未失败）。
++     *
++     * 【为什么需要】WebGL2 不可用（老驱动 / 远程桌面 / GPU 黑名单 / 上下文数超限）
++     * 是预期内的环境差异。内核是**唯一**渲染路径，没有回退可走，因此必须让用户能
++     * 自助排障——失败界面（`KernelUnavailableNotice`）要展示具体原因。
++     *
++     * 【为什么用 state 而不是 ref】它决定渲染内核还是失败界面，必须触发重渲染。
++     *
++     * 【为什么置位后不再尝试】失败原因（无 GL）在会话内不会自愈，而每次重渲染都重挂
++     * 一次内核会反复失败并刷日志。要恢复只需刷新页面。
++     */
++    const [kernelUnavailableReason, setKernelUnavailableReason] = React.useState<string | null>(
++        null,
++    );
++
++    /**
++     * `TimelineKernelView` 回报内核不可用：记录原因并告警。
++     *
++     * 流程：记录原因（触发重渲染，切到失败界面）→ 控制台告警（带原因，供诊断）。
++     *
++     * 特殊说明 1：**没有回退**。旧实现（原生滚动 + Canvas2D）已随阶段 2/3 删除，
++     * 因此这里不会、也无法切回任何第二套渲染实现；唯一出路是失败界面 + 重启。
++     *
++     * 特殊说明 2：用 `useCallback` 保持引用稳定——它经 props 传给内核视图，而视图把
++     * 它放进「回调镜像」ref；引用抖动虽不会重建宿主，但稳定引用更省心。
++     *
++     * @param reason 失败原因（来自内核创建的 catch）。
++     */
++    const handleKernelUnavailable = React.useCallback((reason: string) => {
++        console.warn(`[TimelinePanel] 时间轴内核不可用（${reason}），当前没有回退渲染路径`);
++        setKernelUnavailableReason(reason);
++    }, []);
++
++    /**
++     * 「clip 左键按下拦截」句柄（内核在启动自己的手势之前调用）。
++     *
++     * 【为什么用 ref 中转】拦截需要复用旧实现的 `useClipPitchDrag`（它在面板里
++     * 于渲染流程的**后段**才实例化），而内核交互对象在**前段**构建。用 ref 中转
++     * 既避免把 hook 调用提前（改动面大），也不产生 TDZ。
++     *
++     * @returns true = 面板已接管，内核不得再启动自己的手势。
++     */
++    const kernelClipInterceptRef = React.useRef<
++        | ((args: {
++              clipId: string;
++              clientX: number;
++              clientY: number;
++              pointerId: number;
++              modifiers: { ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean };
++              container: HTMLElement;
++          }) => boolean)
++        | null
++    >(null);
++    const state = useTimelineState({ kernelHostRef });
++    // 视觉插值播放头的共享读取点：bridge 的 onFrame 每帧写入（与绘制同源），
++    // 缩放锚点与内核宿主（经 `playheadSec` getter）读取同一值——播放中缩放不得
++    // 以 33Hz 轮询的 store 滞后值锚定，否则播放头会跳变 δ·Δpx（δ = 轮询间隔内的
++    // 插值领先量）。
++    const visualPlayheadSecRef = React.useRef(0);
++    const getVisualPlayheadSec = React.useCallback(() => visualPlayheadSecRef.current, []);
++    /**
++     * 请求时间轴内核重绘播放头。
++     *
++     * 【为什么走 hostRef 而不是 React state】播放头每帧都可能移动，走 React 会
++     * 把 60fps 的更新灌进渲染；这里只做一次命令式标脏。
++     *
++     * 特殊说明：**不是** `invalidateScene()`——那个会置 `sceneDirty` 并在下一帧
++     * 重建全部 GPU 几何，播放中每帧重建等于自毁性能（见宿主接口说明）。
++     */
++    const handleRequestPlayheadRepaint = React.useCallback(() => {
++        kernelHostRef.current?.invalidatePlayhead();
++    }, []);
++    // 面板卸载时清空吸附竖线高亮（拖拽手势异常中断的兜底）。
++    React.useEffect(() => {
++        return () => {
++            clearSnapHighlights();
++        };
++    }, []);
++
++    // 安卓触控手势层：双指缩放/平移 → 内核视口（仅 Android；桌面零改动，ADR-005 / docs/08）。
++    // 宿主子组件（TimelineKernelView）的 effect 先于本面板 effect 运行，故此处 kernelHostRef
++    // 已就绪；为稳妥仍做一次 rAF 重试兜底。
++    // 拍数栏触摸 seek 的落点函数（由 `setPlayheadFromClientX` 填，见下方那个 effect）。
++    const rulerSeekRef = React.useRef<
++        ((clientX: number, bounds: DOMRect, scrollLeft: number, commit: boolean) => void) | null
++    >(null);
++    React.useEffect(() => {
++        if (!IS_ANDROID) return;
++        const dbg = window as unknown as { __hsViewport?: () => unknown };
++        let raf = 0;
++        const tryAttach = () => {
++            const host = kernelHostRef.current;
++            if (host === null) {
++                raf = requestAnimationFrame(tryAttach);
++                return;
++            }
++            const container = host.getContainer();
++            const viewport: GestureViewport = {
++                get() {
++                    const v = host.getViewport();
++                    return {
++                        scrollLeft: v.scrollLeft,
++                        scrollTop: v.scrollTop,
++                        pxPerSec: v.pxPerSec,
++                        rowHeight: host.getRowHeight(),
++                    };
++                },
++                getPxPerSecBounds() {
++                    return host.getPxPerSecBounds();
++                },
++                getRowHeightBounds() {
++                    return host.getRowHeightBounds();
++                },
++                setHorizontal(pxPerSec, scrollLeft) {
++                    host.setViewport({ pxPerSec, scrollLeft });
++                },
++                setVertical(rowHeight, scrollTop) {
++                    host.setRowHeightAndScrollTop(rowHeight, scrollTop);
++                },
++                reclamp() {
++                    host.reclamp();
++                },
++            };
++            const controller = new TwoFingerGestureController(container, viewport, {
++                deadZonePx: 16,
++                axisLockPx: 24,
++                cooldownMs: 150,
++            });
++            controller.attach();
++            // 轴向受限表面（用户口径）：
++            //   · 拍数栏 → 只能横向（缩放 pxPerSec / 平移时间轴）
++            //   · 轨道列 → 只能纵向（缩放 rowHeight / 平移轨道）
++            // 这两块是**窄条**，另一轴在其上既没有对应内容也没意义；不挂的话
++            // 它们连"双指会话"都进不去（此前只挂了滚动容器）⇒ 用户实测
++            // 「拍数栏无法横向缩放、轨道列无法纵向缩放」。
++            // 挂点与参数面板同一约定：拍数栏挂**整行根节点**（内容层 `absolute
++            // inset-0` 之外还有 tempo 标签等兄弟浮层，挂内容层会收不到事件）。
++            /**
++             * 拍数栏「点一下就移动播放红线」（用户口径）。
++             *
++             * 既有的 seek 走 `TimeRuler` 的 `onMouseDown`，而它第一行就是
++             * `if (isLegacyMouseEventFromStylus()) return;` —— 该函数对 **touch 也返回 true**
++             * （见 `utils/penInput.ts`），所以手机上点/拖拍数栏**完全没有反应**。
++             * 这里补一条**指针事件**路径：
++             *   · 单指按下即定位（commit）；拖动期间预览，抬手再提交一次；
++             *   · 鼠标不接管（仍走原路径，桌面语义不变）；
++             *   · 第二指落下（双指缩放/平移）时立刻让位，不抢事件。
++             */
++            const bindRulerTouchSeek = (el: HTMLElement): (() => void) => {
++                const gestureActive = (): boolean =>
++                    Boolean((window as unknown as { __hsGestureActive?: boolean }).__hsGestureActive);
++                let activeId: number | null = null;
++                /**
++                 * 🔴 2026-09-22 用户报「轨道界面的单指拖拍数栏平移位置没了」。
++                 *
++                 * 原实现**按下即 seek、拖动全程 seek**（`onDown` 就 commit 一次，`onMove`
++                 * 继续 commit）—— 于是单指在拍数栏上一划，动作全被"拖播放红线"吃掉了，
++                 * 视口平移根本没机会发生。
++                 *
++                 * 用户口径是**按意图分派**：
++                 *   · 点一下（没超过阈值）→ 拖时间线（seek）
++                 *   · 横向划动（超过阈值）→ 平移视口（scrollLeft）
++                 * 所以这里改成"**先不决定，等位移说话**"：抬手时仍没超过阈值才算点击。
++                 * 阈值取 8px（比手势层的 16px 死区小，拍数栏上"点"的手感更接近原版；
++                 * 又不能是 0，否则手指的微小抖动会把点击误判成划动）。
++                 */
++                const PAN_THRESHOLD = 8;
++                let mode: "undecided" | "pan" = "undecided";
++                let startX = 0;
++                let startScrollLeft = 0;
++                /* 自实现的双击判定（拍数栏「双击 = 移动进度条并开始播放」）：
++                   320ms 与 40px 是 Android 系统的典型双击间隔/容差量级。 */
++                const DBL_TAP_MS = 320;
++                const DBL_TAP_SLOP = 40;
++                let lastTapAt = 0;
++                let lastTapX = 0;
++                const seekAt = (clientX: number, commit: boolean): void => {
++                    const fn = rulerSeekRef.current;
++                    const host = kernelHostRef.current;
++                    if (!fn || !host) return;
++                    fn(clientX, el.getBoundingClientRect(), host.getViewport().scrollLeft, commit);
++                };
++                const onDown = (e: PointerEvent) => {
++                    // 只认单指；鼠标/笔走既有路径。
++                    if (e.pointerType === "mouse") return;
++                    if (!e.isPrimary || activeId !== null || gestureActive()) return;
++                    activeId = e.pointerId;
++                    mode = "undecided";
++                    startX = e.clientX;
++                    startScrollLeft = kernelHostRef.current?.getViewport().scrollLeft ?? 0;
++                    try {
++                        el.setPointerCapture(e.pointerId);
++                    } catch {
++                        /* capture 可能失败，忽略即可 */
++                    }
++                    // 吃掉这次触摸的兼容鼠标事件，避免与 onMouseDown 路径重复提交。
++                    // 注意这里**不再 seek** —— 见上面「按意图分派」。
++                    e.preventDefault();
++                };
++                const onMove = (e: PointerEvent) => {
++                    if (e.pointerId !== activeId) return;
++                    if (gestureActive()) {
++                        // 第二指落下 → 整段让给控制器。
++                        activeId = null;
++                        mode = "undecided";
++                        return;
++                    }
++                    const dx = e.clientX - startX;
++                    if (mode === "undecided") {
++                        if (Math.abs(dx) < PAN_THRESHOLD) return; // 还没判定，先什么都不做
++                        mode = "pan";
++                    }
++                    e.preventDefault();
++                    // 平移量 = 手指位移的反向（内容跟着手指走），钳制交给 ScrollKernel。
++                    kernelHostRef.current?.setScrollLeft(startScrollLeft - dx);
++                };
++                const onUp = (e: PointerEvent) => {
++                    if (e.pointerId !== activeId) return;
++                    activeId = null;
++                    if (mode === "undecided") {
++                        /* 规格（docs/15 拍数栏-双击）：**移动进度条并开始播放**。
++                           ⚠️ 不能只靠 `dblclick` —— 那是**浏览器原生手势识别**的产物，
++                           而这条触摸路径是自己收 pointer 事件的；真机上双击间隔稍长
++                           就退化成两次单击（= 只 seek、不起播）。
++                           ⇒ 自己按「两次轻点 + 时间/位移阈值」判定双击，不依赖浏览器。 */
++                        const now = performance.now();
++                        const isDoubleTap =
++                            now - lastTapAt < DBL_TAP_MS && Math.abs(e.clientX - lastTapX) < DBL_TAP_SLOP;
++                        lastTapAt = now;
++                        lastTapX = e.clientX;
++                        if (isDoubleTap) {
++                            lastTapAt = 0; // 避免三击被当成第二次双击
++                            seekAt(e.clientX, true);
++                            if (!store.getState().session.runtime.isPlaying) {
++                                void dispatch(playOriginal());
++                            }
++                            mode = "undecided";
++                            return;
++                        }
++                        // 没超过阈值 = 单击 ⇒ 拖时间线。
++                        /* #32 / E20：**播放中单击拍数栏：先暂停、再跳转**。
++                           用户口径（E20）：「播放时单击拍数栏**先暂停后跳转**，否则会跳转回暂停处」。
++                           ⚠️ 关键在**顺序要等落地**：`stopAudioPlayback()` 是异步 thunk，
++                           它的 fulfilled reducer 会把引擎的播放位置写回 `playheadSec` ——
++                           如果先 seek 再去停，那一拍的回写就把刚设好的位置**覆盖**回暂停处
++                           （用户看到的正是"跳转回暂停处"）。⇒ 用 `.finally()` 等停止完成后再 seek。
++                           双击路径不在此列：双击要"跳过去并开始播放"，不能被停掉。 */
++                        const doSeek = () => seekAt(e.clientX, true);
++                        if (store.getState().session.runtime.isPlaying) {
++                            void dispatch(stopAudioPlayback()).finally(doSeek);
++                        } else {
++                            doSeek();
++                        }
++                    }
++                    mode = "undecided";
++                };
++                const onCancel = (e: PointerEvent) => {
++                    if (e.pointerId !== activeId) return;
++                    activeId = null;
++                    mode = "undecided";
++                };
++                el.addEventListener("pointerdown", onDown);
++                el.addEventListener("pointermove", onMove);
++                el.addEventListener("pointerup", onUp);
++                el.addEventListener("pointercancel", onCancel);
++                return () => {
++                    el.removeEventListener("pointerdown", onDown);
++                    el.removeEventListener("pointermove", onMove);
++                    el.removeEventListener("pointerup", onUp);
++                    el.removeEventListener("pointercancel", onCancel);
++                };
++            };
++            const offs: Array<() => void> = [];
++            const attachAxisSurfaces = (): boolean => {
++                const rulerContent = rulerContentRef.current;
++                const rulerEl = rulerContent?.parentElement ?? rulerContent;
++                const trackListEl = trackListScrollRef.current;
++                if (!rulerEl || !trackListEl) return false;
++                // 拍数栏自己不滚动（内容靠内核 transform 驱动）⇒ 直接禁掉浏览器手势，
++                // 双指缩放/平移才能稳定收到事件。它同时承担「点一下移动播放红线」，
++                // 那条路径是 pointer 事件 + preventDefault，不受影响。
++                rulerEl.style.touchAction = "none";
++                offs.push(controller.attachSurface(rulerEl, "x"));
++                // 轨道列**本身是原生竖向滚动容器**：不能设 touch-action:none（会丢掉
++                // 「单指滚轨道」）。改为只压制双指的默认行为，单指滚动照旧。
++                offs.push(controller.attachSurface(trackListEl, "y"));
++                offs.push(suppressTwoFingerScroll(trackListEl));
++                offs.push(bindRulerTouchSeek(rulerEl));
++
++                /* E 组：拍数栏**双击 = 移动进度条并开始播放**（与参数编辑器同一口径）。
++                   单击的 seek 由 `bindRulerTouchSeek` 负责，这里只补起播 ——
++                   且**仅在未播放时**，免得双击把正在播放的曲子停掉。 */
++                const onRulerDblClick = () => {
++                    const st = store.getState().session;
++                    if (!st.runtime.isPlaying) void dispatch(playOriginal());
++                };
++                rulerEl.addEventListener("dblclick", onRulerDblClick);
++                offs.push(() => rulerEl.removeEventListener("dblclick", onRulerDblClick));
++
++                /* E 组（轨道列）：**双击轨道 = 展开编辑区**（手机语义）。
++                   内核的双击分支全都依赖 `hit.clip`（名称区/旋钮/徽标/块），
++                   **空白处双击没有落点** ⇒ 这里在容器级补一次。
++                   与音频块那条同一出口，所以"双击块"与"双击轨道"在手机上结果一致
++                   （规格表这两列都写「展开全屏编辑」）。 */
++                const timelineContainer = host.getContainer();
++                const onTrackDblClickPhone = () => {
++                    if (window.innerWidth >= 600) return; // 只手机
++                    dispatch(showMobilePanel("params"));
++                };
++                if (timelineContainer) {
++                    timelineContainer.addEventListener("dblclick", onTrackDblClickPhone);
++                    offs.push(() =>
++                        timelineContainer.removeEventListener("dblclick", onTrackDblClickPhone),
++                    );
++                }
++
++                /* E 组（轨道列）：**双指单击 = 单击非选中轨道**。
++                   ⚠️ 不改 `touchGesture.ts`（那是双指缩放/平移的核心状态机，
++                   且被多个表面共用）⇒ 这里用**独立监听**：两指同时按下、
++                   都没怎么动、且总时长短 ⇒ 判定为双指 tap，按坐标切轨道。 */
++                if (timelineContainer) {
++                    const TAP_MS = 300;
++                    const TAP_SLOP = 12;
++                    let tapIds: number[] = [];
++                    const tapStart = new Map<number, { x: number; y: number }>();
++                    /** 各指针的**最新**位置。slip 要按位移量算，必须用最新位置算两指中点
++                        （`tapStart` 是按下位置，拿来算位移会恒为 0）。 */
++                    const tapLast = new Map<number, { x: number; y: number }>();
++                    let tapAt = 0;
++                    let tapFired = false;
++                    /* E 组（最后一格）：**双指长按并划动 = slip（调整音频相对块位置）**。
++                       触屏没有 Alt，而内核的 slip/copy/免吸附全靠修饰键
++                       （`dragModifiersOf`）⇒ 这里在两指按住满 500ms 时
++                       点亮"虚拟 Alt"，抬手清掉。 */
++                    let twoTimer: number | null = null;
++                    /* #41：**双指拖动 vs 双指长按**互斥 —— 手指一动就不算长按。
++                       否则"双指缩放"会在 0.5s 后悄悄点亮 Alt，把后续拖动变成 slip，
++                       用户看到的就是"缩放/平移和 slip 混在一起"。 */
++                    let twoMoved = false;
++                    /* A3：本轮双指交互里"Alt 是否已经点亮过"。
++                       点亮之后**不再撤销**——见 `onTwoMove` 的说明。 */
++                    let altLit = false;
++                    /* ── A3：双指长按并划动 = slip 的会话 ────────────────────────────
++                       桥到面板既有的 slip 通道（`hifi:slipPreview` / `hifi:slipCommit`
++                       → `handleKernelDragPreview` / `handleKernelDragCommit`）。
++
++                       🔴 为什么**不**借内核那份拖拽手势（三条都实测过）：
++                        ① 第二指落下时内核的手势已被收掉：`TwoFingerGestureController`
++                           在 1→2 指过渡里对第一指派发 window 级 `pointercancel`/`pointerup`
++                           （`abortPointer`，docs/08 §4.1 的设计），而内核的收尾监听恰在
++                           window 上 ⇒ 500ms 长按到点时内核早已没有活动手势，此后移动
++                           不产生任何手势（实测：合成 `altKey:true` 的单指拖拽**能** slip
++                           ⇒ 内核 slip 通道本身没问题，缺的是"起手时机"）；
++                        ② 即便重新武装，内核的 move 分派**不按 pointerId 过滤**（一份
++                           `gesture` 消费所有指针的 move）⇒ 两指各自的 move 轮流驱动同一份
++                           位移，读值在两指位置之间跳，跳幅恒等于两指间距。
++                       ⇒ 位移取**两指中点**（与捏合缩放同一锚点），既不抖也无间距偏移。 */
++                    let slipClipId: string | null = null;
++                    let slipTrackId = "";
++                    let slipMidX0 = 0;
++                    let slipSec = 0;
++                    let slipPreviewed = false;
++                    const clearTwoTimer = () => {
++                        if (twoTimer !== null) {
++                            window.clearTimeout(twoTimer);
++                            twoTimer = null;
++                        }
++                    };
++                    /** 两指中点的 x（按各指针**最新**位置；还没动过则退回按下位置）。 */
++                    const twoMidX = (): number => {
++                        const xs: number[] = [];
++                        for (const id of tapIds) {
++                            const p = tapLast.get(id) ?? tapStart.get(id);
++                            if (p) xs.push(p.x);
++                        }
++                        if (xs.length === 0) return 0;
++                        return xs.reduce((sum, x) => sum + x, 0) / xs.length;
++                    };
++                    /** 长按到点：记住"哪一块要被 slip"（命中用内核自己的 hitTest，不另写一套）。 */
++                    const beginSlip = () => {
++                        const p0 = tapStart.get(tapIds[0]);
++                        const host = kernelHostRef.current;
++                        if (p0 === undefined || host === null) return;
++                        const hit = host.debugHitAt(p0.x, p0.y);
++                        if (hit.kind !== "clip" || !hit.clipId) return;
++                        slipClipId = hit.clipId;
++                        slipTrackId =
++                            sessionRef.current.clips.find((entry) => entry.id === hit.clipId)
++                                ?.trackId ?? "";
++                        slipMidX0 = twoMidX();
++                        slipSec = 0;
++                        slipPreviewed = false;
++                    };
++                    const stepSlip = () => {
++                        if (slipClipId === null) return;
++                        const host = kernelHostRef.current;
++                        if (host === null) return;
++                        const pxPerSec = host.getViewport().pxPerSec;
++                        if (!(pxPerSec > 0)) return;
++                        const deltaSec = (twoMidX() - slipMidX0) / pxPerSec;
++                        // 去重：面板每次预览都写 Redux，而不去重时指针静止也会持续重建几何。
++                        if (Math.abs(deltaSec - slipSec) < 1e-4) return;
++                        slipSec = deltaSec;
++                        slipPreviewed = true;
++                        window.dispatchEvent(
++                            new CustomEvent("hifi:slipPreview", {
++                                detail: {
++                                    clipId: slipClipId,
++                                    deltaSec,
++                                    targetTrackId: slipTrackId,
++                                },
++                            }),
++                        );
++                    };
++                    /** 收尾：**只有真产生过位移才提交**（否则面板侧 origin 为空，提交是空操作；
++                        取消时才需要让它去回滚）。 */
++                    const endSlip = (cancelled: boolean) => {
++                        const clipId = slipClipId;
++                        if (clipId === null) return;
++                        slipClipId = null;
++                        if (!slipPreviewed && !cancelled) return;
++                        window.dispatchEvent(
++                            new CustomEvent("hifi:slipCommit", {
++                                detail: {
++                                    clipId,
++                                    deltaSec: slipSec,
++                                    targetTrackId: slipTrackId,
++                                    cancelled,
++                                },
++                            }),
++                        );
++                    };
++                    const onTwoDown = (e: PointerEvent) => {
++                        if (e.pointerType === "mouse") return;
++                        if (tapIds.length === 0) {
++                            tapAt = performance.now();
++                            twoMoved = false;
++                            altLit = false;
++                            slipClipId = null;
++                        }
++                        tapIds.push(e.pointerId);
++                        tapStart.set(e.pointerId, { x: e.clientX, y: e.clientY });
++                        tapLast.set(e.pointerId, { x: e.clientX, y: e.clientY });
++                        tapFired = false;
++                        // 两指都按下后才启动长按计时（单指不算）。
++                        if (tapIds.length === 2 && twoTimer === null) {
++                            twoTimer = window.setTimeout(() => {
++                                // ⚠️ 到点时再确认"这两指一直没动"才点亮。
++                                if (!twoMoved && tapIds.length >= 2) {
++                                    altLit = true;
++                                    setTouchModifiers({ alt: true });
++                                    beginSlip();
++                                }
++                            }, 500);
++                        }
++                    };
++                    /**
++                     * #41：双指在动 ⇒ 走"平移且缩放"，**取消长按候选**。
++                     *
++                     * 🔴 A3 修正（2026-09-28）：**已点亮的 Alt 不能在这里被撤销**。
++                     * 「双指长按**并划动**」的"划动"本来就是长按之后的动作，而这里原先
++                     * 一见 8px 位移就 `clearTouchModifiers()` ⇒ 一动手就把虚拟 Alt 清掉，
++                     * slip 永远起不来。撤销只对"**还没点亮**的候选"有意义。
++                     * 点亮之后改走 slip 通道：只累计位移，不再管"是否算长按"。
++                     */
++                    const onTwoMove = (e: PointerEvent) => {
++                        if (e.pointerType === "mouse") return;
++                        tapLast.set(e.pointerId, { x: e.clientX, y: e.clientY });
++                        if (tapIds.length < 2) return;
++                        if (altLit) {
++                            stepSlip();
++                            return;
++                        }
++                        if (twoMoved) return;
++                        for (const id of tapIds) {
++                            const st = tapStart.get(id);
++                            if (!st) continue;
++                            // 用 event 的坐标只对当前指针准，简化：任一指针动够就算。
++                            if (
++                                Math.abs(e.clientX - st.x) > 8 ||
++                                Math.abs(e.clientY - st.y) > 8
++                            ) {
++                                twoMoved = true;
++                                tapFired = true; // 也别被当双指 tap
++                                clearTwoTimer();
++                                clearTouchModifiers();
++                                break;
++                            }
++                        }
++                    };
++                    const onTwoUp = (e: PointerEvent) => {
++                        if (!tapIds.includes(e.pointerId)) return;
++                        clearTwoTimer();
++                        // 长按已点亮 ⇒ 这一轮是 slip：先收尾再清修饰键（提交要读 origin 的
++                        // `slipMode`，它是按下时快照的，与此刻的修饰键无关，但顺序上更清楚）。
++                        if (altLit && tapIds.length <= 2) endSlip(false);
++                        clearTouchModifiers();
++                        const st = tapStart.get(e.pointerId);
++                        const moved =
++                            st && (Math.abs(e.clientX - st.x) > TAP_SLOP ||
++                                   Math.abs(e.clientY - st.y) > TAP_SLOP);
++                        tapIds = tapIds.filter((id) => id !== e.pointerId);
++                        tapStart.delete(e.pointerId);
++                        tapLast.delete(e.pointerId);
++                        if (tapIds.length === 0) altLit = false;
++                        if (moved) tapFired = true; // 有人动过 ⇒ 不算 tap
++                        if (tapIds.length > 0 || tapFired) return;
++                        // 双指都抬起且没人动过、总时长够短 ⇒ 双指 tap
++                        if (performance.now() - tapAt > TAP_MS) return;
++                        const trackId = resolveTrackIdAtClientY(e.clientY);
++                        if (trackId) handleSelectTrack(trackId);
++                    };
++                    const onTwoCancel = (e: PointerEvent) => {
++                        if (altLit) endSlip(true);
++                        tapIds = tapIds.filter((id) => id !== e.pointerId);
++                        tapStart.delete(e.pointerId);
++                        tapLast.delete(e.pointerId);
++                        if (tapIds.length === 0) altLit = false;
++                        clearTwoTimer();
++                        clearTouchModifiers();
++                    };
++                    timelineContainer.addEventListener("pointerdown", onTwoDown);
++                    timelineContainer.addEventListener("pointermove", onTwoMove);
++                    timelineContainer.addEventListener("pointerup", onTwoUp);
++                    timelineContainer.addEventListener("pointercancel", onTwoCancel);
++                    offs.push(() => {
++                        timelineContainer.removeEventListener("pointerdown", onTwoDown);
++                        timelineContainer.removeEventListener("pointermove", onTwoMove);
++                        timelineContainer.removeEventListener("pointerup", onTwoUp);
++                        timelineContainer.removeEventListener("pointercancel", onTwoCancel);
++                    });
++                }
++
++                /* E 组：轨道头列**左划 = 收窄轨道头**（flm 交互表）。
++                   ⚠️ #35 修正（真机无效、模拟器能过）：
++                   轨道列**是原生竖向滚动容器**，真实触摸里浏览器接管滚动后会发
++                   `pointercancel`，原来的 `pointermove` 在判定前就被取消了；
++                   而 CDP 的**合成事件**不会 cancel ⇒ "模拟器过、真机不过"。
++                   ⇒ 改用**原生 touch 事件** + `passive:false`，命中即 preventDefault。 */
++                let swipeStartX = NaN;
++                let swipeStartY = 0;
++                let swipeFired = false;
++                const onHeaderTouchStart = (e: TouchEvent) => {
++                    if (e.touches.length !== 1) {
++                        // 多指交给手势层（缩放/平移），不参与左划判定。
++                        swipeStartX = NaN;
++                        return;
++                    }
++                    swipeStartX = e.touches[0].clientX;
++                    swipeStartY = e.touches[0].clientY;
++                    swipeFired = false;
++                };
++                const onHeaderTouchMove = (e: TouchEvent) => {
++                    if (swipeFired || Number.isNaN(swipeStartX)) return;
++                    const tt = e.touches[0];
++                    if (!tt) return;
++                    const dx = tt.clientX - swipeStartX;
++                    const dy = Math.abs(tt.clientY - swipeStartY);
++                    /* 规格（docs/15 轨道头-划动）：**左划隐藏、右划再展开**。
++                       ⚠️ 原实现只判了左划（`dx > -48` 直接 return，右划被排除），
++                       虽然命中后写的是 toggle —— 于是「右划展开」永远走不到。
++                       现在按方向给明确语义：左划=收起、右划=展开（与规格逐字一致）。 */
++                    if (Math.abs(dx) < 48 || dy > 24) return;
++                    swipeFired = true;
++                    e.preventDefault(); // 拦掉这次滚动
++                    if (dx < 0) document.body.setAttribute("data-hs-header-collapsed", "1");
++                    else document.body.removeAttribute("data-hs-header-collapsed");
++                };
++                const onHeaderTouchEnd = () => {
++                    swipeStartX = NaN;
++                    swipeFired = false;
++                };
++                trackListEl.addEventListener("touchstart", onHeaderTouchStart, { passive: true });
++                trackListEl.addEventListener("touchmove", onHeaderTouchMove, { passive: false });
++                trackListEl.addEventListener("touchend", onHeaderTouchEnd, { passive: true });
++                trackListEl.addEventListener("touchcancel", onHeaderTouchEnd, { passive: true });
++                offs.push(() => {
++                    trackListEl.removeEventListener("touchstart", onHeaderTouchStart);
++                    trackListEl.removeEventListener("touchmove", onHeaderTouchMove);
++                    trackListEl.removeEventListener("touchend", onHeaderTouchEnd);
++                    trackListEl.removeEventListener("touchcancel", onHeaderTouchEnd);
++                });
++
++                /* E13（用户口径）：「轨道头缩小后**从无轨道处右滑无法展开**轨道头，需修」。
++
++                   病根：上面这套「左划收起 / 右划展开」只挂在**滚动容器**
++                   `[data-track-list-panel]` 上，而收起后那是一条 26px 的窄条 ——
++                   手指很容易落在**头行**（`[data-hs-tracklist-head-bar]`，它是滚动容器的
++                   **兄弟**、不在容器内）或外壳的空白处 ⇒ 事件根本到不了容器，展不开。
++                   （这也是 E3 探针里"合成触摸收起不生效"的同一个原因。）
++
++                   修法：同一套判定**再挂两处**——
++                     · 外壳（`trackListEl.parentElement`，覆盖头行 + 列表 + 空白）；
++                     · 文档级兜底：**仅在收起态且起点落在左侧 40px 内**时参与判定
++                       （避免与时间线区域的横滑手势抢事件）。
++                   三处共用同一组回调，语义完全一致（左划收起、右划展开）。 */
++                const shellEl = trackListEl.parentElement;
++                /* 兜底判定的边界取**轨道头列**的右边缘：展开态是整个列宽（头行、列表、
++                   空白全在内），收起态就是 26px 窄条 ⇒ 两种形态都不必再分别写条件。
++                   （只用"是否收起"做条件会漏掉**展开态在头行上左划收起**这条：头行是
++                   滚动容器的兄弟、不在容器内，实测确实收不起来。） */
++                const colRight = () => {
++                    const r = shellEl?.getBoundingClientRect();
++                    return r ? r.right + 4 : 240;
++                };
++                const docTouchStart = (e: TouchEvent) => {
++                    const t = e.touches[0];
++                    if (!t || t.clientX > colRight()) return;
++                    onHeaderTouchStart(e);
++                };
++                const docTouchMove = (e: TouchEvent) => {
++                    if (Number.isNaN(swipeStartX)) return;
++                    onHeaderTouchMove(e);
++                };
++                shellEl?.addEventListener("touchstart", onHeaderTouchStart, { passive: true });
++                shellEl?.addEventListener("touchmove", onHeaderTouchMove, { passive: false });
++                shellEl?.addEventListener("touchend", onHeaderTouchEnd, { passive: true });
++                shellEl?.addEventListener("touchcancel", onHeaderTouchEnd, { passive: true });
++                document.addEventListener("touchstart", docTouchStart, { passive: true });
++                document.addEventListener("touchmove", docTouchMove, { passive: false });
++                document.addEventListener("touchend", onHeaderTouchEnd, { passive: true });
++                offs.push(() => {
++                    shellEl?.removeEventListener("touchstart", onHeaderTouchStart);
++                    shellEl?.removeEventListener("touchmove", onHeaderTouchMove);
++                    shellEl?.removeEventListener("touchend", onHeaderTouchEnd);
++                    shellEl?.removeEventListener("touchcancel", onHeaderTouchEnd);
++                    document.removeEventListener("touchstart", docTouchStart);
++                    document.removeEventListener("touchmove", docTouchMove);
++                    document.removeEventListener("touchend", onHeaderTouchEnd);
++                });
++                return true;
++            };
++            // 首帧 refs 可能还没落位：有限次重试（≈1 秒），不做无限 rAF。
++            if (!attachAxisSurfaces()) {
++                let tries = 0;
++                const retry = () => {
++                    if (attachAxisSurfaces() || ++tries > 60) return;
++                    raf = requestAnimationFrame(retry);
++                };
++                raf = requestAnimationFrame(retry);
++            }
++            // 调试钩子：CDP / 真机验收时读取内核视口真值，验证 docs/08 §8.1 不变量。
++            dbg.__hsViewport = () => {
++                const v = host.getViewport();
++                const r = container.getBoundingClientRect();
++                return {
++                    ...v,
++                    rowHeight: host.getRowHeight(),
++                    // 容器偏移：验收脚本要把锚点换算到容器坐标系（与 scrollLeft/scrollTop 同域）。
++                    containerRect: { left: r.left, top: r.top, width: r.width, height: r.height },
++                };
++            };
++            teardown = () => {
++                for (const off of offs) off();
++            };
++        };
++        let teardown: (() => void) | null = null;
++        tryAttach();
++        return () => {
++            if (raf !== 0) cancelAnimationFrame(raf);
++            teardown?.();
++            delete dbg.__hsViewport;
++        };
++    }, []);
++
++    // 播放开始（键盘快捷键 / 播放按钮 / 远端传输皆可触发）＝拖拽视觉语境终止：
++    // 按住鼠标拖拽期间开始播放时，吸附竖线高亮必须立即消失，而不是冻结在原地
++    // 直到松手才被手势结束逻辑清理。
++    const timelineRuntimeIsPlaying = useAppSelector((state) => state.session.runtime.isPlaying);
++    React.useEffect(() => {
++        if (timelineRuntimeIsPlaying) {
++            clearSnapHighlights();
++        }
++    }, [timelineRuntimeIsPlaying]);
++    const {
++        dispatch,
++        s,
++        sessionRef,
++        scrollRef,
++        trackListScrollRef,
++        rulerContentRef,
++        rulerPlayheadLineRef,
++        rulerPlayheadHeadRef,
++        dropPreviewRef,
++        lastClickedClipIdRef,
++        pxPerSecRef,
++        viewportWidthRef,
++        rowHeightRef,
++        pxPerSec,
++        setPxPerSec,
++        viewportWidth,
++        setViewportWidth,
++        rowHeight,
++        setRowHeight,
++        trackVolumeUi,
++
++        setTrackVolumeUi,
++        sameSourceConfirmOpen,
++        setSameSourceConfirmOpen,
++        sameSourceConfirmResolverRef,
++        pxPerBeat,
++        contentWidth,
++        contentHeight,
++        dynamicProjectSec,
++        timelineTicks,
++        rulerScrollLeft,
++        verticalZoomKb,
++        paramFineAdjustKb,
++        slipEditKb,
++        crossfadeGripKb,
++        fadeCurvatureKb,
++        stretchKbRef,
++        pitchDragKb,
++        noSnapKb,
++        copyDragKb,
++        clipMultiSelectToggleKb,
++        dropPreview,
++        setDropPreview,
++        pendingDropDurationPathRef,
++        syncScrollLeft,
++        setScrollLeftState,
++        beatFromClientX,
++        trackIdFromClientY,
++        rowTopForTrackId,
++        ensureDropPreviewDuration,
++        getDropPreviewWidthPx,
++        snapTimeline,
++        snapTimelineDetailed,
++        setPlayheadFromClientX,
++        keyboardZoomPendingRef,
++    } = state;
++
++    // 把 seek 落点函数交给「拍数栏触摸 seek」那条路径（见上方手势 effect）。
++    // 必须放在本解构之后；effect 顺序保证它在手势 effect 的 rAF 重试之前填好。
++    React.useEffect(() => {
++        rulerSeekRef.current = setPlayheadFromClientX;
++    }, [setPlayheadFromClientX]);
++
++    /**
++     * 模式无关的视口访问器。
++     *
++     * 内核模式下旧滚动容器不挂载（`scrollRef.current === null`），凡是「读/写视口」
++     * 的逻辑（拖入落点、自动滚屏、键盘缩放、聚焦光标、参数编辑器同步）都必须经它，
++     * 而不是各自判断模式。
++     *
++     * 特殊说明：引用必须**稳定**——下游 hook 把它作为 effect 依赖，随渲染重建会
++     * 导致事件监听反复重注册。因此惰性创建一次并缓存。
++     */
++    const viewportAccessRef = React.useRef<TimelineViewportAccess | null>(null);
++    if (viewportAccessRef.current === null) {
++        viewportAccessRef.current = createTimelineViewportAccess({ scrollRef, kernelHostRef });
++    }
++    const viewportAccess = viewportAccessRef.current;
++
++    /**
++     * clientY → 轨道 id（模式无关）。
++     *
++     * 旧实现读原生 scroller 的 `scrollTop`；内核模式下容器不再滚动（真值在宿主里），
++     * 必须改用「容器矩形 + 宿主缓存的 scrollTop」。
++     *
++     * 特殊说明：宿主存在时走内核分支；宿主为 null（挂载前 / 测试环境）时委托给
++     * `trackIdFromClientY` 兜底。旧的原生 scroller 实现已随"渲染内核唯一路径"改造删除，
++     * `scrollRef` 已无 JSX 挂载点，因此这里**不是**在两种渲染模式之间做选择。
++     */
++    const resolveTrackIdAtClientY = React.useCallback(
++        (clientY: number): string | null => {
++            const host = kernelHostRef.current;
++            if (host === null) return trackIdFromClientY(clientY);
++            const rect = host.getContainerRect();
++            if (rect === null) return null;
++            const y = clientY - rect.top + host.getViewport().scrollTop;
++            const idx = Math.floor(y / rowHeight);
++            const tracks = sessionRef.current.tracks;
++            if (idx < 0 || idx >= tracks.length) return null;
++            return tracks[idx]?.id ?? null;
++        },
++        [rowHeight, sessionRef, trackIdFromClientY],
++    );
++
++    /**
++     * 内核水平滚动提交（每跨过 256px 一次）。
++     *
++     * 走旧实现的同一条通知链（`syncScrollLeft`）：更新 React state（标尺刻度
++     * 窗口）**并**把视口写入 `timelineViewportSync`（参数编辑器同步的写侧）。
++     * 若直接传 `setScrollLeftState`，同步写侧会被漏掉——表现为「内核滚动时
++     * 参数编辑器不跟随」。
++     */
++    const handleKernelScrollLeftCommit = React.useCallback(
++        (next: number) => {
++            syncScrollLeft(next);
++        },
++        [syncScrollLeft],
++    );
++
++    /**
++     * 滚轮缩放的**待落地目标**（内核请求、React 落地）。
++     *
++     * 标尺是 DOM、由 React 用 `pxPerSec` 布局，轨道区归内核。内核若自己先切缩放，
++     * 缩放过程中标尺会整整落后一个滚轮步（约 10% 缩放 → 视口宽 1000px 时末端差
++     * 上百像素），就是「标尺抽动 / 网格与标尺没对齐」。旧实现没有这个问题，因为
++     * 缩放只有 React 一个真值源、画布也在 React 提交后才画。
++     *
++     * 因此这里照旧：内核只"请求"，React 用 `setPxPerSec` 触发重排，并在**同一次
++     * 提交的 layout effect** 里把缩放应用到内核——DOM 重排与内核缩放落在同一帧的
++     * 绘制中，两层不可能分叉。
++     */
++    const pendingKernelZoomRef = React.useRef<{ pxPerSec: number; scrollLeft: number } | null>(
++        null,
++    );
++    const handleKernelZoomRequest = React.useCallback(
++        (next: { pxPerSec: number; scrollLeft: number }) => {
++            if (next.pxPerSec === pxPerSec) {
++                // 缩放已在上/下限（或该步被钳制回原值）：请求退化为"位置无变化"，
++                // 直接应用一次即可。**不能**留成待落地——`setPxPerSec` 传同值不会
++                // 触发重渲染，下面的 layout effect 也就永远不会跑，请求会被搁置。
++                pendingKernelZoomRef.current = null;
++                viewportAccess.setZoomAndScroll(next.pxPerSec, next.scrollLeft);
++                return;
++            }
++            pendingKernelZoomRef.current = next;
++            // 只改缩放：位置由下面的 layout effect 与缩放**原子**应用（分两次写会让
++            // 中间那一帧出现"新缩放 + 旧位置"的错位）。
++            setPxPerSec(next.pxPerSec);
++        },
++        [pxPerSec, viewportAccess],
++    );
++    React.useLayoutEffect(() => {
++        const pending = pendingKernelZoomRef.current;
++        if (pending === null) return;
++        pendingKernelZoomRef.current = null;
++        viewportAccess.setZoomAndScroll(pending.pxPerSec, pending.scrollLeft);
++        // 【同任务把内核画出来】本提交已经把**标尺文本**按新缩放排好了（React 布局），
++        // 而网格 / clip / 波形（GL）与标尺内容层的 translate 由内核绘制。若等下一次
++        // rAF，被绘制出来的那一帧就是"新文本 + 旧网格"，缩放过程中标尺文本看起来在
++        // 闪。这里同步提交一帧，文本与网格同帧切换（与参数编辑器的 `commitViewportNow`
++        // 同一手法）。
++        kernelHostRef.current?.paintNow();
++    }, [pxPerSec, viewportAccess]);
++
++    // ── 轨道头与时间轴区域的竖直滚动对齐 ─────────────────
++    // 右侧时间轴 scroller 常驻水平滚动条（占高 h），其竖直滚动范围因此比
++    // 轨道头少 h 像素：内容同为「轨道数 × rowHeight」时，轨道头滚到底会
++    // 比时间轴多滚 h 像素，行无法对齐。这里实测 h（offsetHeight 减去
++    // clientHeight），平台/样式自适应（overlay 滚动条占位为 0）。
++    React.useLayoutEffect(() => {
++        const scroller = scrollRef.current;
++        if (!scroller) return;
++        const measure = () => {
++            setHorizontalScrollbarGutterPx(scroller.offsetHeight - scroller.clientHeight);
++        };
++        measure();
++        if (typeof ResizeObserver !== "undefined") {
++            const observer = new ResizeObserver(measure);
++            observer.observe(scroller);
++            return () => observer.disconnect();
++        }
++        window.addEventListener("resize", measure);
++        return () => window.removeEventListener("resize", measure);
++    }, [scrollRef]);
++
++    // ── 粘贴后“聚焦播放光标”（提交后执行）────────────────────
++    // 粘贴可能大幅扩充工程全长（dynamicProjectSec / 水平可滚动范围随之
++    // 扩大）。滚动必须在本状态与对应 DOM（paddedContentWidth）都提交后
++    // 执行，否则会被旧的滚动上限钳制，导致光标无法进入画面。
++    // pendingPlayheadRevealSec 由粘贴 fulfilled reducer 记录，这里在
++    // useLayoutEffect 中消费并立即清除。
++    const pendingPlayheadRevealSec = s.pendingPlayheadRevealSec;
++    React.useLayoutEffect(() => {
++        if (pendingPlayheadRevealSec == null) return;
++        // 仅当新光标位置不在可视范围内时才滚动（需求语义：画面内不扰动视图）。
++        // 视口来源必须模式无关：内核模式下旧滚动容器不挂载，若在这里早退会
++        // **静默丢弃**聚焦请求（表现为「粘贴后视图不跟随」）。
++        const x = Math.max(0, pendingPlayheadRevealSec) * pxPerSec;
++        const left = viewportAccess.getScrollLeft();
++        const right = left + viewportAccess.getViewportWidth();
++        if (x >= left && x <= right) {
++            dispatch(setPendingPlayheadReveal(null));
++            return;
++        }
++        const next = computeFocusCursorScrollLeft({
++            playheadSec: pendingPlayheadRevealSec,
++            pxPerSec,
++            contentWidth: dynamicProjectSec * pxPerSec,
++        });
++        if (Math.abs(viewportAccess.getScrollLeft() - next) > 0.5) {
++            syncScrollLeft(viewportAccess.setScrollLeft(next));
++        }
++        dispatch(setPendingPlayheadReveal(null));
++    }, [
++        pendingPlayheadRevealSec,
++        pxPerSec,
++        dynamicProjectSec,
++        viewportAccess,
++        syncScrollLeft,
++        dispatch,
++    ]);
++
++    const timeContext = React.useMemo<TimeFormatContext>(
++        () => ({
++            bpm: s.bpm,
++            beatsPerBar: Math.max(1, Math.round(s.beats || 4)),
++            grid: s.grid,
++            tempoMap: s.tempoMap,
++        }),
++        [s.bpm, s.beats, s.grid, s.tempoMap],
++    );
++
++    // 淡化长度 ToolTips 的相对时长上下文：主/副时间单位 + 工程计时参数。
++    const fadeLengthFormatCtx = React.useMemo<FadeLengthFormatContext>(
++        () => ({
++            primaryTimeUnit: s.primaryTimeUnit,
++            secondaryTimeUnit: s.secondaryTimeUnit,
++            bpm: s.bpm,
++            beatsPerBar: Math.max(1, Math.round(s.beats || 4)),
++            grid: s.grid,
++        }),
++        [s.primaryTimeUnit, s.secondaryTimeUnit, s.bpm, s.beats, s.grid],
++    );
++
++    const projectScale = React.useMemo<ScaleLike | null>(
++        () =>
++            s.project.useCustomScale && s.project.customScale
++                ? s.project.customScale.notes
++                : s.project.baseScale,
++        [s.project.baseScale, s.project.customScale, s.project.useCustomScale],
++    );
++
++    const handleTempoMapChange = React.useCallback(
++        (next: TempoMap | null) => {
++            dispatch(setTempoMap(next));
++        },
++        [dispatch],
++    );
++    const handleTempoMapCommit = React.useCallback(
++        (next: TempoMap | null) => {
++            dispatch(setTempoMap(next));
++            void dispatch(setTempoMapRemote(next));
++        },
++        [dispatch],
++    );
++    const handlePrimaryUnitChange = React.useCallback(
++        (unit: TimeUnit) => {
++            dispatch(setPrimaryTimeUnit(unit));
++            void dispatch(persistUiSettings());
++        },
++        [dispatch],
++    );
++    const handleSecondaryUnitChange = React.useCallback(
++        (unit: TimeUnitChoice) => {
++            dispatch(setSecondaryTimeUnit(unit));
++            void dispatch(persistUiSettings());
++        },
++        [dispatch],
++    );
++    const handleCopyPlayheadTime = React.useCallback(async () => {
++        const text = formatCursorTime(
++            s.primaryTimeUnit,
++            s.secondaryTimeUnit,
++            Number(sessionRef.current.playheadSec ?? 0) || 0,
++            timeContext,
++        ).combined;
++        try {
++            await navigator.clipboard.writeText(text);
++        } catch {
++            try {
++                const textarea = document.createElement("textarea");
++                textarea.value = text;
++                textarea.style.position = "fixed";
++                textarea.style.opacity = "0";
++                document.body.appendChild(textarea);
++                textarea.select();
++                document.execCommand("copy");
++                textarea.remove();
++            } catch {
++                // 忽略复制失败
++            }
++        }
++    }, [s.primaryTimeUnit, s.secondaryTimeUnit, sessionRef, timeContext]);
++
++    // ── 记录最近点击的 clientX，用于 Shift 范围选择的锚点位置
++    const lastClickedClientXRef = React.useRef<number | null>(null);
++
++    // ── 时间轴缩放与行高的持久化 ─────────────────────────────
++    //
++    // 旧实现由 `TimelineScrollArea`（原生滚动容器）负责写这两个键；"内核唯一路径"
++    // 改造删掉该组件时**没有把写入点接回来**，于是读取侧（`useTimelineState` 初始化
++    // 读 `hifishifter.pxPerSec` / `hifishifter.rowHeight`）一直在，但再没有人写
++    // ——表现为每次重启都回到默认缩放与行高。这里接回同一对键名与取值语义。
++    //
++    // 用防抖 hook 而不是直接 `localStorage.setItem`：滚轮缩放是高频事件，同步落盘
++    // 会与同帧的渲染 / 重绘挤在一起（见 `useDebouncedPersist` 文件头）。
++    useDebouncedPersist("hifishifter.pxPerSec", pxPerSec);
++    useDebouncedPersist("hifishifter.rowHeight", rowHeight);
++
++    // ── 2. Clip 多选 + 操作回调 ─────────────────────────────
++    const clipActions = useTimelineClipActions({
++        sessionRef,
++        scrollRef,
++        // 模式无关视口：范围选择的「点击位置 → 工程秒」换算需要它（内核模式下
++        // 原生 scroller 不存在，缺了它会退化成用 clip 起点近似）。
++        viewport: viewportAccess,
++        lastClickedClipIdRef,
++        lastClickedClientXRef,
++        pxPerSec,
++        pxPerBeat,
++        rowHeight,
++        ignoreGrouping,
++        disabledGroupIds,
++        dispatch,
++        sameSourceConfirmResolverRef,
++        setSameSourceConfirmOpen,
++        setPlayheadFromClientX,
++    });
++    const {
++        multiSelectedClipIds,
++        multiSelectedSet,
++        setMultiSelectedClipIds,
++        setMultiSelectedClipIdsFromAction,
++        contextMenu,
++        setContextMenu,
++        trackAreaMenu,
++        setTrackAreaMenu,
++        importModeMenu,
++        setImportModeMenu,
++        clipboardAvailable,
++        copyClips,
++        cutClips,
++        groupClips,
++        ungroupClips,
++        toggleGroupDisabled,
++        normalizeClips,
++        replaceClipSources,
++        splitClipIdsAtPlayhead,
++        splitSelectedAtPlayhead,
++        selectClipRangeByRect,
++        recordLastClickPosition,
++        pasteClipsAtPlayhead,
++        clearContextMenu,
++        ensureTrackLaneSelected,
++        selectTrackLaneClipRemote,
++        deselectAllTrackLaneClips,
++        toggleTrackLaneClipMuted,
++        toggleTrackLaneCtrlSelection,
++        commitTrackLaneRename,
++        commitTrackLaneGain,
++        commitTrackLaneRate,
++    } = clipActions;
++    // 右键播放速率角标 → 高级编辑浮层（BPM 换算）的目标 Clip 与锚点。
++    const [rateEditorClipId, setRateEditorClipId] = React.useState<string | null>(null);
++    const [rateEditorPosition, setRateEditorPosition] = React.useState<{
++        x: number;
++        y: number;
++    } | null>(null);
++    const openRateBadgeMenu = React.useCallback(
++        (clipId: string, screenX: number, screenY: number) => {
++            setRateEditorClipId(clipId);
++            setRateEditorPosition({ x: screenX, y: screenY });
++        },
++        [],
++    );
++
++    // 角标行内编辑提交：按字段路由到速率（自动调整时长）/增益提交。
++    // 传给 React.memo 化的 TrackList / TrackLane 的回调必须引用稳定，
++    // 否则每次 TimelinePanel 渲染（播放头提交值、滚动、修饰键）都会击穿 memo。
++    const handleToggleGroupDisabled = React.useCallback(
++        (groupId: string) => {
++            toggleGroupDisabled(groupId);
++        },
++        [toggleGroupDisabled],
++    );
++    const commitTrackLaneFormantMorph = React.useCallback(
++        (clipId: string, value: ClipFormantMorph, checkpoint: boolean) => {
++            void dispatch(
++                setClipStateRemote({
++                    clipId,
++                    formantMorph: value,
++                    checkpoint,
++                }),
++            );
++        },
++        [dispatch],
++    );
++    const activateTrackLaneTake = React.useCallback(
++        (clipId: string, takeId: string) => {
++            void dispatch(setClipActiveTakeRemote({ clipId, takeId }));
++        },
++        [dispatch],
++    );
++    /**
++     * 单侧循环到下一个形状并重置默认曲率。
++     *
++     * 多选：重点 clip 属于选区时应用到全部选中（与淡变菜单同一判定），
++     * 每个 clip 从**自身**当前形状循环前进；一次 bulk 提交 = 单撤销步。
++     *
++     * @param checkpoint 单独调用默认 true（一笔后端写入 = 一个撤销步）；
++     *                   交叉点双列循环时传 false 并由调用方开 undo group
++     *                   合并为单步。
++     */
++    const cycleOneFade = React.useCallback(
++        (clipId: string, side: "in" | "out", checkpoint = true) => {
++            const targets = getBulkEditableClipIds({
++                activeClipId: clipId,
++                multiSelectedClipIds,
++                multiSelectedSet,
++            });
++            const updates: Array<{
++                clipId: string;
++                fadeInShape?: number;
++                fadeInDir?: number;
++                fadeOutShape?: number;
++                fadeOutDir?: number;
++            }> = [];
++            for (const targetId of targets) {
++                const clip = sessionRef.current.clips.find((entry) => entry.id === targetId);
++                if (!clip) continue;
++                const rawShape = side === "in" ? clip.fadeInShape : clip.fadeOutShape;
++                const currentShape = Number.isFinite(rawShape) ? Math.trunc(rawShape) : 0;
++                const index = FADE_PRESETS.findIndex((preset) => preset.shape === currentShape);
++                const nextPreset =
++                    FADE_PRESETS[(index + 1 + FADE_PRESETS.length) % FADE_PRESETS.length];
++                const nextDir = defaultFadeDirFor(nextPreset.shape, side === "out");
++                dispatch(
++                    setClipFades({
++                        clipId: targetId,
++                        ...(side === "in"
++                            ? { fadeInShape: nextPreset.shape, fadeInDir: nextDir }
++                            : { fadeOutShape: nextPreset.shape, fadeOutDir: nextDir }),
++                    }),
++                );
++                updates.push({
++                    clipId: targetId,
++                    ...(side === "in"
++                        ? { fadeInShape: nextPreset.shape, fadeInDir: nextDir }
++                        : { fadeOutShape: nextPreset.shape, fadeOutDir: nextDir }),
++                });
++            }
++            if (updates.length > 0) {
++                void dispatch(setClipsStateBulkRemote({ updates, checkpoint }));
++            }
++        },
++        [dispatch, sessionRef, multiSelectedClipIds, multiSelectedSet],
++    );
++
++    // Ctrl+点击循环切换：普通包络线只切该线；交叉点抓手同时切换两侧
++    // （前者淡出 + 后者淡入）。
++    const handleFadeShapeCycleClick = React.useCallback(
++        (clipId: string, side: "in" | "out") => {
++            cycleOneFade(clipId, side);
++        },
++        [cycleOneFade],
++    );
++    const handleCrossfadeCycleClick = React.useCallback(
++        (sides: Array<{ clipId: string; isOut: boolean }>) => {
++            // 交叉点双列循环 = 一次手势：开 undo group 把两侧循环合并为
++            // 单个撤销步（否则两笔 checkpoint:true 会变成两个撤销步）。
++            void (async () => {
++                await webApi.beginUndoGroup("edit_clip");
++                try {
++                    for (const side of sides) {
++                        cycleOneFade(side.clipId, side.isOut ? "out" : "in", false);
++                    }
++                } finally {
++                    await webApi.endUndoGroup();
++                }
++            })().catch(() => undefined);
++        },
++        [cycleOneFade],
++    );
++    const activeFormantToolClip = React.useMemo(
++        () =>
++            s.clipFormantToolWindow.clipId
++                ? (s.clips.find((clip) => clip.id === s.clipFormantToolWindow.clipId) ?? null)
++                : null,
++        [s.clipFormantToolWindow.clipId, s.clips],
++    );
++
++    // ── MIDI clip drag-drop handler ──────────────────────
++    const handleMidiClipImport = React.useCallback(
++        (result: {
++            trackIndices: number[];
++            notesCount: number;
++            midiPath: string;
++            fillGaps: boolean;
++            multiTrackMerge?: boolean;
++            noteBpmMode?: string;
++            specifiedBpm?: number;
++            importBpmAsProject?: boolean;
++            clipboardGuid?: string;
++            closeLeadingGap?: boolean;
++            importAsTempoMap?: boolean;
++            importTempo?: boolean;
++            importTimeSignature?: boolean;
++            importKeySignature?: boolean;
++        }) => {
++            void dispatch(
++                importMidiAsClip({
++                    midiPath: result.midiPath,
++                    trackIndices: result.trackIndices,
++                    trackId: midiClipTrackId,
++                    startSec: midiClipStartSec,
++                    fillGaps: result.fillGaps || undefined,
++                    multiTrackMerge: result.multiTrackMerge,
++                    noteBpmMode: result.noteBpmMode,
++                    specifiedBpm: result.specifiedBpm,
++                    importBpmAsProject: result.importBpmAsProject,
++                    clipboardGuid: result.clipboardGuid,
++                    closeLeadingGap: result.closeLeadingGap,
++                    importAsTempoMap: result.importAsTempoMap,
++                    importTempo: result.importTempo,
++                    importTimeSignature: result.importTimeSignature,
++                    importKeySignature: result.importKeySignature,
++                }),
++            );
++        },
++        [dispatch, midiClipTrackId, midiClipStartSec],
++    );
++
++    // ── Replace MIDI ──
++    const handleReplaceMidiImport = React.useCallback(
++        (result: {
++            trackIndices: number[];
++            notesCount: number;
++            midiPath: string;
++            fillGaps: boolean;
++            multiTrackMerge?: boolean;
++            noteBpmMode?: string;
++            specifiedBpm?: number;
++            importBpmAsProject?: boolean;
++            closeLeadingGap?: boolean;
++        }) => {
++            const clipId = replaceMidiDialog.clipId;
++            if (!clipId) return;
++            void dispatch(
++                replaceMidiClipDataRemote({
++                    clipId,
++                    midiPath: result.midiPath,
++                    trackIndices: result.trackIndices,
++                    fillGaps: result.fillGaps || undefined,
++                    noteBpmMode: result.noteBpmMode,
++                    specifiedBpm: result.specifiedBpm,
++                    importMidiBpmAsProject: result.importBpmAsProject,
++                    closeLeadingGap: result.closeLeadingGap,
++                }),
++            );
++            setReplaceMidiDialog({ open: false, clipId: null, midiPath: null });
++        },
++        [dispatch, replaceMidiDialog.clipId],
++    );
++
++    const openReplaceMidiForClip = React.useCallback(async (clipId: string) => {
++        const picked = await webApi.openMidiDialog();
++        if (!picked.ok || picked.canceled || !picked.path) return;
++        setReplaceMidiDialog({ open: true, clipId, midiPath: picked.path });
++    }, []);
++
++    const midiClipRootTrackComposeEnabled = React.useMemo(() => {
++        if (!midiClipTrackId) return true;
++        const rootId = resolveRootTrackId(s.tracks, midiClipTrackId);
++        if (!rootId) return true;
++        const rootTrack = s.tracks.find((t) => t.id === rootId);
++        return rootTrack?.composeEnabled ?? true;
++    }, [midiClipTrackId, s.tracks]);
++
++    const handleRequestEnableCompose = React.useCallback(() => {
++        if (!midiClipTrackId) return;
++        const rootId = resolveRootTrackId(s.tracks, midiClipTrackId);
++        if (!rootId) return;
++        dispatch(
++            setTrackStateRemote({
++                trackId: rootId,
++                composeEnabled: true,
++            }),
++        );
++    }, [dispatch, midiClipTrackId, s.tracks]);
++
++    const handleExportMidi = React.useCallback(
++        async (clipIds: string[]) => {
++            const saveResult = await coreApi.pickMidiOutputPath();
++            if (!saveResult.ok || saveResult.canceled || !saveResult.path) return;
++
++            const s = sessionRef.current;
++            const clipsMap = new Map(s.clips.map((c) => [c.id, c]));
++            const trackMap = new Map(s.tracks.map((t) => [t.id, t]));
++
++            const entries: Array<{
++                trackId: string;
++                rootTrackId: string;
++                name: string;
++                startSec: number;
++                endSec: number;
++                clipId?: string;
++            }> = [];
++            const seenComposeRoots = new Set<string>();
++
++            for (const id of clipIds) {
++                const clip = clipsMap.get(id);
++                if (!clip) continue;
++                const rootId = resolveRootTrackId(s.tracks, clip.trackId);
++                if (!rootId) continue;
++                const rootTrack = trackMap.get(rootId);
++                const isComposeEnabled = rootTrack?.composeEnabled ?? false;
++
++                if (isComposeEnabled) {
++                    // Compose 轨道：按 rootTrackId 去重（共享 track 级音高数据）
++                    if (seenComposeRoots.has(rootId)) continue;
++                    seenComposeRoots.add(rootId);
++                }
++
++                const track = trackMap.get(clip.trackId);
++                entries.push({
++                    trackId: clip.trackId,
++                    rootTrackId: rootId,
++                    name: track?.name ?? clip.name,
++                    startSec: clip.startSec,
++                    endSec: clip.startSec + clip.lengthSec,
++                    ...(isComposeEnabled ? {} : { clipId: clip.id }),
++                });
++            }
++
++            if (entries.length === 0) return;
++
++            const scaleNotes =
++                SCALE_NOTES[(s.project?.baseScale as keyof typeof SCALE_NOTES) ?? "C"] ??
++                SCALE_NOTES.C;
++
++            await paramsApi.exportPitchToMidi({
++                outputPath: saveResult.path,
++                tracks: entries,
++                bpm: s.bpm,
++                beatsPerBar: s.project?.beatsPerBar ?? 4,
++                baseScale: s.project?.baseScale ?? "C",
++                projectScaleNotes: scaleNotes,
++            });
++        },
++        [sessionRef],
++    );
++
++    // ── 3. DragDrop (Tauri + 文件浏览器) ─────────────────────
++    const { tauriDraggedPathRef, tauriLastDropPathRef, tauriDropHandledAtRef } =
++        useTimelineDragDrop({
++            dispatch,
++            viewport: viewportAccess,
++            sessionRef,
++            pxPerSecRef,
++            rowHeightRef,
++            dropPreviewRef,
++            pendingDropDurationPathRef,
++            beatFromClientX,
++            snapTimeline,
++            trackIdFromClientY: resolveTrackIdAtClientY,
++            rowTopForTrackId,
++            setDropPreview,
++            ensureDropPreviewDuration,
++            getDropPreviewWidthPx,
++            setImportModeMenu,
++            setProjectActionMenu,
++            pxPerSec,
++            rowHeight,
++            onMidiDrop: (payload) => {
++                onMidiDialogSourceChange("dragDrop");
++                onMidiClipPathChange(payload.midiPath);
++                onMidiClipStartSecChange(payload.startSec);
++                onMidiClipTrackIdChange(payload.trackId);
++                onMidiClipDialogOpenChange(true);
++            },
++        });
++
++    /**
++     * 拖入几何用的水平滚动量（模式无关）。
++     *
++     * 内核模式下时间轴是**自绘滚动**，DOM 容器的 scrollLeft 恒为 0——真值在内核
++     * 宿主里。旧模式仍取容器自身的 scrollLeft。
++     *
++     * @param el 事件目标容器（旧模式下即滚动容器）。
++     * @returns 当前水平滚动量（CSS px）。
++     */
++    function dragScrollLeftOf(el: HTMLElement): number {
++        const host = kernelHostRef.current;
++        if (host !== null) return host.getViewport().scrollLeft;
++        return el.scrollLeft;
++    }
++
++    /** 内核 seek 的待提交位置与 rAF 句柄（拖拽期间按帧节流，松手立即提交）。 */
++    const kernelSeekPendingRef = React.useRef<number | null>(null);
++    const kernelSeekRafRef = React.useRef<number | null>(null);
++
++    /**
++     * 内核 seek 回调：单击或拖拽空白处跳转播放头。
++     *
++     * 拖拽帧以 rAF 节流提交（内核按 rAF 频率回调），避免每个指针事件都打一次
++     * 后端 seek；松手（commit）时取消待提交帧并立即提交最终位置，保证落点精确。
++     *
++     * 特殊说明（**必须与 seek 一起乐观写 playheadSec**）：`seekPlayhead.fulfilled`
++     * 只在「后端返回值与请求值不同」（如被 clamp 修正）时才采纳后端值，其余情况
++     * 依赖调用方**已经**写好 `state.playheadSec`；真实后端 `set_transport` 对
++     * 非负请求原样回显（`playhead_sec = v.max(0.0)`），于是后端值恒等于请求值、
++     * 采纳分支永不命中——只派发 `seekPlayhead` 时引擎动了而 store 的
++     * `playheadSec` 纹丝不动（"点空白处播放头不跟随"的根因；播放中 30Hz 轮询
++     * 重新锚定才让它"偶尔"生效）。此处与标尺路径
++     * （`useTimelineState.setPlayheadFromClientX`：`setplayheadSec` + `seekPlayhead`
++     * 成对派发）保持同一契约，两个分支都不得只派发 seek。
++     */
++    /**
++     * 把请求的秒数按旧实现的「光标吸附」规则规范化（**不改状态**）。
++     *
++     * 所有播放头落点路径（标尺 / 轨道空白 / clip 点击）在旧实现里都汇入
++     * `setPlayheadFromClientX`：先 `snapTimelineDetailed(…, "cursor", …)` 吸附，
++     * 再写 `setplayheadSec` + `seekPlayhead`；`commit=true` 表示手势语境结束，
++     * 顺带清除瞬态吸附高亮。内核原先直接写**裸**秒数——标尺路径吸附、轨道空白
++     * 路径不吸附，同一个界面里两条 seek 行为不一致。
++     *
++     * @param sec 目标秒（未吸附）。
++     * @param commit true = 提交式落点（单击 / 拖拽松手），false = 拖拽中间帧。
++     * @returns 吸附后的秒。
++     */
++    const resolveKernelSeekSec = React.useCallback(
++        (sec: number, commit: boolean): number =>
++            snapTimelineDetailed(
++                sec,
++                "cursor",
++                // 高亮只在拖拽期间发布（单击跳转完全不走高亮通道），与旧实现一致。
++                commit ? undefined : { highlight: { sources: [] } },
++            ).sec,
++        [snapTimelineDetailed],
++    );
++
++    /**
++     * 纯粹的播放头落点（吸附 + 乐观写 + 高亮收口）——**不含**空白点击的
++     * 「清空选中 / 切换轨道」语义。
++     *
++     * 旧实现的 clip 单击 seek（`ClipItem` / `ClipEdgeHandles` / `FadeHitLayer`
++     * 的 `seekFromClientX`）只移动播放头；把"清空选中"混进来会让「点一下 clip
++     * 把播放头带过去」顺带取消选中，与旧实现完全相反。
++     *
++     * @param sec 目标秒。
++     * @returns 无返回值。
++     */
++    /* F1（用户口径）：临时菜单（浮条）上的「更多」应当展开**右键会出现的那个菜单**
++       （`ClipContextMenu`），而不是另做一个小菜单。浮条只派发事件，这里复用已装配好的
++       那个实例 —— 它的 40 个 props（删除/静音/重命名/复制/切割/编组/规范化/反转…）
++       都在下面统一装配，复制一份到浮条必然漂移。 */
++    React.useEffect(() => {
++        const onOpenClipMenu = (e: Event) => {
++            const d = (e as CustomEvent<{ x?: number; y?: number; clipId?: string }>).detail ?? {};
++            const session = store.getState().session;
++            /* ⚠️ 优先用**事件里带的 clipId**：后端 `select_clip` 命令不经过前端 thunk，
++               所以前端 store 的 `selectedClipId` 可能仍是 null（实测就是这么"发事件没反应"）。
++               浮条本来就知道自己那一块的 id ⇒ 直接带过来最可靠。 */
++            const id = d.clipId ?? session.selectedClipId;
++            /* 放宽查找：`clipId` 对不上时回退到**第一个块**。
++               理由：用户点的是浮条上的「更多」，意图明确就是"给当前这一块开菜单"；
++               而前后端的选中/块列表在手机上未必严格同步（后端 `select_clip` 不更新前端 store，
++               前端也可能还没拿到新块）。只要轨道上**有块**就该让菜单出来，
++               而不是静默什么都不发生（这正是之前"点了没反应"的观感）。 */
++            const target =
++                (id ? session.clips.find((c) => c.id === id) : undefined) ?? session.clips[0];
++            if (!target) return;
++            setTrackAreaMenu(null);
++            setContextMenu({
++                x: Math.round(d.x ?? window.innerWidth / 2),
++                y: Math.round(d.y ?? window.innerHeight / 2),
++                clipId: target.id,
++            });
++        };
++        window.addEventListener("hs-open-clip-context-menu", onOpenClipMenu);
++        return () => window.removeEventListener("hs-open-clip-context-menu", onOpenClipMenu);
++    }, []);
++
 +    const handleKernelSeekTo = React.useCallback(
 +        (sec: number): void => {
 +            const target = resolveKernelSeekSec(sec, true);
@@ -58384,7 +58379,7 @@ index 08455bfd..10ab89c2 100644
 +    };
 +}
 diff --git a/frontend/src/components/layout/renderKernel/gl/glContext.ts b/frontend/src/components/layout/renderKernel/gl/glContext.ts
-index cb97152b..fdaa57a9 100644
+index cb97152b..f230121f 100644
 --- a/frontend/src/components/layout/renderKernel/gl/glContext.ts
 +++ b/frontend/src/components/layout/renderKernel/gl/glContext.ts
 @@ -48,6 +48,8 @@ export interface GlCanvasHandle {
@@ -58396,10 +58391,55 @@ index cb97152b..fdaa57a9 100644
  }
  
  /**
-@@ -74,12 +76,42 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
+@@ -62,6 +64,32 @@ export interface GlCanvasHandle {
+  * @param canvas 目标画布。
+  * @returns 上下文句柄；WebGL2 不可用时为 null。
+  */
++/**
++ * 显式**释放**一个 WebGL 上下文占用的槽位。
++ *
++ * 【为什么需要】Chrome 每个页面只允许约 **16 个**活跃 WebGL context，超了就会
++ * "Too many active WebGL contexts. Oldest context will be lost." —— 被强制丢失的那个
++ * 之后所有 GL 调用都报 `INVALID_OPERATION … does not belong to this context`、
++ * 画面**一片空白**。而我们的手机分屏会把面板**反复挂载/卸载**（拖动分屏手柄切
++ * "参数全屏 ⇄ 分屏"、切页签都会），每次挂载各画布都要新建 context，旧的只能等 GC ——
++ * 实测（`scripts/_dbg-e10b-whitescreen.mjs`，模拟器 8 轮拖动）日志里出现
++ * **4 次** "Too many active WebGL contexts" + 120 行 GL 报错 ⇒ 这正是用户报的
++ * **E10-②「反复切换后参数界面白屏」**。
++ *
++ * ⚠️ 规范约束与对策：同一 canvas 一旦 `loseContext()`，再 `getContext("webgl2")`
++ * 拿回的是**同一个已丢失的 context**（不是新建）——React StrictMode / HMR 的
++ * "dispose 后立刻用同一节点重建"会踩这个坑（`createShader` 返回 null）。
++ * 对策见下面 `createGlCanvas` 里对 `isContextLost()` 的处理（用 `restoreContext()`）。
++ */
++export function releaseGlContext(gl: WebGL2RenderingContext | null | undefined): void {
++    if (!gl) return;
++    try {
++        gl.getExtension("WEBGL_lose_context")?.loseContext();
++    } catch {
++        /* 环境不支持 lose_context：忽略（GC 仍会回收，只是慢） */
++    }
++}
++
+ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null {
+     const gl = canvas.getContext("webgl2", {
+         alpha: true,
+@@ -73,13 +101,54 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
+         powerPreference: "high-performance",
      });
      if (!gl) return null;
- 
++    /* 同一 canvas 复用时（React 复用节点 / StrictMode 双挂载）：上一个句柄 dispose 时
++       主动丢失过这个 context ⇒ 这里把它恢复回来，否则本次挂载拿到的是"已丢失"的
++       context（`createShader` 一律返回 null）。`restoreContext()` 是异步的，
++       恢复完成会触发 `webglcontextrestored`，由下面的自愈路径重建 GPU 资源。 */
++    if (gl.isContextLost()) {
++        try {
++            gl.getExtension("WEBGL_lose_context")?.restoreContext();
++        } catch {
++            /* ignore */
++        }
++    }
++
 +    /* I-4（E10-② 白屏）第二刀：**WebGL context 丢失的自愈**。
 +       移动端"页面突然全白"的常见来源就是 GPU 侧丢 context（显存吃紧 / 渲染进程被打断 /
 +       驱动重置），而此前**没人监听** `webglcontextlost` ⇒ 一旦丢失就永久白屏（只能靠切面板重建内核）。
@@ -58419,7 +58459,7 @@ index cb97152b..fdaa57a9 100644
 +    };
 +    canvas.addEventListener("webglcontextlost", onContextLost, false);
 +    canvas.addEventListener("webglcontextrestored", onContextRestored, false);
-+
+ 
      let target = resolveGlRasterTarget(1, 1, 1);
  
      return {
@@ -58439,7 +58479,7 @@ index cb97152b..fdaa57a9 100644
              target = resolveGlRasterTarget(cssWidthPx, cssHeightPx, dpr);
              // 仅在物理尺寸真正变化时写 canvas 尺寸：写 canvas.width 会重置
              // 整个绘制状态（缓冲被清空），无谓写入会丢掉同帧已上传的实例数据。
-@@ -96,6 +128,7 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
+@@ -96,21 +165,16 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
          },
  
          clear() {
@@ -58447,6 +58487,25 @@ index cb97152b..fdaa57a9 100644
              gl.clearColor(0, 0, 0, 0);
              gl.clear(gl.COLOR_BUFFER_BIT);
          },
+ 
+         dispose() {
+-            // 刻意**不**调用 `WEBGL_lose_context.loseContext()`。
+-            //
+-            // 规范约束：一个 canvas 只能有一个 WebGL context；`loseContext()` 之后对
+-            // 同一 canvas 再 `getContext("webgl2")` 会返回**同一个已丢失的 context**
+-            // （而不是新建）。React StrictMode 的双挂载与 HMR 重新挂载恰好是
+-            // "dispose 后立即重建"的模式，loseContext 会让第二次挂载拿到已丢失的
+-            // context，表现为 `createShader` 返回 null（"Unable to create shader"）。
+-            //
+-            // 真正的 GPU 资源（program / buffer / texture）由各 program 的 dispose
+-            // 释放；context 本身随 canvas 被 GC 回收，无需手动丢失。
++            /* 释放 context 槽位（E10-② 白屏的真凶之一，见 `releaseGlContext` 的说明）。
++               原先刻意不释放，理由是"同一 canvas 重建会拿到已丢失的 context"——
++               那个坑已在 `createGlCanvas` 里用 `restoreContext()` 补上，所以这里可以放心释放。 */
++            releaseGlContext(gl);
+         },
+     };
+ }
 diff --git a/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts b/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts
 index 687d969f..dfc6284b 100644
 --- a/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts
@@ -58502,7 +58561,7 @@ index d2d25db8..8ae953df 100644
  
              dispose() {
 diff --git a/frontend/src/components/layout/timeline/ClipContextMenu.tsx b/frontend/src/components/layout/timeline/ClipContextMenu.tsx
-index e9858a5c..6ad2af31 100644
+index e9858a5c..20ed9cbc 100644
 --- a/frontend/src/components/layout/timeline/ClipContextMenu.tsx
 +++ b/frontend/src/components/layout/timeline/ClipContextMenu.tsx
 @@ -49,7 +49,11 @@ const MenuItem: React.FC<{
@@ -58518,6 +58577,19 @@ index e9858a5c..6ad2af31 100644
      </button>
  );
  
+@@ -198,6 +202,12 @@ const SubMenu: React.FC<{
+                     role="menu"
+                     data-hs-context-menu="1"
+                     className="absolute z-[60] min-w-[190px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
++                    /* E6：点到菜单里的项 ⇒ 顺手收起音频块那条临时浮条
++                       （浮条是"临时操作"入口，选项已经落到菜单里了）。
++                       用**捕获**阶段：早于条目自己的 onClick，且不影响本次动作。 */
++                    onPointerDownCapture={() =>
++                        window.dispatchEvent(new CustomEvent("hs-hide-clip-actions"))
++                    }
+                     onPointerDown={(e) => e.stopPropagation()}
+                     onClick={(e) => e.stopPropagation()}
+                 >
 diff --git a/frontend/src/components/layout/timeline/TimeRuler.tsx b/frontend/src/components/layout/timeline/TimeRuler.tsx
 index 147331ce..5a625f64 100644
 --- a/frontend/src/components/layout/timeline/TimeRuler.tsx
@@ -78805,10 +78877,34 @@ index 51360e16..18a695aa 100644
      const nearRightCorner = clipRightPx - args.contentX <= FADE_CORNER_CAP_WIDTH_PX;
      const nearLeftStrip = args.contentX - clipLeftPx <= FADE_CORNER_EDGE_WIDTH_PX;
 diff --git a/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts b/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts
-index 5dda3c55..5e198282 100644
+index 5dda3c55..68838e4c 100644
 --- a/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts
 +++ b/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts
-@@ -608,7 +608,7 @@ export class GlClipBodyRenderer {
+@@ -439,6 +439,23 @@ function compile(gl: WebGL2RenderingContext, type: number, source: string): WebG
+  * 用法：`render()` 上传实例并绘制；之后若只有视口变化，用 `repaint()` 复用
+  * 已上传的实例缓冲（与波形 P2c 同机制）。
+  */
++/**
++ * 释放这个 WebGL context 占用的槽位（E10-② 白屏）。
++ *
++ * 与 `renderKernel/gl/glContext.ts` 的 `releaseGlContext` 同一件事，这里**就地**一份
++ * 是为了不把 `waveform/` 这一层反向依赖到 `components/`（那会造成分层倒置）。
++ * 每页约 16 个 context 上限；不释放 ⇒ "Too many active WebGL contexts" ⇒
++ * 被强制丢失的那块画布从此不再渲染（用户报的"反复切换后白屏"）。
++ */
++function loseGlContext(gl: WebGL2RenderingContext | null | undefined): void {
++    if (!gl) return;
++    try {
++        gl.getExtension("WEBGL_lose_context")?.loseContext();
++    } catch {
++        /* 环境不支持：忽略（GC 仍会回收，只是慢） */
++    }
++}
++
+ export class GlClipBodyRenderer {
+     private readonly canvas: HTMLCanvasElement;
+     private readonly gl: WebGL2RenderingContext;
+@@ -608,12 +625,14 @@ export class GlClipBodyRenderer {
          gl.uniform2f(this.originLocation, originXPx, originYPx);
          gl.enable(gl.BLEND);
          gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
@@ -78817,6 +78913,13 @@ index 5dda3c55..5e198282 100644
          gl.bindVertexArray(null);
      }
  
+     dispose(): void {
+         const gl = this.gl;
++        /* E10-②：除了删 GPU 资源，还要**释放 context 槽位**（每页约 16 个上限）。 */
++        loseGlContext(gl);
+         gl.deleteBuffer(this.unitBuffer);
+         gl.deleteBuffer(this.instanceBuffer);
+         gl.deleteVertexArray(this.vao);
 diff --git a/frontend/src/components/layout/touchGesture.ts b/frontend/src/components/layout/touchGesture.ts
 new file mode 100644
 index 00000000..d1123533
@@ -80078,10 +80181,10 @@ index 00000000..c51ea7f9
 +}
 diff --git a/frontend/src/components/mobile/ClipQuickActions.tsx b/frontend/src/components/mobile/ClipQuickActions.tsx
 new file mode 100644
-index 00000000..2ffc91cf
+index 00000000..bbe16b02
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipQuickActions.tsx
-@@ -0,0 +1,344 @@
+@@ -0,0 +1,350 @@
 +/**
 + * 音频块「常用操作」浮动条 —— 规格 `docs/15` 音频块·单击：
 + * 「选中并显示常用操作与左右控制点（参考 flm1.png）」。
@@ -80214,19 +80317,18 @@ index 00000000..2ffc91cf
 +        const onDown = (e: PointerEvent) => {
 +            const t = e.target as HTMLElement | null;
 +            if (!t || typeof t.closest !== "function") return;
-+            if (t.closest("[data-hs-clip-actions]")) {
-+                /* E6（用户口径，**覆盖 B2 的旧行为**）：「**点击临时菜单中的选项后也要隐藏菜单**」。
-+                   旧注释的理由是"点按钮不能把浮条收掉"——那是为了让**多步操作**（例如先点
-+                   「更多」再点里面的项）不被自己的第一次点击打断。现在按用户要求改为：
-+                   **点到真正的选项就收起浮条**（一次操作 = 一个动作 = 浮条退场）。
-+                   ⚠️ 只对"命中可点项"生效：点在浮条容器/空白上不收，免得误触即消失；
-+                   容器本身保留（多选态下浮条不显示，见上面的门控）。 */
-+                if (t.closest("button, [role='button'], [role='menuitem'], [data-hs-clip-action]")) {
-+                    const id = selectedClipIdRef.current;
-+                    if (id !== null) setHiddenForClipId(id);
-+                }
-+                return;
-+            }
++            /* ⚠️ 点在**浮条自己身上**一律不收。
++             *
++             * 🔴 2026-09-30 实测（`scripts/_dbg-clipmore.mjs`）：这里曾经对"命中浮条里的按钮"
++             * 也 `setHiddenForClipId(id)`（当时的意图是 E6「点选项后也要隐藏菜单」），
++             * 但这是在 `pointerdown` 的**捕获阶段**执行的 —— 比按钮自己的 `click` 早，
++             * 于是浮条在 `click` 派发**之前**就被卸载 ⇒ `click` 的 target 没了
++             * ⇒ **浮条上所有按钮（复制/剪切/删除/分割/编辑/更多）全都点不动**。
++             * 实测事件序列：`BAR-REMOVED → pointerdown → touchstart → touchend`（**没有 click**）。
++             *
++             * 修法：E6 的"点选项后收起"改到 **click 里**做（见下面 `btn` 的 onClick），
++             * 这里只负责"点浮条以外的地方才收"。 */
++            if (t.closest("[data-hs-clip-actions]")) return;
 +            if (t.closest('[data-hs-timeline-kernel="1"]')) {
 +                // 回到时间线 = 用户又去操作块了 ⇒ 清掉"已收起"，让选中逻辑重新决定。
 +                setHiddenForClipId(null);
@@ -80361,7 +80463,14 @@ index 00000000..2ffc91cf
 +            onClick={(e) => {
 +                e.stopPropagation();
 +                a.run();
-+                if (a.key !== "more") setMoreOpen(false);
++                if (a.key !== "more") {
++                    setMoreOpen(false);
++                    /* E6（用户口径「点击临时菜单中的选项后也要隐藏菜单」）：
++                       **在 click 里收**，而不是在 pointerdown 的捕获阶段收 ——
++                       后者会把这次 click 自己毁掉（见 `onDown` 里的长注释）。
++                       「更多」例外：它只是去开右键那套菜单，浮条要留着。 */
++                    setHiddenForClipId(clip.id);
++                }
 +            }}
 +            style={{
 +                width: btnSize,
@@ -100675,7 +100784,7 @@ index 90012222..800b049e 100644
      ctrlKey: boolean;
      metaKey?: boolean;
 diff --git a/frontend/src/waveform/surfaceRenderer.ts b/frontend/src/waveform/surfaceRenderer.ts
-index 260aa737..ecc8a28d 100644
+index 260aa737..2edd9a22 100644
 --- a/frontend/src/waveform/surfaceRenderer.ts
 +++ b/frontend/src/waveform/surfaceRenderer.ts
 @@ -304,7 +304,7 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
@@ -100687,7 +100796,7 @@ index 260aa737..ecc8a28d 100644
      }
  
      /**
-@@ -344,7 +344,7 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
+@@ -344,15 +344,34 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
          );
          gl.enable(gl.BLEND);
          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -100696,6 +100805,33 @@ index 260aa737..ecc8a28d 100644
      }
  
      dispose(): void {
++        /* E10-②：先释放 context 槽位（每页约 16 个上限），再删 GPU 资源。 */
++        loseGlContext(this.gl);
+         this.gl.deleteBuffer(this.buffer);
+         this.gl.deleteProgram(this.program);
+     }
+ }
+ 
++/**
++ * 释放这个 WebGL context 占用的槽位（E10-② 白屏）。
++ *
++ * 与 `renderKernel/gl/glContext.ts` 的 `releaseGlContext` 同一件事，这里**就地**一份
++ * 是为了不把 `waveform/` 这一层反向依赖到 `components/`（那会造成分层倒置）。
++ * 每页约 16 个 context 上限；不释放 ⇒ "Too many active WebGL contexts" ⇒
++ * 被强制丢失的那块画布从此不再渲染（用户报的"反复切换后白屏"）。
++ */
++function loseGlContext(gl: WebGL2RenderingContext | null | undefined): void {
++    if (!gl) return;
++    try {
++        gl.getExtension("WEBGL_lose_context")?.loseContext();
++    } catch {
++        /* 环境不支持：忽略（GC 仍会回收，只是慢） */
++    }
++}
++
+ export class Canvas2dWaveformRenderer implements WaveformSurfaceRenderer {
+     readonly kind = "canvas2d" as const;
+     private readonly backCanvas = document.createElement("canvas");
 diff --git a/frontend/vite.config.ts b/frontend/vite.config.ts
 index df3cb0aa..44b4259a 100644
 --- a/frontend/vite.config.ts
