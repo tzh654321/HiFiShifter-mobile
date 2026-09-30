@@ -8,8 +8,8 @@
  *   · 上下拖动 **参数界面拍数栏 / 文件管理标题栏 / 记事本标题栏** 可更改分屏边界，
  *     某个界面所得太小则**自动关闭**。
  *
- * 手柄就是那三个标题条本身（App 侧按 `data-hs-split-handle` / `[data-hs-time-ruler="params"]`
- * 集中绑定），所以本探针**直接拖那三个元素**，不另造浮层。
+ * 手柄是**上工具栏 + 文件浏览器标题栏 + 记事本标题栏**（E8 之后参数拍数栏已退出，
+ * 见 `App.tsx` 的 `HANDLE_SELECTOR`），所以本探针**直接拖这几个元素**，不另造浮层。
  *
  * 比值口径：`ratio = (下方面板块上沿 − 容器上沿) / 容器高` —— 直接量 DOM，不看内部 state。
  *
@@ -63,7 +63,7 @@ function inPageProbe() {
         container: { top: Math.round(cr.top), h: Math.round(cr.height) },
         kids,
         ratio,
-        paramsRuler: handleY('[data-hs-time-ruler="params"]'),
+        paramsHandle: handleY('[data-hs-split-handle="param-toolbar"]'),
         filesBar: handleY('[data-hs-split-handle="files"]'),
         notesBar: handleY('[data-hs-split-handle="notes"]'),
     };
@@ -173,7 +173,7 @@ async function main() {
     async function dragHandle(sel, toRatio, dyFallback = 140) {
         await dismissOverlays();
         const g = await geo();
-        const el = sel === 'params' ? g.paramsRuler : sel === 'files' ? g.filesBar : g.notesBar;
+        const el = sel === 'params' ? g.paramsHandle : sel === 'files' ? g.filesBar : g.notesBar;
         if (!el) throw new Error(`找不到手柄 ${sel}`);
         const c = g.container;
         const toY = toRatio === null ? el.y + dyFallback : Math.round(c.top + toRatio * c.h);

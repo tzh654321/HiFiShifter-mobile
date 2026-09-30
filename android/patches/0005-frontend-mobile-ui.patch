@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..22b11513 100644
+index 3802022a..357835a8 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4612 @@
+@@ -1,4006 +1,4632 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -4534,6 +4534,20 @@ index 3802022a..22b11513 100644
 +        return Number.isFinite(stored) ? Math.min(0.85, Math.max(0.15, stored)) : 0.6;
 +    });
 +    const splitRatioRef = useRef(splitRatio);
++    /* C5/C6-b（2026-09-30）：**手机端分屏比例独立于桌面分割条**。
++       原来两边共用 `splitRatio` 与 `hifishifter.splitRatio` ⇒ 在手机上拖分屏会把
++       桌面/平板的分割条一起搬走（E10-1 那个"全屏参数界面被残留比例压缩"就是同一
++       根因的变体）。各存各的键，互不影响。 */
++    const MOBILE_SPLIT_KEY = "hifishifter.mobileSplitRatio";
++    const [mobileSplitRatio, setMobileSplitRatio] = useState(() => {
++        const rawMobile = localStorage.getItem(MOBILE_SPLIT_KEY);
++        const storedMobile =
++            rawMobile != null && rawMobile.trim() !== "" ? Number(rawMobile) : Number.NaN;
++        return Number.isFinite(storedMobile)
++            ? Math.min(0.85, Math.max(0.15, storedMobile))
++            : 0.6;
++    });
++    const mobileSplitRatioRef = useRef(mobileSplitRatio);
 +    const [isDragging, setIsDragging] = useState(false);
 +    const [quickSearchOpen, setQuickSearchOpen] = useState(false);
 +    /** C5/C6：手机端分屏容器（上下两块都在它里面）。 */
@@ -5070,11 +5084,11 @@ index 3802022a..22b11513 100644
 +            e.preventDefault();
 +            const ratio = clamp((e.clientY - rect.top) / rect.height, 0.06, 0.94);
 +            d.ratio = ratio;
-+            splitRatioRef.current = ratio;
++            mobileSplitRatioRef.current = ratio;
 +            /* 刚进入分屏的那一帧下方面板块还没挂上（React 尚未提交）⇒
 +               只有两块都在时才直接改 DOM；否则交给下面那次 `setSplitRatio`。 */
 +            if (container.children.length >= 2) paintRatio(ratio);
-+            else setSplitRatio(clamp(ratio, 0.15, 0.85));
++            else setMobileSplitRatio(clamp(ratio, 0.15, 0.85));
 +        };
 +
 +        const onUp = (e: PointerEvent) => {
@@ -5097,14 +5111,14 @@ index 3802022a..22b11513 100644
 +                /* 轨道被压得太小 ⇒ 关掉轨道 ⇒ 回到"先前那个界面"的全屏。 */
 +                dispatch(toggleMobilePanel("timeline"));
 +            }
-+            setSplitRatio(settled);
-+            localStorage.setItem("hifishifter.splitRatio", String(settled));
++            setMobileSplitRatio(settled);
++            localStorage.setItem(MOBILE_SPLIT_KEY, String(settled));
 +        };
 +
 +        const onDown = (e: PointerEvent) => {
 +            if (e.pointerType === "mouse") return; // 鼠标走桌面那条分割条
 +            if (findHandle(e.target) === null) return;
-+            drag = { pointerId: e.pointerId, startY: e.clientY, moved: false, ratio: splitRatioRef.current };
++            drag = { pointerId: e.pointerId, startY: e.clientY, moved: false, ratio: mobileSplitRatioRef.current };
 +            mobileSplitDraggingRef.current = true;   /* I-2：拖动期间禁止重写 flexGrow */
 +            window.addEventListener("pointermove", onMove, { passive: false });
 +            window.addEventListener("pointerup", onUp);
@@ -7618,6 +7632,9 @@ index 3802022a..22b11513 100644
 +    useEffect(() => {
 +        splitRatioRef.current = splitRatio;
 +    }, [splitRatio]);
++    useEffect(() => {
++        mobileSplitRatioRef.current = mobileSplitRatio;
++    }, [mobileSplitRatio]);
 +
 +    useEffect(() => {
 +        if (!isDragging) return;
@@ -8335,9 +8352,6 @@ index 3802022a..22b11513 100644
 +            {/* Main Content Area: Splitter + optional right-side panels */}
 +            {isPhone ? (
 +                <Flex direction="column" className="flex-1 min-h-0">
-+                    {/* 参数工具行：菜单栏下方、钢琴窗上方（用户口径）。
-+                        选择/绘制/眼睛 从底栏搬到这里，并新增 ∨ 参数菜单入口。 */}
-+                    {mobilePanels.params ? <MobileParamToolRow /> : null}
 +                    {/* C（#17）：勾了几个面板就分几块。
 +                        至少有一个（`toggleMobilePanel` 里守卫），所以不会整片空白。
 +
@@ -8353,11 +8367,11 @@ index 3802022a..22b11513 100644
 +                    >
 +                        {mobilePanels.timeline ? (
 +                            <div
-+                                className="min-h-0 relative"
++                                className="hs-mobile-split-pane relative"
 +                                style={
 +                                    mobileHasNonTrackPanel
-+                                        ? { flexGrow: splitRatio, flexBasis: 0 }
-+                                        : { flexGrow: 1, flexBasis: 0 }
++                                        ? { flexGrow: mobileSplitRatio }
++                                        : { flexGrow: 1 }
 +                                }
 +                            >
 +                                {/* #16：**各面板自己的关闭键** —— 分屏时每块都能独立收起。 */}
@@ -8389,9 +8403,15 @@ index 3802022a..22b11513 100644
 +                        ) : null}
 +                        {mobileHasNonTrackPanel ? (
 +                            <div
-+                                className="min-h-0 relative flex flex-col"
-+                                style={{ flexGrow: 1 - splitRatio, flexBasis: 0 }}
++                                className="hs-mobile-split-pane relative flex flex-col"
++                                style={{ flexGrow: 1 - mobileSplitRatio }}
 +                            >
++                                {/* C5/C6-b：**上工具栏放进"下方块"的最上面**。
++                                    它就是分屏手柄（E8 用户口径），放进下方块后
++                                    **正好压在分界线上**、上下拖动跟手；原先它挂在分屏容器
++                                    **之外**的上方 ⇒ 手柄与分界线永远差着一段，
++                                    拖起来像"跑偏/拖不动"。工具行属于参数界面 ⇒ 只有它存在。 */}
++                                {mobilePanels.params ? <MobileParamToolRow /> : null}
 +                                {mobilePanels.params ? (
 +                                    <div className="flex-1 min-h-0 relative">
 +                                        {/* #52：用户口径「全屏参数界面下点 ✕ ⇒ 回到全屏轨道界面」。
@@ -60374,10 +60394,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..e42838d9 100644
+index c0db2221..af12000b 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2808 @@
+@@ -1,2297 +1,2889 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -62979,10 +62999,16 @@ index c0db2221..e42838d9 100644
 +            </Text>
 +            {/* E2：**秒数用小一号字体**（用户口径：「轨道界面左上角 拍数/秒数 的秒数调小字体」）。
 +                原来是 `formatted.combined` 一整个字符串（"8.3.2 / 12.345"）⇒ 两段同字号。
-+                现在拆成两段：主读数原字号、次级读数 **0.72em** 且淡一档。
++                现在拆成两段：主读数原字号、次级读数小一号且淡一档。
 +                盒宽仍由 `boxWidth`（按 maxLabel 实测）撑着 ⇒ 数字跳动/布局不会变。
 +                ⚠️ JSX 里的注释必须**用花括号包起来**：写成裸的块注释会被 React 当作文本节点渲染出来
-+                （实测页面上真的出现了这几行中文注释）。 */}
++                （实测页面上真的出现了这几行中文注释）。
++
++                🔴 E2-b（2026-09-30 用户复报「秒数只减小了字间距，没看到字体变小」）：
++                `fontSize` **必须写在 `SlotTimeText` 上**（它内部是 Radix `<Text size="2">`，
++                那条 class 给的是**绝对**字号，会把外层 span 的 `em` 直接盖掉）；
++                而数字槽宽本来就按 0.72 缩放 ⇒ 结果只剩"间距变小、字形不变"。
++                写在里层（`SlotTimeText` 的 `style` 会落到那个 `<Text>` 上）才真正生效。 */}
 +            <span
 +                className="flex items-baseline gap-0.5 shrink-0 tabular-nums text-right leading-none"
 +                style={boxWidth != null ? { minWidth: boxWidth, justifyContent: "flex-end" } : undefined}
@@ -62997,7 +63023,6 @@ index c0db2221..e42838d9 100644
 +                {formatted.secondaryLabel ? (
 +                    <span
 +                        className="tabular-nums whitespace-nowrap opacity-70"
-+                        style={{ fontSize: "0.72em" }}
 +                        data-hs-tracklist-readout-secondary
 +                    >
 +                        <SlotTimeText
@@ -63005,6 +63030,7 @@ index c0db2221..e42838d9 100644
 +                            digitWidthPx={digitWidth != null ? Math.round(digitWidth * 0.72) : null}
 +                            selectable
 +                            className="tabular-nums leading-none whitespace-nowrap"
++                            style={{ fontSize: "0.72em" }}
 +                        />
 +                    </span>
 +                ) : null}
@@ -63195,6 +63221,22 @@ index c0db2221..e42838d9 100644
 +    const [volumeHoveredTrackId, setVolumeHoveredTrackId] = useState<string | null>(null);
 +    const [volumeTooltipPos, setVolumeTooltipPos] = useState<{ x: number; y: number } | null>(null);
 +    const [volumeDrag, setVolumeDrag] = useState<{ trackId: string; baseDb: number } | null>(null);
++    /**
++     * E-GAIN（2026-09-30）：**同时只允许一个增益拖动活着**。
++     *
++     * 用户报「增益调完之后点击别处仍被判定在调增益」的根因就是这里没有归属：
++     * 长按门槛的定时器在手指**抬起之后**才开火（实测：轻点旋钮 60ms 之后别处纵拖
++     * 仍能把增益从 0dB 改到 +12dB），于是那些 window 监听没有对应的手指，
++     * 却继续替**后续每次手势**算增益。
++     *
++     * 两道结构性保险（不依赖"到底是哪条路径漏的"）：
++     *   ① `activeGainDragRef` —— 新拖动开始时先收掉旧的；任何一处 `pointerdown`
++     *      只要不在增益控件上，也立刻收掉（跨手势泄漏就此不可能）；
++     *   ② `gainDragSeqRef` —— 只有**最新**那次拖动才允许在 `touchend` 提交，
++     *      陈旧的监听即使还挂着也不会再写后端。
++     */
++    const activeGainDragRef = useRef<{ finish: () => void } | null>(null);
++    const gainDragSeqRef = useRef(0);
 +    const [editingGainTrackId, setEditingGainTrackId] = useState<string | null>(null);
 +    const editingGainTrackIdRef = useRef<string | null>(null);
 +    const [editingGainValue, setEditingGainValue] = useState("");
@@ -63991,7 +64033,16 @@ index c0db2221..e42838d9 100644
 +           防误触现在由下面的长按门槛承担：按住 260ms 才生效，期间划动即放弃。 */
 +        const pressX = e.clientX;
 +        const pressY = e.clientY;
++        /* 🔴 E-GAIN：**按下那一刻就把旋钮元素取出来**。
++           原来靠 260ms 之后的 `e.currentTarget` —— React 在派发结束后会把
++           `currentTarget` 置为 null ⇒ 长按路径拿到的 knobEl 是 null ⇒
++           `onEnd` 里 `knobEl.getBoundingClientRect()` 抛错 ⇒ `tearDown()` 永不执行
++           （监听留在 window 上、`finished` 状态半途而废）⇒ 用户看到
++           「增益调完之后点别处仍在调增益」。 */
++        const knobEl = e.currentTarget;
 +        let armed = false;
++        /** 手指是否还按着。门槛定时器**只在仍按着时**才允许武装拖动。 */
++        let pressActive = true;
 +        /* 🔴 E11 的关键补丁：**必须在门槛阶段就阻止浏览器接管触摸**。
 +           实测：只在长按后的 `startVolumeKnobDragNow` 里 `preventDefault()` 已经太晚 ——
 +           那时 WebView 已判定为纵向滚动并发出 `pointercancel`，拖动会被立刻收尾
@@ -64002,12 +64053,20 @@ index c0db2221..e42838d9 100644
 +            if (ev.cancelable) ev.preventDefault();
 +        };
 +        window.addEventListener("touchmove", blockScroll, { passive: false });
++        /* `let` + 先声明：`clearGate` 会引用它，若写成 `const gateTimer = …`（在 clearGate
++           之后声明）就依赖"没有任何事件能在同一 tick 内先触发"这一隐含前提。 */
++        let gateTimer: number | null = null;
 +        const clearGate = () => {
-+            window.clearTimeout(gateTimer);
++            if (gateTimer !== null) {
++                window.clearTimeout(gateTimer);
++                gateTimer = null;
++            }
 +            window.removeEventListener("touchmove", blockScroll);
 +            window.removeEventListener("pointermove", onGateMove, true);
 +            window.removeEventListener("pointerup", onGateUp, true);
 +            window.removeEventListener("pointercancel", onGateUp, true);
++            window.removeEventListener("touchend", onGateUp, true);
++            window.removeEventListener("touchcancel", onGateUp, true);
 +        };
 +        const onGateMove = (ev: PointerEvent) => {
 +            if (armed) return;
@@ -64016,9 +64075,18 @@ index c0db2221..e42838d9 100644
 +            }
 +        };
 +        const onGateUp = () => {
++            /* 抬手：无论有没有武装过，都记下"已经不在按着了"。 */
++            pressActive = false;
 +            if (!armed) clearGate();
 +        };
-+        const gateTimer = window.setTimeout(() => {
++        gateTimer = window.setTimeout(() => {
++            /* 🔴 E-GAIN：**手指已抬起 ⇒ 绝不武装**。
++               否则这个拖动在没有手指的情况下被注册一堆 window 监听，
++               之后任何一次触摸的移动都会替它算增益（幽灵拖动）。 */
++            if (!pressActive) {
++                clearGate();
++                return;
++            }
 +            armed = true;
 +            clearGate();
 +            /* E12：长按识别后震一下（与其它"长按并划动"手势一致）。失败静默即可。 */
@@ -64033,11 +64101,16 @@ index c0db2221..e42838d9 100644
 +               ⚠️ 这正是用户报「增益划不动了」的真因：原实现里
 +               `startVolumeKnobDragNow` 开头就对 touch/pen 直接 return（"触摸不拖增益旋钮"），
 +               于是手机上一按就被拒 —— 现在改成"长按后才放行触摸"。 */
-+            startVolumeKnobDragNow(e, trackId, volume, true);
++            startVolumeKnobDragNow(e, trackId, volume, true, knobEl);
 +        }, GAIN_KNOB_LONG_PRESS_MS);
 +        window.addEventListener("pointermove", onGateMove, true);
 +        window.addEventListener("pointerup", onGateUp, true);
 +        window.addEventListener("pointercancel", onGateUp, true);
++        /* 原生 touch 事件也一并认：WebView 的 pointer 序列并不总是完整
++           （E11 实测过 `pointerup` 早于 `touchmove`、`pointercancel` 不带 pointerType 等），
++           门槛的撤销不能只挂在 pointer 上。 */
++        window.addEventListener("touchend", onGateUp, true);
++        window.addEventListener("touchcancel", onGateUp, true);
 +    }
 +
 +    function startVolumeKnobDragNow(
@@ -64046,17 +64119,25 @@ index c0db2221..e42838d9 100644
 +        volume: number,
 +        /** 由长按门槛放行时为 true（见 `beginVolumeKnobDrag`）。 */
 +        fromLongPress = false,
++        /**
++         * 按下那一刻的旋钮元素。**必须由调用方传入** —— 长按路径到这里已经过了 260ms，
++         * React 早已把合成事件的 `currentTarget` 置为 null（这就是 E-GAIN 的根因）。
++         */
++        knobElParam: HTMLButtonElement | null = null,
 +    ) {
 +        /* 数位笔 / 触摸原先**一律不拖增益旋钮**（"零阈值按下即生效，滑动画线时极易误触"）。
 +           但那让手机用户**根本拖不动** —— 这正是用户报「轨道头增益划不动了」的真因。
 +           现在只拒绝"未经长按"的路径；长按门槛本身已保证防误触。 */
-+        console.log("[e11] startDrag fromLongPress=", fromLongPress);
 +        if (!fromLongPress && shouldSuppressHoverSideEffects(e.nativeEvent)) return;
 +        e.preventDefault();
 +        e.stopPropagation();
 +        clearPendingVolumeCommit(trackId);
 +
-+        const knobEl = e.currentTarget;
++        /* 🔴 E-GAIN：开新拖动之前**先把上一次收干净**（同时只允许一个活着的增益拖动）。 */
++        activeGainDragRef.current?.finish();
++        const dragSeq = ++gainDragSeqRef.current;
++
++        const knobEl = knobElParam ?? (e.currentTarget as HTMLButtonElement | null);
 +        const startY = e.clientY;
 +        const startDb = clampGainDb(gainToDb(volume));
 +        setVolumeDrag({ trackId, baseDb: startDb });
@@ -64098,6 +64179,12 @@ index c0db2221..e42838d9 100644
 +        // 失焦取消：切屏期间 pointerup/pointercancel 不送达本窗口，blur 时以
 +        // 最后一次音量值收尾提交（与 pointerup 语义一致），并复位悬停/拖拽态。
 +        let finished = false;
++        /** 落在**增益控件之外**的按下 ⇒ 立刻收尾（跨手势泄漏的兜底，见 `activeGainDragRef`）。 */
++        const onGlobalPointerDown = (ev: PointerEvent) => {
++            const t = ev.target;
++            if (t instanceof Element && t.closest("[data-track-volume-knob]") !== null) return;
++            finish();
++        };
 +        const tearDown = () => {
 +            unregisterAbort();
 +            /* E11：触摸路径的监听也要一并摘掉（否则下一次手势会叠加多份）。 */
@@ -64107,9 +64194,14 @@ index c0db2221..e42838d9 100644
 +            window.removeEventListener("pointermove", onMove);
 +            window.removeEventListener("pointerup", onEnd);
 +            window.removeEventListener("pointercancel", onEnd);
++            window.removeEventListener("pointerdown", onGlobalPointerDown, true);
 +            if (tooltipRafId != null) {
 +                cancelAnimationFrame(tooltipRafId);
 +                tooltipRafId = null;
++            }
++            /* 只有**自己仍是最新那次**才清登记位（否则会把新拖动顶掉）。 */
++            if (activeGainDragRef.current?.finish === finish) {
++                activeGainDragRef.current = null;
 +            }
 +            setVolumeDrag(null);
 +            onVolumeCommit(trackId, dbToGain(lastDb));
@@ -64136,8 +64228,12 @@ index c0db2221..e42838d9 100644
 +               收尾只认：鼠标/笔的 pointerup、以及原生 touchend/touchcancel。 */
 +            if (ev.type === "pointercancel") return;
 +            finished = true;
-+            const knobRect = knobEl.getBoundingClientRect();
++            /* 🔴 E-GAIN：`knobEl` 可能是 null（老路径），原来这里直接 `.getBoundingClientRect()`
++               ⇒ 抛错 ⇒ 后面的 `tearDown()` 永不执行 ⇒ 监听留在 window 上。
++               现在 null 安全，且**无论如何都收尾**。 */
++            const knobRect = knobEl?.getBoundingClientRect() ?? null;
 +            const stillOverKnob =
++                knobRect !== null &&
 +                ev.clientX >= knobRect.left &&
 +                ev.clientX <= knobRect.right &&
 +                ev.clientY >= knobRect.top &&
@@ -64169,7 +64265,9 @@ index c0db2221..e42838d9 100644
 +               随后这里因 inished 已 true 直接 return ⇒ **拖动后的最新值永不提交**
 +               （表现：UI 跟着手指变、后端 volume 恒为 1）。
 +               修法：touch 收尾**无条件**按最新 lastDb 提交一次（覆盖那次 0dB 的早提交）。*/
-+            onVolumeCommit(trackId, dbToGain(lastDb));
++            if (dragSeq === gainDragSeqRef.current) {
++                onVolumeCommit(trackId, dbToGain(lastDb));
++            }
 +            if (finished) return;
 +            finished = true;
 +            setVolumeHoveredTrackId(null);
@@ -64183,6 +64281,9 @@ index c0db2221..e42838d9 100644
 +        window.addEventListener("pointermove", onMove);
 +        window.addEventListener("pointerup", onEnd);
 +        window.addEventListener("pointercancel", onEnd);
++        /* 登记为"当前唯一活跃的增益拖动"+ 兜底守卫（见 `activeGainDragRef` 的说明）。 */
++        activeGainDragRef.current = { finish };
++        window.addEventListener("pointerdown", onGlobalPointerDown, true);
 +    }
 +
 +    function computeDropSpec(
@@ -78570,6 +78671,124 @@ index a2ae3b60..92821a60 100644
 +    };
 +}
 \ No newline at end of file
+diff --git a/frontend/src/components/layout/timeline/kernel/interaction/hitTest.ts b/frontend/src/components/layout/timeline/kernel/interaction/hitTest.ts
+index 51360e16..18a695aa 100644
+--- a/frontend/src/components/layout/timeline/kernel/interaction/hitTest.ts
++++ b/frontend/src/components/layout/timeline/kernel/interaction/hitTest.ts
+@@ -39,6 +39,14 @@ import {
+  * 所在的那条窄带之外、仍在 10px 内的部分**不**属于边缘——它落在 body 上。
+  */
+ const EDGE_WIDTH_PX = 10;
++/**
++ * 命中带**向块外**最多外扩多少 px（手机端「块外控制点」用）。
++ *
++ * 手机端左右控制点是画在块**外侧**的圆点（E5 用户口径）：圆心距块边 `DOT_R + 3 = 10`、
++ * 半径 7 ⇒ 圆点跨度约 `[边−17, 边−3]`。取 18 覆盖整个圆点，让"看得见的圆点"必然可点中。
++ * 只在边缘竖直带内生效 ⇒ 不会把"块左侧的空白"整片变成裁切区。
++ */
++const OUTSIDE_EDGE_SLACK_PX = 18;
+ 
+ /**
+  * 命中测试所需的 clip 字段集。
+@@ -206,6 +214,41 @@ function findClipAt(list: readonly HitTestClip[], sec: number): HitTestClip | nu
+     return sec < candidate.startSec + candidate.lengthSec ? candidate : null;
+ }
+ 
++/**
++ * 找"边缘就在附近、但落点在块**外**"的 clip（手机端块外控制点的命中兜底）。
++ *
++ * 只在 `hitTest` 已经判定"没命中任何块"之后调用 ⇒ 不会与块内命中抢优先级。
++ * 取**最近**的那一条：两块首尾相接时，落点在缝里会归给更近的一侧。
++ *
++ * @param list 该轨道的 clip（按 startSec 升序）。
++ * @param sec 目标时间（秒）。
++ * @param pxPerSec 缩放（秒 → px）。
++ * @returns 命中的 clip；不在任何块边 `OUTSIDE_EDGE_SLACK_PX` 内时为 null。
++ */
++function findClipNearEdge(
++    list: readonly HitTestClip[],
++    sec: number,
++    pxPerSec: number,
++): HitTestClip | null {
++    const slackSec = OUTSIDE_EDGE_SLACK_PX / pxPerSec;
++    let best: HitTestClip | null = null;
++    let bestDistSec = Infinity;
++    for (const item of list) {
++        const endSec = item.startSec + item.lengthSec;
++        const distSec =
++            sec < item.startSec
++                ? item.startSec - sec
++                : sec > endSec
++                  ? sec - endSec
++                  : Infinity; /* 落在块内 ⇒ 交给块内逻辑 */
++        if (distSec <= slackSec && distSec < bestDistSec) {
++            best = item;
++            bestDistSec = distSec;
++        }
++    }
++    return best;
++}
++
+ /**
+  * 执行命中测试。
+  *
+@@ -230,15 +273,36 @@ export function hitTest(args: HitTestArgs): HitResult {
+     }
+     const track = args.tracks[trackIndex];
+     const list = args.clipsByTrack.get(track.id) ?? [];
+-    const clip = findClipAt(list, sec);
+-    if (clip === null) {
+-        return { kind: "empty", sec, trackId: track.id, trackIndex };
+-    }
+ 
+     const localY = Math.max(0, args.contentY) - trackIndex * rowHeight;
+     const headerHeightPx = Number.isFinite(args.headerHeightPx)
+         ? Math.max(0, args.headerHeightPx)
+         : 0;
++    const clipHeightPx = Math.max(1, rowHeight - 2);
++    const bodyHeightPx = Math.max(1, clipHeightPx - headerHeightPx);
++    const reservePx = fadeCornerReservePx(bodyHeightPx);
++    const localBodyY = localY - headerHeightPx;
++    const inEdgeBand = localBodyY >= reservePx;
++
++    let clip = findClipAt(list, sec);
++    if (clip === null) {
++        /* ── 手机端「块外控制点」的命中带外扩（2026-09-30，用户实测）──────────────
++           左/右控制点是画在**块外侧**的圆点（E5 用户口径：像 flm 那样在块外），圆心距
++           块边 `DOT_R + 3 = 10`px、半径 7 ⇒ 圆点跨度约 `[边−17, 边−3]`。
++           内核原来只认"块**内** edgeWidthPx"的命中带 ⇒ 按圆点正中必然落空；落空后
++           这次按下仍被当成块体 ⇒ 用户看到「按控制点却把音频块拖走了，而且控制点还
++           同时亮起」（视觉与命中两个世界）。
++           ⇒ 这里把命中带**向块外**扩同量，且**只在边缘竖直带内**生效
++           （淡变角 / header / SnapOffset 手柄的语义一格不动）。 */
++        const nearEdge =
++            inEdgeBand && Number.isFinite(args.contentX)
++                ? findClipNearEdge(list, sec, safePxPerSec)
++                : null;
++        if (nearEdge === null) {
++            return { kind: "empty", sec, trackId: track.id, trackIndex };
++        }
++        clip = nearEdge;
++    }
+ 
+     // 边缘优先于 header / body（见 ClipHitRegion 注释）。边缘宽度按 clip 宽度
+     // 收敛到 1/3：极短 clip 不能整块都算边缘，否则 body 区域消失、拖不动。
+@@ -260,13 +324,10 @@ export function hitTest(args: HitTestArgs): HitResult {
+     // 最后一条是曾经的回归点：内核原先让边缘在任何 y 都优先于 header，于是 header
+     // 左右两端各 6px 被裁切手势抢走——静音 / 锁链徽标与右对齐的增益 / 速率标签
+     // 在那里点不动。
+-    const clipHeightPx = Math.max(1, rowHeight - 2);
+-    const bodyHeightPx = Math.max(1, clipHeightPx - headerHeightPx);
+-    const reservePx = fadeCornerReservePx(bodyHeightPx);
+-    const localBodyY = localY - headerHeightPx;
++    // （`clipHeightPx` / `bodyHeightPx` / `reservePx` / `localBodyY` / `inEdgeBand`
++    //   已在上面算好——块外控制点的命中带外扩要用到它。）
+     const inCapBand = localBodyY >= 0 && localBodyY < FADE_CORNER_CAP_HEIGHT_PX;
+     const inStripBand = localBodyY >= FADE_CORNER_CAP_HEIGHT_PX && localBodyY < reservePx;
+-    const inEdgeBand = localBodyY >= reservePx;
+     const nearLeftCorner = args.contentX - clipLeftPx <= FADE_CORNER_CAP_WIDTH_PX;
+     const nearRightCorner = clipRightPx - args.contentX <= FADE_CORNER_CAP_WIDTH_PX;
+     const nearLeftStrip = args.contentX - clipLeftPx <= FADE_CORNER_EDGE_WIDTH_PX;
 diff --git a/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts b/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts
 index 5dda3c55..5e198282 100644
 --- a/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts
@@ -79223,10 +79442,10 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..94bbfd87
+index 00000000..9ee8d67b
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,167 @@
+@@ -0,0 +1,200 @@
 +/**
 + * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
@@ -79253,8 +79472,20 @@ index 00000000..94bbfd87
 +
 +/** 圆点半径（直径 14），比旧版竖条更接近 flm 的抓手观感。 */
 +const DOT_R = 7;
-+/** 手指按在**圆点**周围多少像素内算"抓住控制点"（放宽到 40：手机手指落点本来就粗）。 */
-+const OUTSIDE_GRAB_PX = 40;
++/**
++ * 与内核命中带**逐像素对齐**的两个量（`hitTest.ts` 的 `OUTSIDE_EDGE_SLACK_PX` /
++ * `EDGE_WIDTH_PX`）。浮层只负责"看得见"，所以它的判定范围必须与内核一致：
++ *   左控制点可点范围 = `[边 − 18, 边 + 10]`，右控制点对称。
++ *
++ * 🔴 原先这里用的是"以块外圆点中心 ±40"，比内核宽得多 ⇒ **内核不认的按下也会点亮
++ * "抓住了"的假反馈**，而真正按在圆点正中时内核又落空（圆点在块外，内核只认块内 10px）
++ * ⇒ 用户看到「视觉位置与点击位置有偏差；按控制点却把块拖走」。内核那侧同步外扩后
++ * 才是"看得见就按得中"。
++ */
++const OUTSIDE_EDGE_SLACK_PX = 18;
++const INNER_EDGE_PX = 10;
++/** 纵向容差：内核要求严格落在边缘竖直带内，浮层给一点手指粗度。 */
++const VERTICAL_SLACK_PX = 12;
 +/** 纵向移动超过这个距离才算"选了功能"（避免手抖就换图标）。 */
 +const MODE_THRESHOLD_PX = 18;
 +/** 判定为"左右拖动"的横向位移。 */
@@ -79300,15 +79531,24 @@ index 00000000..94bbfd87
 +            if (!e.isPrimary) return;
 +            const yTop = geo.edgeBandTop;
 +            const yBottom = yTop + Math.max(8, geo.edgeBandHeight);
-+            if (e.clientY < yTop - 40 || e.clientY > yBottom + 40) return;   /* 手指导点粗，纵向也给容差 */
-+            /* 以**圆点中心**为基准（圆点画在块外侧 `DOT_R + 3` 处）——
-+               原先以"块边界"为基准，实测手指按在圆点正中时仍差 ~10px 落空。 */
-+            const dotLeftX = geo.left - DOT_R - 3;
-+            const dotRightX = geo.left + geo.width + DOT_R + 3;
-+            const nearLeft = Math.abs(e.clientX - dotLeftX) <= OUTSIDE_GRAB_PX;
-+            const nearRight = Math.abs(e.clientX - dotRightX) <= OUTSIDE_GRAB_PX;
-+            if (!nearLeft && !nearRight) return;
-+            const side: "left" | "right" = nearLeft ? "left" : "right";
++            if (e.clientY < yTop - VERTICAL_SLACK_PX || e.clientY > yBottom + VERTICAL_SLACK_PX) {
++                return;
++            }
++            /* 与内核命中带**逐像素对齐**（见上面两个常量的说明）：
++               左控制点 = [边−18, 边+10]，右控制点对称。 */
++            const leftHit =
++                e.clientX >= geo.left - OUTSIDE_EDGE_SLACK_PX &&
++                e.clientX <= geo.left + INNER_EDGE_PX;
++            const rightHit =
++                e.clientX >= geo.left + geo.width - INNER_EDGE_PX &&
++                e.clientX <= geo.left + geo.width + OUTSIDE_EDGE_SLACK_PX;
++            if (!leftHit && !rightHit) return;
++            const side: "left" | "right" = leftHit ? "left" : "right";
++            /* 与渲染同一条判据：按不到的圆点不参与反馈（否则又变成"有反馈、没效果"）。 */
++            const baseX = side === "left" ? geo.left - DOT_R - 3 : geo.left + geo.width + DOT_R + 3;
++            if (baseX < geo.container.left + DOT_R || baseX > geo.container.left + geo.container.width - DOT_R) {
++                return;
++            }
 +            setGrab({ side, x: e.clientX, y: e.clientY, mode: "none", dragging: false });
 +            /* 「按下控制点后隐藏临时的常用功能菜单」：浮条自己监听这个事件把当前块收起。 */
 +            window.dispatchEvent(new CustomEvent("hs-hide-clip-actions"));
@@ -79338,6 +79578,18 @@ index 00000000..94bbfd87
 +    }, []);
 +
 +    if (g === null || !g.isPhone) return null;
++    /**
++     * 圆点中心是否落在**时间线容器内**（能按到的范围）。
++     *
++     * 块外圆点会被推到容器之外：块左缘正好贴容器左缘时（scrollLeft = 0 且 startSec = 0），
++     * 左圆点中心 = `容器左 − 10` ⇒ **落进左侧的轨道头列**。那里按下去归轨道头管，
++     * 圆点成了"看得见按不到"的死区（实测真机：`dotLeft.x = 122`，而时间线从 132 才开始）。
++     * ⇒ 按不到就**不画**。内核"块内 10px"的命中带仍在，需要裁切时按边缘内侧即可。
++     */
++    const dotPressable = (x: number): boolean =>
++        x >= g.container.left + DOT_R && x <= g.container.left + g.container.width - DOT_R;
++    const baseXOf = (side: "left" | "right"): number =>
++        side === "left" ? g.left - DOT_R - 3 : g.left + g.width + DOT_R + 3;
 +    if (g.multiSelectedCount > 1) return null;
 +    if (!g.horizontallyVisible) return null;
 +
@@ -79347,7 +79599,7 @@ index 00000000..94bbfd87
 +    /** 圆点：默认贴在**块外侧**（左点再往左偏一个半径，右点往右）。 */
 +    const dot = (side: "left" | "right"): React.ReactNode => {
 +        const grabbed = grab?.side === side;
-+        const baseX = side === "left" ? g.left - DOT_R - 3 : g.left + g.width + DOT_R + 3;
++        const baseX = baseXOf(side);
 +        const x = grabbed ? grab.x : baseX;
 +        const y = grabbed ? grab.y : centerY;
 +        const mode: Mode = grabbed ? grab.mode : "none";
@@ -79389,8 +79641,8 @@ index 00000000..94bbfd87
 +            data-hs-clip-control-points
 +            style={{ position: "absolute", left: 0, top: 0, zIndex: 25, pointerEvents: "none" }}
 +        >
-+            {dot("left")}
-+            {dot("right")}
++            {dotPressable(baseXOf("left")) ? dot("left") : null}
++            {dotPressable(baseXOf("right")) ? dot("right") : null}
 +        </div>
 +    );
 +}
@@ -97380,10 +97632,10 @@ index 176638e2..a9b2b8d9 100644
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..831ba3e3 100644
+index d42792c8..9dd5e075 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
-@@ -1,471 +1,1230 @@
+@@ -1,471 +1,1242 @@
 -@tailwind base;
 -@tailwind components;
 -@tailwind utilities;
@@ -98848,7 +99100,13 @@ index d42792c8..831ba3e3 100644
 -.rt-DialogOverlay {
 -    background: var(--qt-overlay) !important;
 -    backdrop-filter: blur(2px);
--}
++/* E9（用户口径）：「轨道+参数分屏下**开启同步位置与缩放**后应**隐藏参数界面左上角的速度映射键**」。
++   `body[data-hs-paramsync="on"]` 正是"分屏 + 同步开启"这个状态（App.tsx 里按
++   `paramEditorSyncTimeline && mobilePanels.params && mobilePanels.timeline` 设置）。
++   两颗速度映射键在同步态下功能一体、且并排容易误按 ⇒ 参数侧那颗隐藏。 */
++body[data-hs-paramsync="on"] [data-hs-params-tempo-map] {
++    display: none !important;
+ }
 -
 -/*
 - * 层级约定（高 → 低）：
@@ -99076,15 +99334,18 @@ index d42792c8..831ba3e3 100644
 -       短文案不受影响（只在内容超过 320px 时才会用满更宽的气泡）。 */
 -    max-width: 400px;
 -    tab-size: 4;
--}
-+/* E9（用户口径）：「轨道+参数分屏下**开启同步位置与缩放**后应**隐藏参数界面左上角的速度映射键**」。
-+   `body[data-hs-paramsync="on"]` 正是"分屏 + 同步开启"这个状态（App.tsx 里按
-+   `paramEditorSyncTimeline && mobilePanels.params && mobilePanels.timeline` 设置）。
-+   两颗速度映射键在同步态下功能一体、且并排容易误按 ⇒ 参数侧那颗隐藏。 */
-+body[data-hs-paramsync="on"] [data-hs-params-tempo-map] {
-+    display: none !important;
-+}
-\ No newline at end of file
++/* ── 手机端分屏的两块（C5/C6）───────────────────────────────────────────────
++   `flex-basis: 0` **必须走类、不能只写内联样式**：
++   实测（真机 221deeb，2026-09-30）内联的 `flexBasis` 会在 React 的 style diff 里被漏写
++   —— 下方块的 `style` 属性只剩 `flex-grow: 0.299`、**没有 flex-basis**
++   ⇒ 它的高度改由**内容**决定（文件浏览器 / 钢琴窗的 min-content）⇒ 轨道块被压到 0，
++   正是用户报的「调整分屏高度有明显问题」。
++   放进类里之后无论内联样式怎么被漏写，`flex-basis: 0` 都稳定生效。
++   （拖动时 `paintRatio()` 只改内联 `flex-grow`，两者互不覆盖。） */
++.hs-mobile-split-pane {
++    flex-basis: 0;
++    min-height: 0;
+ }
 diff --git a/frontend/src/services/api/core.ts b/frontend/src/services/api/core.ts
 index cf451bd3..f8f4233b 100644
 --- a/frontend/src/services/api/core.ts
