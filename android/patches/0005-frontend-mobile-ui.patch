@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..c18b1a5c 100644
+index 3802022a..dbbd787d 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4647 @@
+@@ -1,4006 +1,4686 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -4497,6 +4497,45 @@ index 3802022a..c18b1a5c 100644
 +    const selectedClipId = useAppSelector((state) => state.session.selectedClipId);
 +    const multiSelectedClipIds = useAppSelector((state) => state.session.multiSelectedClipIds);
 +    const sessionClips = useAppSelector((state) => state.session.clips);
++
++    /* E10-② 自愈：收到 `hs-gl-restored` 就把面板块整体重挂一次，让内核重建
++       GL 程序（`glContext.ts` 里那条广播的说明详见该处）。
++       ⚠️ 冷却 + 上限是**必须**的：若某次恢复后又因超限被丢失，没有冷却会变成
++       "丢失 → 重挂 → 又超限 → 又丢失"的抖动循环。这里 1.6s 内只认一次，
++       且全程最多恢复 6 次（正常情况一次都不会用满）。 */
++    const [glRecoveryEpoch, setGlRecoveryEpoch] = useState(0);
++    useEffect(() => {
++        const ref = { last: 0, count: 0 };
++        const onRestored = () => {
++            const now = Date.now();
++            if (ref.count >= 6 || now - ref.last < 1600) return;
++            ref.last = now;
++            ref.count += 1;
++            setGlRecoveryEpoch((n) => n + 1);
++        };
++        window.addEventListener("hs-gl-restored", onRestored);
++        return () => window.removeEventListener("hs-gl-restored", onRestored);
++    }, []);
++
++    /* 验收钩子（E7「调整辈分后选中跳到第一个导入的音频」）：
++       把"当前选中"暴露给 CDP 探针。选中态**只存在于 redux** —— 块被选中只体现为
++       canvas 上的一圈描边（内核画的），DOM 里没有任何可锚定的痕迹，所以
++       "选中会不会在某个异步 fulfilled 里凭空跳走"这种断言只能从状态里读。
++       经 `store.getState()` 读而不订阅 ⇒ 不引起额外重渲。 */
++    useEffect(() => {
++        const scope = window as unknown as { __hsSelection?: () => unknown };
++        scope.__hsSelection = () => {
++            const s = store.getState().session;
++            return {
++                clipId: s.selectedClipId,
++                trackId: s.selectedTrackId,
++                multi: [...s.multiSelectedClipIds],
++            };
++        };
++        return () => {
++            delete (window as unknown as { __hsSelection?: unknown }).__hsSelection;
++        };
++    }, []);
 +    // 注意：playbackPositionSec 以 ~30Hz 持续变化，这里不能订阅（否则每次
 +    // 播放 tick 都重渲 AppInner）；需要它的地方（录音自动停止）在回调内经
 +    // store.getState() 同步读取最新值。
@@ -8367,7 +8406,7 @@ index 3802022a..c18b1a5c 100644
 +                    >
 +                        {mobilePanels.timeline ? (
 +                            <div
-+                                key="hs-pane-timeline"
++                                key={"hs-pane-timeline-" + glRecoveryEpoch}
 +                                data-hs-pane="timeline"
 +                                className="hs-mobile-split-pane relative"
 +                                style={
@@ -8417,7 +8456,7 @@ index 3802022a..c18b1a5c 100644
 +                                {mobilePanels.params ? <MobileParamToolRow /> : null}
 +                                {mobilePanels.params ? (
 +                                    <div
-+                                        key="hs-pane-params"
++                                        key={"hs-pane-params-" + glRecoveryEpoch}
 +                                        data-hs-pane="params"
 +                                        className="flex-1 min-h-0 relative"
 +                                    >
@@ -8673,6 +8712,132 @@ index 3802022a..c18b1a5c 100644
 +                onOpenChange={setSplitTransitionOpen}
 +            />
 +        </>
++    );
++}
+diff --git a/frontend/src/components/AppErrorBoundary.tsx b/frontend/src/components/AppErrorBoundary.tsx
+new file mode 100644
+index 00000000..7f8c8ae5
+--- /dev/null
++++ b/frontend/src/components/AppErrorBoundary.tsx
+@@ -0,0 +1,120 @@
++/**
++ * AppErrorBoundary —— 应用级 React 错误边界。
++ *
++ * 【为什么必须存在（2026-09-30 实测坐实，E10-②）】
++ * 本工程此前**没有任何错误边界**。React 18 的默认行为是：渲染 / 生命周期 / 帧回调里
++ * 抛出的异常若无人接管，**整棵组件树被卸载** ⇒ `#root` 子节点变成 0 ⇒ 用户看到
++ * 「整页空白」（只有背景色，没有任何提示、也没有报错）。
++ *
++ * 实测证据：模拟器上拖分屏手柄反复切换「参数全屏 ⇄ 分屏」，`logs/android.log` 里
++ * 只留下**一条**未捕获异常，界面却整片空白：
++ *
++ * ```
++ * [frontend] Uncaught error: Uncaught Error: Canvas 2D is unavailable
++ *     at D.paint  (surfaceRenderer-*.js)     ← 波形渲染器（帧回调里 throw）
++ *     at D.render (surfaceRenderer-*.js)
++ *     at Object.current (main-*.js)
++ * ```
++ *
++ * 也就是说：**一个面板里的一个渲染帧抛错，代价是整个 App 消失**。这既让人无法自助
++ * 排障（看不到任何信息），也让用户以为"工程坏了"。
++ *
++ * 有边界之后：出错的那棵子树被替换成本组件（同一容器内、可读的报错界面 + 重新加载），
++ * 其余部分继续工作；同时把异常回传后端日志，和 `installGlobalErrorReporting()` 的
++ * 未捕获异常走同一条通道。
++ *
++ * 【边界在哪一层】
++ * 放在 `I18nProvider` / `AppThemeProvider` **之内**、`App` **之外**：
++ * 这样主题与文案都可用（能画出像样的界面），而 App 内部的任何渲染错误都会被接住。
++ * 提供者自身的错误不归它管（那时连主题变量都没有，画不出可靠界面）。
++ *
++ * 【不做的事】
++ * - 不自动重试 / 不自动重载：渲染错误若与数据有关，自动重试只会反复闪。由用户点。
++ * - 不吞掉异常：仍然 `console.error` + 回传后端日志（否则就成了"悄悄坏掉"）。
++ */
++import React from "react";
++
++import { useI18n } from "../i18n/I18nProvider";
++import { reportFrontendError } from "../services/frontendErrorLog";
++
++/** 边界界面所需的文案（由函数包装组件注入，类组件里用不了 Hook）。 */
++export interface AppErrorBoundaryLabels {
++    readonly title: string;
++    readonly hint: string;
++    readonly reload: string;
++}
++
++interface Props extends AppErrorBoundaryLabels {
++    readonly children: React.ReactNode;
++}
++
++interface State {
++    readonly error: Error | null;
++}
++
++class Boundary extends React.Component<Props, State> {
++    state: State = { error: null };
++
++    static getDerivedStateFromError(error: Error): State {
++        return { error };
++    }
++
++    componentDidCatch(error: Error, info: React.ErrorInfo): void {
++        // 与 `installGlobalErrorReporting()` 同一条通道（写后端统一日志）。
++        // 带组件栈，才能知道是哪个面板炸的。
++        console.error("[AppErrorBoundary] render error", error, info.componentStack);
++        reportFrontendError(
++            `Render error: ${error.message}`,
++            `${error.stack ?? ""}\n--- componentStack ---${info.componentStack ?? ""}`,
++        );
++    }
++
++    private readonly handleReload = (): void => {
++        try {
++            window.location.reload();
++        } catch {
++            /* WebView 极端情况下 reload 可能不可用：静默（界面仍在） */
++        }
++    };
++
++    render(): React.ReactNode {
++        const { error } = this.state;
++        if (error === null) return this.props.children;
++        return (
++            <div className="flex h-full w-full flex-col items-center justify-center gap-3 bg-qt-window p-6 text-qt-text">
++                <div className="text-[15px] font-medium">{this.props.title}</div>
++                <div className="max-w-[520px] text-center text-[12px] text-qt-text-muted">
++                    {this.props.hint}
++                </div>
++                {/* 原始错误直接给出来：排障时这是最有价值的一行，不给就只能靠猜。 */}
++                <pre
++                    className="max-h-[180px] w-full max-w-[560px] overflow-auto whitespace-pre-wrap break-all rounded border border-qt-border bg-qt-base p-2 text-[11px]"
++                    aria-label="error-detail"
++                >
++                    {String(error.message || error)}
++                </pre>
++                <button
++                    type="button"
++                    className="rounded border border-qt-border px-3 py-1 text-[12px] hover:bg-qt-base"
++                    onClick={this.handleReload}
++                >
++                    {this.props.reload}
++                </button>
++            </div>
++        );
++    }
++}
++
++/** 函数包装：取到 i18n 文案后交给类组件（类组件不能用 Hook）。 */
++export function AppErrorBoundary({ children }: { readonly children: React.ReactNode }) {
++    const { t } = useI18n();
++    return (
++        <Boundary
++            title={t("app_error_boundary_title")}
++            hint={t("app_error_boundary_hint")}
++            reload={t("app_error_boundary_reload")}
++        >
++            {children}
++        </Boundary>
 +    );
 +}
 diff --git a/frontend/src/components/editDialogs/EditContextMenu.tsx b/frontend/src/components/editDialogs/EditContextMenu.tsx
@@ -19443,10 +19608,10 @@ index de6d05a3..af40d929 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
-index 613ea89d..91fbcd9a 100644
+index 613ea89d..9933a90d 100644
 --- a/frontend/src/components/layout/PianoRollPanel.tsx
 +++ b/frontend/src/components/layout/PianoRollPanel.tsx
-@@ -1,7214 +1,7924 @@
+@@ -1,7214 +1,7919 @@
 -import { PitchSnapSettingsDialog } from "./PitchSnapSettingsDialog";
 -import React, {
 -    type CSSProperties,
@@ -29271,8 +29436,9 @@ index 613ea89d..91fbcd9a 100644
 +    const glCanvasRef = useRef<HTMLCanvasElement | null>(null);
 +    /** 键盘轴 GL 画布（阶段 2/3）：键盘几何 + 音名标签。独立画布：轴列不随横向滚动移动。 */
 +    const glAxisCanvasRef = useRef<HTMLCanvasElement | null>(null);
-+    /** 动态叠加层 GL 画布（阶段 2/3）：播放头，位于曲线层之上，恒挂载。 */
-+    const glOverlayCanvasRef = useRef<HTMLCanvasElement | null>(null);
++    /* 【2026-10-01，E10-② 收口】原 `glOverlayCanvasRef`（播放头 / 选区叠加层）已移除：
++       overlay 改为复用 `glCanvasRef` 那块主 GL 画布，参数面板的 GL context 数由 **4 降到 3**
++       （波形 + 网格 scene + 键盘轴 axis）。 */
 +
 +    function pitchDeltaToDegreeSteps(
 +        basePitch: number,
@@ -29657,7 +29823,6 @@ index 613ea89d..91fbcd9a 100644
 +            initialPxPerSec: pxPerSecRef.current,
 +            glCanvas: glCanvasRef.current,
 +            glAxisCanvas: glAxisCanvasRef.current,
-+            glOverlayCanvas: glOverlayCanvasRef.current,
 +            axisWidthPx: AXIS_W,
 +            // GL 场景层恒开启：它是唯一渲染路径（见下方 `skip*` 的「已知并接受的
 +            // 限制」说明与设计文档 §2.4）。
@@ -34429,17 +34594,12 @@ index 613ea89d..91fbcd9a 100644
 +                                        onPointerDown={interactions.onCanvasPointerDown}
 +                                    />
 +
-+                                    {/* 动态叠加层（阶段 2/3）：播放头与选区。
-+                                        层序：DOM 顺序在曲线画布**之后** => 覆盖其上。
-+                                        指针事件全部穿透（interactions 挂在曲线画布上），
-+                                        否则会挡住参数编辑的命中测试。
-+                                        恒挂载：播放头归 GL 叠加层（Canvas2D 侧
-+                                        `skipPlayhead: true`）。 */}
-+                                    <canvas
-+                                        ref={glOverlayCanvasRef}
-+                                        className="absolute inset-0 pointer-events-none"
-+                                        aria-hidden
-+                                    />
++                                    {/* 动态叠加层（播放头与选区）原先在这里有一块独立的 GL
++                                        画布（`glOverlayCanvasRef`）。E10-② 收口（2026-10-01）
++                                        已移除：overlay 改为复用上面那块主 GL 画布
++                                        （`glCanvasRef`），绘制顺序由内核 `draw()` 保证
++                                        （网格 → 选区 → 曲线 → overlay），层序与原来一致，
++                                        但少占一个 WebGL context。 */}
 +                                    {s.showParamValuePopup &&
 +                                        paramValuePreview &&
 +                                        (() => {
@@ -48965,6 +49125,120 @@ index 0ffd2fdb..a98d2276 100644
      /** 当前值域视口（中心与跨度）。 */
      readonly view: { readonly center: number; readonly span: number };
      /** 绝对值域下界（pitch 为 MIDI 下界，其余为参数值下界）。 */
+diff --git a/frontend/src/components/layout/pianoRoll/kernel/host/pianoRollKernelHost.ts b/frontend/src/components/layout/pianoRoll/kernel/host/pianoRollKernelHost.ts
+index bb63c17a..fa5379cc 100644
+--- a/frontend/src/components/layout/pianoRoll/kernel/host/pianoRollKernelHost.ts
++++ b/frontend/src/components/layout/pianoRoll/kernel/host/pianoRollKernelHost.ts
+@@ -166,18 +166,12 @@ export interface PianoRollKernelHostArgs {
+      * 因此键盘单独一块画布，几何坐标即"轴列视口坐标"，与 Canvas2D 的布局一一对应。
+      */
+     readonly glAxisCanvas?: HTMLCanvasElement | null;
+-    /**
+-     * 动态叠加层 GL 画布（阶段 2，Task 6）：播放头与选区。
+-     *
+-     * 【为什么必须是**独立的、位于曲线之上的**画布】播放帧只改播放头位置。曲线留在
+-     * Canvas2D 细节层（阶段 2 不迁移曲线），若播放头也画在 Curve 画布上，每帧都得
+-     * 重绘整张画布（含曲线）——那正是阶段 2 要消除的开销。把播放头放到**曲线上方的
+-     * 独立 GL 画布**后：曲线画布只在内容/滚动/缩放变化时重绘，播放帧只清一块空画布
+-     * + 提交 1 个实例。
+-     *
+-     * 层序：GL 静态层（网格/键盘/轴文字）→ Canvas2D 曲线层 → 本层（播放头/选区）。
+-     */
+-    readonly glOverlayCanvas?: HTMLCanvasElement | null;
++    /* 【2026-10-01，E10-② 收口：此处的 `glOverlayCanvas` 入参已移除】
++       动态叠加层（播放头 / 选区）改为**复用主 GL 画布**，见下方 `glOverlayProgram`。
++       原入参的说明是"曲线留在 Canvas2D 细节层，播放头必须另开一块位于曲线之上的画布，
++       否则播放帧要连曲线一起重绘"——该前提在阶段 3（曲线迁上 GL）之后已不成立，
++       而独立画布的唯一残留后果是**多占一个 WebGL context**（移动端实测约 8 个上限，
++       见 `docs/17`）。层序不变：`draw()` 里 overlay 最后绘制，天然在曲线之上。 */
+     /**
+      * 键盘轴宽度（CSS px）。缺省用 `AXIS_W` 的值（56）。
+      *
+@@ -582,19 +576,21 @@ export function createPianoRollKernelHost(args: PianoRollKernelHostArgs): PianoR
+     /** 本帧选区块的实例数（0 表示没有选区）。 */
+     let glSelectionUploadedCount = 0;
+ 
+-    // 动态叠加层（Task 6）：独立画布 + program，位于曲线层之上。
+-    let glOverlayHandle: GlCanvasHandle | null = null;
++    // 动态叠加层（Task 6）：**复用主 GL 画布**（曲线层之上），program 独立。
++    //
++    // 【为什么改为复用（E10-② 收口，2026-10-01）】原先这一层单独 `createGlCanvas`
++    // 起一块画布，理由是"曲线留在 Canvas2D 细节层，播放头另开画布才能避免播放帧重绘
++    // 曲线"（见 `args` 接口处的说明）。阶段 3 之后曲线本身已迁到主 GL 画布（见下方
++    // `glCurveProgram`），且网格 / 选区 / 曲线 / overlay 全部由**同一个** `draw()`
++    // 按序绘制 ⇒ 独立画布只剩"多占一个 WebGL context"的副作用（移动端实测上限约 8，
++    // 见 `docs/17`）。复用后层序不变（`draw()` 里 overlay 最后画，天然在曲线之上），
++    // 而参数面板的 GL context 数由 **4 降到 3**（波形 + 网格 scene + 键盘轴 axis；
++    // 实测见 `scripts/_dbg-gl-inventory.mjs` 的清单：`params` 面板恰好 3 条 webgl2）。
+     let glOverlayProgram: SdfBoxProgram | null = null;
+-    if (args.glSceneEnabled === true && args.glOverlayCanvas != null) {
++    if (glHandle !== null) {
+         try {
+-            glOverlayHandle = createGlCanvas(args.glOverlayCanvas);
+-            if (glOverlayHandle === null) {
+-                glOverlayHandle = null;
+-            } else {
+-                glOverlayProgram = createSdfBoxProgram(glOverlayHandle.gl);
+-            }
++            glOverlayProgram = createSdfBoxProgram(glHandle.gl);
+         } catch {
+-            glOverlayHandle = null;
+             glOverlayProgram = null;
+         }
+     }
+@@ -1091,13 +1087,17 @@ export function createPianoRollKernelHost(args: PianoRollKernelHostArgs): PianoR
+      * 远低于"判断是否需要重建"的复杂度；而清屏范围是**空画布**，与曲线层无关。
+      */
+     function drawGlOverlay(): void {
+-        if (glOverlayHandle === null || glOverlayProgram === null) return;
+-        const target = glOverlayHandle.resize(
++        if (glHandle === null || glOverlayProgram === null) return;
++        /* ⚠️ **绝不 clear**：overlay 与网格 / 选区 / 曲线**共用同一块主画布**，而
++           `drawGlScene()` 已经清过屏。这里再 clear 会把本帧刚画好的网格与曲线一起
++           抹掉（E10-② 收口时由"独立画布"改为"复用主画布"，必须守住这一条）。
++           `resize` 是幂等的（物理尺寸没变就不写 `canvas.width`），只为取回本帧的
++           光栅化 target。 */
++        const target = glHandle.resize(
+             viewportWidthPx,
+             viewportHeightPx,
+             readDevicePixelRatio(),
+         );
+-        glOverlayHandle.clear();
+         if (glOverlayUploadedCount === 0) return;
+         glOverlayProgram.render(glOverlayInstances, glOverlayUploadedCount, target, 0, 0);
+     }
+@@ -1897,8 +1897,17 @@ export function createPianoRollKernelHost(args: PianoRollKernelHostArgs): PianoR
+             teardown.length = 0;
+             // GL 资源最后释放：program 持有 VAO / buffer / shader，漏掉会随
+             // 反复挂载（StrictMode 双挂载 / HMR）累积并最终耗尽上下文。
++            /* E10-②：**program 先删、context 后放**（删 program/buffer 还要用 gl）。
++               ⚠️ 原先这里只把句柄 `= null` 而**从不调 `dispose()`** ⇒ `glHandle` 里那个
++               `WEBGL_lose_context.loseContext()` 永远不执行 ⇒ 每次面板挂载泄漏 **3 个**
++               WebGL context（本文件建了 glScene / glAxis / glOverlay 三张画布）。
++               实测（模拟器 8 轮切换「参数全屏 ⇄ 分屏」）logcat 出现
++               `Too many active WebGL contexts. Oldest context will be lost.` ×4 +
++               `INVALID_OPERATION … does not belong to this context` 120 行 ⇒ 参数界面白屏。
++               对照：时间线那侧（`timelineKernelHost`）一直是 `glCanvas.dispose()` 的。 */
+             glProgram?.dispose();
+             glProgram = null;
++            glHandle?.dispose();
+             glHandle = null;
+             glAxisProgram?.dispose();
+             glAxisProgram = null;
+@@ -1906,10 +1915,12 @@ export function createPianoRollKernelHost(args: PianoRollKernelHostArgs): PianoR
+             glGlyphProgram = null;
+             glGlyphs?.dispose();
+             glGlyphs = null;
++            glAxisHandle?.dispose();
+             glAxisHandle = null;
+             glOverlayProgram?.dispose();
+             glOverlayProgram = null;
+-            glOverlayHandle = null;
++            // glOverlayHandle 已随 E10-② 收口移除（overlay 复用主 GL 画布）——
++            // 那个 context 现在就是 `glHandle`，已由上面的 `glHandle?.dispose()` 释放。
+             glCurveProgram?.dispose();
+             glCurveProgram = null;
+             glSelectionProgram?.dispose();
 diff --git a/frontend/src/components/layout/pianoRoll/kernel/scene/gridInstances.ts b/frontend/src/components/layout/pianoRoll/kernel/scene/gridInstances.ts
 index 87fcc4b0..5534f0b1 100644
 --- a/frontend/src/components/layout/pianoRoll/kernel/scene/gridInstances.ts
@@ -49027,10 +49301,10 @@ index 87fcc4b0..5534f0b1 100644
      const vMax = view.center + span / 2;
      const start = Math.ceil(vMin / spec.step) * spec.step;
 diff --git a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-index 08455bfd..10ab89c2 100644
+index 08455bfd..f962b40d 100644
 --- a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
 +++ b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-@@ -1,4435 +1,4912 @@
+@@ -1,4435 +1,4924 @@
 -import type {
 -    KeyboardEvent,
 -    MouseEvent as ReactMouseEvent,
@@ -53615,7 +53889,19 @@ index 08455bfd..10ab89c2 100644
 + */
 +function vibLog(msg: string): void {
 +    try {
-+        void tauriInvoke("log_frontend_error", { message: `[HS-VIB] ${msg}`, detail: null });
++        /* ⚠️ `tauriInvoke`（= `services/invoke` 的 `invoke`）是**位置参数** API，
++           不是 Tauri 原生的命名参数 API —— 传对象进去会被它按
++           `{ message: args[0], detail: args[1] }` 组装，于是 `message` 变成一个
++           **对象**，后端报 `invalid args \`message\` … invalid type: map, expected a string`。
++           实测（2026-09-30，模拟器 10 轮分屏切换）日志里留下 **11 次**
++           `Invoke failed: log_frontend_error` + **11 次**
++           `Unhandled rejection: Backend invoke failed: tauri:log_frontend_error`
++           —— 因为 `void` 丢掉了返回的 Promise，而那次 invoke 必然 reject。
++           既刷日志、又把真正的诊断信息淹没，还会连带触发错误上报递归。
++           ⇒ 正确的调法是**两个位置参数**（与 `buildTauriArgs` 的映射一致）。 */
++        void tauriInvoke("log_frontend_error", `[HS-VIB] ${msg}`, null).catch(() => {
++            /* 诊断失败不影响功能（但仍要 catch：否则又是未处理 rejection） */
++        });
 +    } catch {
 +        /* 诊断失败不影响功能 */
 +    }
@@ -58379,7 +58665,7 @@ index 08455bfd..10ab89c2 100644
 +    };
 +}
 diff --git a/frontend/src/components/layout/renderKernel/gl/glContext.ts b/frontend/src/components/layout/renderKernel/gl/glContext.ts
-index cb97152b..f230121f 100644
+index cb97152b..a0205c27 100644
 --- a/frontend/src/components/layout/renderKernel/gl/glContext.ts
 +++ b/frontend/src/components/layout/renderKernel/gl/glContext.ts
 @@ -48,6 +48,8 @@ export interface GlCanvasHandle {
@@ -58424,7 +58710,7 @@ index cb97152b..f230121f 100644
  export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null {
      const gl = canvas.getContext("webgl2", {
          alpha: true,
-@@ -73,13 +101,54 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
+@@ -73,13 +101,85 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
          powerPreference: "high-performance",
      });
      if (!gl) return null;
@@ -58456,6 +58742,37 @@ index cb97152b..f230121f 100644
 +    };
 +    const onContextRestored = () => {
 +        contextLost = false;
++        /* 🔴 E10-②「反复切换面板后白屏」的自愈入口（2026-09-30 实测确认）。
++         *
++         * 【为什么必须是"广播事件"而不是在这里重建资源】
++         * GPU 资源（program / buffer / texture）由**调用方**持有，且各内核工厂是在
++         * 顶层一次性创建的、没有"重建 program"的函数可调；而"让面板重新挂载"
++         * 是**既有且已验证**的重建路径（切面板就是这么做的）。
++         * 所以这里只负责**告知**，由 `App` 侧把面板块的 `key` 换掉 ⇒ 内核重建。
++         *
++         * 【为什么非要自愈不可】实测（模拟器 SwiftShader）：
++         *  · 同一时刻只能活 **8 个** WebGL context（`getContext` 超限时**不返回 null**，
++         *    而是静默强制丢失最旧的 —— 所以靠返回值判失败是错的）；
++         *  · 分屏（参数 + 轨道）稳态的**实际占用是 5 个**（时间线 2 + 参数 3：
++         *    波形 + 网格 scene + 键盘轴 axis），切换 churn 先在旧面板卸载时释放 3 个、
++         *    再在新面板挂载时新建 3 个 ⇒ 峰值不会越过 8。**前提是 `dispose()` 真的释放**
++         *    （见 `releaseGlContext`）。
++         *    ⚠️ 这里原先写的是"稳态就要 7 个"——那是**侵入式探针**的读数：健康检查里调
++         *    `getContext("webgl2")` 会在尚无 context 的画布上**造出**一个（测量即污染）。
++         *    用非侵入式、且在页面加载前注入包装、重载后从零计数（`scripts/_dbg-gl-inventory.mjs`）
++         *    重测：**干净启动 5 个；12 轮「拖手柄切全屏/分屏」后仍稳定 5 个、零孤儿**
++         *    （36 个中途新建的全部 `lost=1` 且已移出 DOM）。
++         *  · 而钢琴窗 / 时间线内核**从不处理 `webglcontextrestored`** ⇒ 一旦被丢失就
++         *    **永久空白**（程序对象已失效，没人重建）—— 这就是用户报的"参数界面白屏"。
++         * 有这条广播之后，丢失 → 浏览器触发 restored → 面板重挂 → 程序重建，
++         * 用户最多看到一次短暂的闪动，而不是永久白屏。 */
++        try {
++            window.dispatchEvent(
++                new CustomEvent("hs-gl-restored", { detail: { canvas } }),
++            );
++        } catch {
++            /* 非浏览器环境：忽略（本模块也被单测直接引用） */
++        }
 +    };
 +    canvas.addEventListener("webglcontextlost", onContextLost, false);
 +    canvas.addEventListener("webglcontextrestored", onContextRestored, false);
@@ -58479,7 +58796,7 @@ index cb97152b..f230121f 100644
              target = resolveGlRasterTarget(cssWidthPx, cssHeightPx, dpr);
              // 仅在物理尺寸真正变化时写 canvas 尺寸：写 canvas.width 会重置
              // 整个绘制状态（缓冲被清空），无谓写入会丢掉同帧已上传的实例数据。
-@@ -96,21 +165,16 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
+@@ -96,21 +196,16 @@ export function createGlCanvas(canvas: HTMLCanvasElement): GlCanvasHandle | null
          },
  
          clear() {
@@ -58506,6 +58823,31 @@ index cb97152b..f230121f 100644
          },
      };
  }
+diff --git a/frontend/src/components/layout/renderKernel/gl/glDiagnostics.ts b/frontend/src/components/layout/renderKernel/gl/glDiagnostics.ts
+index 6205f3b6..a839fa25 100644
+--- a/frontend/src/components/layout/renderKernel/gl/glDiagnostics.ts
++++ b/frontend/src/components/layout/renderKernel/gl/glDiagnostics.ts
+@@ -50,7 +50,19 @@ function canCreateContext(type: string): boolean {
+         if (doc == null || typeof doc.createElement !== "function") return false;
+         const canvas = doc.createElement("canvas") as HTMLCanvasElement;
+         if (canvas == null || typeof canvas.getContext !== "function") return false;
+-        return canvas.getContext(type) != null;
++        const ctx = canvas.getContext(type) as WebGLRenderingContext | null;
++        if (ctx == null) return false;
++        /* E10-②：这个 canvas 是**临时**的（不进 DOM），探完必须把 context 槽位还回去。
++           否则每调一次 `collectGlDiagnostics()` 就多占 **2 个** WebGL context
++           （webgl2 + webgl1），而它恰好会被"内核不可用"提示页调用 ——
++           在一个 GL 已经吃紧的环境里再多吃两个，是标准的雪上加霜。
++           槽位有硬上限（Chrome 每页约 16 个），并且**不在 DOM 里的 canvas 也要占**。 */
++        try {
++            ctx.getExtension("WEBGL_lose_context")?.loseContext();
++        } catch {
++            /* 环境不支持：忽略（GC 仍会回收，只是慢） */
++        }
++        return true;
+     } catch {
+         return false;
+     }
 diff --git a/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts b/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts
 index 687d969f..dfc6284b 100644
 --- a/frontend/src/components/layout/renderKernel/gl/glyphProgram.ts
@@ -84016,11 +84358,115 @@ index 62c63c62..5029e689 100644
 +} = fileBrowserSlice.actions;
 +
 +export default fileBrowserSlice.reducer;
+diff --git a/frontend/src/features/session/sessionSlice.selectionGuard.test.ts b/frontend/src/features/session/sessionSlice.selectionGuard.test.ts
+new file mode 100644
+index 00000000..8b1ad80e
+--- /dev/null
++++ b/frontend/src/features/session/sessionSlice.selectionGuard.test.ts
+@@ -0,0 +1,98 @@
++import { test } from "vitest";
++
++/* eslint-disable @typescript-eslint/no-explicit-any -- 测试夹具：
++   reducer 初始化 action 与全量时间线载荷无法在不使用 any 的情况下构造 */
++
++import reducer from "./sessionSlice.ts";
++import { moveTrackRemote, removeClipRemote } from "./thunks/timelineThunks.ts";
++
++/**
++ * E7 选中护栏回归：**调整辈分（升降辈分）不得改动"哪个块被选中"**。
++ *
++ * 用户原话（`docs/prompt.md:98`）：「在轨道头菜单调整了辈分后有概率选中第一个导入的
++ * 音频，未能复现」。
++ *
++ * 【真因】`applyTimelineState` 会**无条件**采纳后端快照里的选中态
++ * （`state.selectedTrackId/selectedClipId = timeline.selected_*`）—— 而快照里的那份是
++ * **后端自己记住的**，可能落后于前端（前端在导入后会自动选中新块，后端在某些时序下
++ * 还记着最初那个 = "第一个导入的音频"）。`moveTrackRemote.fulfilled` 正好走这条全量覆写
++ * ⇒ 选中在一个异步回调里凭空跳走。「有概率」＝两者恰好一致时看不出来。
++ *
++ * 【本测试为什么能钉死它】不依赖时序：直接把"前端选中 B、快照说 A"这个分歧状态喂给
++ * reducer，断言结果仍是 B。修复前这条必然失败（会变成 A）—— 所以它不是空转。
++ */
++test("features/session/sessionSlice.selectionGuard.test.ts moveTrackRemote keeps the frontend selection", () => {
++    function assertEqual(actual: unknown, expected: unknown, label: string): void {
++        if (actual !== expected) {
++            throw new Error(`${label}: expected ${String(expected)}, received ${String(actual)}`);
++        }
++    }
++
++    /** 后端快照：**它记的选中是 A / 轨 1**，与前端当前选中（B / 轨 2）不一致。 */
++    const snapshot = {
++        ok: true,
++        tracks: [
++            { id: "track-1", name: "T1", parent_id: null },
++            { id: "track-2", name: "T2", parent_id: "track-1" },
++        ],
++        clips: [
++            { id: "clip-a", track_id: "track-1", start_sec: 0, length_sec: 2, source_start_sec: 0, source_end_sec: 2, duration_sec: 2 },
++            { id: "clip-b", track_id: "track-2", start_sec: 4, length_sec: 2, source_start_sec: 0, source_end_sec: 2, duration_sec: 2 },
++        ],
++        // ⬇️ 关键：后端记的是"第一个导入的音频"所在的轨 / 块
++        selected_track_id: "track-1",
++        selected_clip_id: "clip-a",
++        playhead_sec: 0,
++        project_sec: 32,
++        bpm: 120,
++        disabled_group_ids: [],
++    } as any;
++
++    function initState() {
++        const base = reducer(undefined, { type: "@@INIT" }) as any;
++        return {
++            ...base,
++            tracks: [
++                { id: "track-1", name: "T1", parentId: null, depth: 0, childTrackIds: [], muted: false, solo: false, volume: 1, composeEnabled: false, pitchAnalysisAlgo: "nsf_hifigan_onnx" },
++                { id: "track-2", name: "T2", parentId: null, depth: 0, childTrackIds: [], muted: false, solo: false, volume: 1, composeEnabled: false, pitchAnalysisAlgo: "nsf_hifigan_onnx" },
++            ],
++            clips: [
++                { id: "clip-a", trackId: "track-1", startSec: 0, lengthSec: 2, sourceStartSec: 0, sourceEndSec: 2 },
++                { id: "clip-b", trackId: "track-2", startSec: 4, lengthSec: 2, sourceStartSec: 0, sourceEndSec: 2 },
++            ],
++            // 前端当前选中：**最后一个块 / 第 2 条轨**（与快照不一致）
++            selectedClipId: "clip-b",
++            selectedTrackId: "track-2",
++        };
++    }
++
++    /* ── ① 辈分调整：选中必须原地不动 ─────────────────────────────────────── */
++    {
++        const next = reducer(
++            initState(),
++            moveTrackRemote.fulfilled(snapshot, "req", {
++                trackId: "track-2",
++                parentTrackId: "track-1",
++                targetIndex: 0,
++            }),
++        ) as any;
++        assertEqual(next.selectedClipId, "clip-b", "moveTrackRemote must keep selectedClipId");
++        assertEqual(next.selectedTrackId, "track-2", "moveTrackRemote must keep selectedTrackId");
++        /* 非空转：快照的**轨道结构**必须照常应用（否则断言退化成"整个载荷被忽略"）。 */
++        const t2 = next.tracks.find((t: any) => t.id === "track-2");
++        assertEqual(t2?.parentId, "track-1", "moveTrackRemote must still apply the new track tree");
++        assertEqual(next.clips.length, 2, "moveTrackRemote must still apply clips");
++    }
++
++    /* ── ② 对照：**未**加护栏的命令仍会采纳快照选中 ─────────────────────────
++       证明"保留选中"是**有选择地**生效（只挂在辈分调整上），不是把整条路径关掉。
++       （`removeClipRemote.fulfilled` 就是 `applyTimelineState(..., {force:true})` 的直通写法。
++       ⚠️ 别拿 `moveClipRemote` 当对照：它**本来就有**自己的选中保留逻辑，会与护栏混淆。） */
++    {
++        const next = reducer(
++            initState(),
++            removeClipRemote.fulfilled(snapshot, "req", "clip-b"),
++        ) as any;
++        assertEqual(next.selectedClipId, "clip-a", "control: commands without the guard still adopt the snapshot selection");
++    }
++});
 diff --git a/frontend/src/features/session/sessionSlice.ts b/frontend/src/features/session/sessionSlice.ts
-index c8cd8a1e..3b8e1101 100644
+index c8cd8a1e..d4d59f8c 100644
 --- a/frontend/src/features/session/sessionSlice.ts
 +++ b/frontend/src/features/session/sessionSlice.ts
-@@ -1,6154 +1,6191 @@
+@@ -1,6154 +1,6225 @@
 -import { createSlice, type PayloadAction } from "@reduxjs/toolkit";
 -import type {
 -    HistoryRecordSummary,
@@ -91070,9 +91516,18 @@ index c8cd8a1e..3b8e1101 100644
 +    }));
 +}
 +
-+function applyTimelineTracksOnly(state: SessionState, timeline: TimelineState) {
++function applyTimelineTracksOnly(
++    state: SessionState,
++    timeline: TimelineState,
++    opts?: { preserveSelection?: boolean },
++) {
 +    state.tracks = mapTimelineTracks(timeline.tracks);
-+    state.selectedTrackId = timeline.selected_track_id;
++    /* ⚠️ 这里也要尊重 `preserveSelection`：`applyTimelineState` **先**调本函数，
++       若只在下游 1724 行加守卫，`selectedTrackId` 早被这里覆写掉了
++       （写 E7 补丁时第一版就漏了这里，靠梳理调用顺序发现）。 */
++    if (!opts?.preserveSelection) {
++        state.selectedTrackId = timeline.selected_track_id;
++    }
 +}
 +
 +function applyTimelineStatePreservingPitchVisuals(state: SessionState, timeline: TimelineState) {
@@ -91770,14 +92225,33 @@ index c8cd8a1e..3b8e1101 100644
 +function applyTimelineState(
 +    state: SessionState,
 +    timeline: TimelineState,
-+    opts?: { force?: boolean; preserveProjectNotes?: boolean; adoptPlayhead?: boolean },
++    opts?: {
++        force?: boolean;
++        preserveProjectNotes?: boolean;
++        adoptPlayhead?: boolean;
++        /**
++         * 不采纳快照里的选中态（`selected_track_id` / `selected_clip_id`）。
++         *
++         * 【为什么需要】后端快照里的选中是**后端自己记住的那一份**，可能与前端当前
++         * 选中不一致。凡是"用户操作**没有改变选中语义**"的命令，采纳它就会让选中态
++         * 在一个异步 fulfilled 里**凭空跳走** —— 这就是用户报的
++         * **E7「轨道头菜单调整辈分后有概率选中第一个导入的音频」**：
++         * `moveTrackRemote.fulfilled` → `applyTimelineState(..., {force:true})`
++         * → 无条件把 `selectedClipId` 覆写成后端记的那个（后端记的是本会话里
++         * 最初被选中的那个块，即"第一个导入的音频"）。"有概率"是因为两者**恰好
++         * 一致时看不出来**。
++         * 同一族的既有先例：`selectTrackRemote` 的 `applySelectedClip:false`、
++         * `applyTimelineStatePreservingPlayhead` 对播放头的保留。
++         */
++        preserveSelection?: boolean;
++    },
 +) {
 +    // 交互锁守卫：拖动/滑动期间跳过非强制的全量覆写
 +    if (state._interactionLockCount > 0 && !opts?.force) {
 +        return;
 +    }
 +
-+    applyTimelineTracksOnly(state, timeline);
++    applyTimelineTracksOnly(state, timeline, { preserveSelection: opts?.preserveSelection });
 +
 +    // 静音检测预览覆盖层锚定在旧时间线上，任何全量快照应用即失效。
 +    state.silencePreviewSegments = null;
@@ -91898,8 +92372,10 @@ index c8cd8a1e..3b8e1101 100644
 +        state.clipFormantToolWindow.clipId = null;
 +    }
 +
-+    state.selectedTrackId = timeline.selected_track_id;
-+    state.selectedClipId = timeline.selected_clip_id;
++    if (!opts?.preserveSelection) {
++        state.selectedTrackId = timeline.selected_track_id;
++        state.selectedClipId = timeline.selected_clip_id;
++    }
 +    // 与 Tempo Map 变化点一致的 BPM 范围（10-960）。
 +    state.bpm = clamp(Number(timeline.bpm ?? state.bpm), 10, 960);
 +    // 播放头归传输层（轮询 / seek / stop_audio / 显式跳转）所有。编辑命令
@@ -96178,7 +96654,11 @@ index c8cd8a1e..3b8e1101 100644
 +                if (!payload.ok) {
 +                    return;
 +                }
-+                applyTimelineState(state, payload, { force: true });
++                /* E7：调整辈分（升高/降低辈分）**不改变"哪个块被选中"**，所以不能采纳
++                   快照里的选中态 —— 否则选中会跳到后端记住的那个块（= 本会话里最初被选中的
++                   那个，通常就是第一个导入的音频），表现为"有概率选中第一个导入的音频"。
++                   轨道的父子关系、顺序照常全量采纳（`applyTimelineTracksOnly` + clips 重建）。 */
++                applyTimelineState(state, payload, { force: true, preserveSelection: true });
 +            })
 +
 +            .addCase(selectTrackRemote.pending, (state, action) => {
@@ -97366,10 +97846,14 @@ index 59e658ed..3939ddf1 100644
          const anchorSec = state.session.playheadSec;
  
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..f397d1af 100644
+index 858bca55..d16e3ac3 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
-@@ -2,8 +2,53 @@ export const enUS = {
+@@ -1,9 +1,57 @@
+ export const enUS = {
++    app_error_boundary_title: "Render error",
++    app_error_boundary_hint: "This panel was taken down; your audio data is unaffected. Reload to continue. If it keeps happening, please report the message below together with the log file.",
++    app_error_boundary_reload: "Reload",
      menu_file: "File",
      menu_edit: "Edit",
      menu_view: "View",
@@ -97423,7 +97907,7 @@ index 858bca55..f397d1af 100644
      menu_help: "Help",
      menu_new_project: "New Project",
      menu_open_project: "Open Project...",
-@@ -330,6 +375,7 @@ export const enUS = {
+@@ -330,6 +378,7 @@ export const enUS = {
      panel_editor: "Editor",
      panel_timeline: "Timeline",
      panel_io: "I/O",
@@ -97431,7 +97915,7 @@ index 858bca55..f397d1af 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1525,69 @@ export const enUS = {
+@@ -1479,4 +1528,69 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -97502,10 +97986,14 @@ index 858bca55..f397d1af 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..bc880bfb 100644
+index ef08ef81..b882439f 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
-@@ -2,8 +2,53 @@ export const jaJP = {
+@@ -1,9 +1,57 @@
+ export const jaJP = {
++    app_error_boundary_title: "画面の描画エラー",
++    app_error_boundary_hint: "このパネルは閉じられました。音声データは影響を受けていません。再読み込みで続行できます。繰り返す場合は、下の情報とログを添えて報告してください。",
++    app_error_boundary_reload: "再読み込み",
      menu_file: "ファイル",
      menu_edit: "編集",
      menu_view: "表示",
@@ -97559,7 +98047,7 @@ index ef08ef81..bc880bfb 100644
      menu_help: "ヘルプ",
      menu_new_project: "新規プロジェクト",
      menu_open_project: "プロジェクトを開く...",
-@@ -192,6 +237,7 @@ export const jaJP = {
+@@ -192,6 +240,7 @@ export const jaJP = {
      panel_editor: "エディタ",
      panel_timeline: "タイムライン",
      panel_io: "入出力",
@@ -97567,7 +98055,7 @@ index ef08ef81..bc880bfb 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1538,61 @@ export const jaJP = {
+@@ -1492,4 +1541,61 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -97630,10 +98118,14 @@ index ef08ef81..bc880bfb 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..31791651 100644
+index 508fcb25..bc6b602b 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
-@@ -2,8 +2,53 @@ export const koKR = {
+@@ -1,9 +1,57 @@
+ export const koKR = {
++    app_error_boundary_title: "화면 렌더링 오류",
++    app_error_boundary_hint: "해당 패널이 닫혔습니다. 오디오 데이터는 영향을 받지 않았습니다. 새로 고치면 계속 사용할 수 있습니다. 반복되면 아래 정보를 로그와 함께 알려 주세요.",
++    app_error_boundary_reload: "새로 고침",
      menu_file: "파일",
      menu_edit: "편집",
      menu_view: "보기",
@@ -97687,7 +98179,7 @@ index 508fcb25..31791651 100644
      menu_help: "도움말",
      menu_new_project: "새 프로젝트",
      menu_open_project: "프로젝트 열기...",
-@@ -269,6 +314,7 @@ export const koKR = {
+@@ -269,6 +317,7 @@ export const koKR = {
      panel_editor: "에디터",
      panel_timeline: "타임라인",
      panel_io: "입출력",
@@ -97695,7 +98187,7 @@ index 508fcb25..31791651 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1515,61 @@ export const koKR = {
+@@ -1469,4 +1518,61 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -97758,10 +98250,14 @@ index 508fcb25..31791651 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..21235a64 100644
+index 8bcc3071..20d5c294 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
-@@ -2,8 +2,53 @@ export const zhCN = {
+@@ -1,9 +1,57 @@
+ export const zhCN = {
++    app_error_boundary_title: "界面渲染出错",
++    app_error_boundary_hint: "这一块面板已被收起，音频数据没有受影响。可以重新加载应用继续使用；若反复出现，请把下面的信息连同日志一起反馈。",
++    app_error_boundary_reload: "重新加载",
      menu_file: "文件",
      menu_edit: "编辑",
      menu_view: "视图",
@@ -97815,7 +98311,7 @@ index 8bcc3071..21235a64 100644
      menu_help: "帮助",
      menu_new_project: "新建工程",
      menu_open_project: "打开工程...",
-@@ -182,6 +227,7 @@ export const zhCN = {
+@@ -182,6 +230,7 @@ export const zhCN = {
      panel_editor: "编辑器",
      panel_timeline: "时间轴",
      panel_io: "输入输出",
@@ -97823,7 +98319,7 @@ index 8bcc3071..21235a64 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1490,69 @@ export const zhCN = {
+@@ -1444,4 +1493,69 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -97894,10 +98390,15 @@ index 8bcc3071..21235a64 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..a9b2b8d9 100644
+index 176638e2..b7f732ba 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
-@@ -3,8 +3,53 @@ export const zhTW = {
+@@ -1,10 +1,58 @@
+ // 繁體中文 (Traditional Chinese) 翻譯檔
+ export const zhTW = {
++    app_error_boundary_title: "介面渲染出錯",
++    app_error_boundary_hint: "這塊面板已被收起，音訊資料沒有受到影響。可以重新載入應用繼續使用；若反覆出現，請把下面的資訊連同日誌一起回報。",
++    app_error_boundary_reload: "重新載入",
      menu_file: "檔案",
      menu_edit: "編輯",
      menu_view: "檢視",
@@ -97951,7 +98452,7 @@ index 176638e2..a9b2b8d9 100644
      menu_help: "說明",
      menu_new_project: "新建專案",
      menu_open_project: "開啟專案...",
-@@ -183,6 +228,7 @@ export const zhTW = {
+@@ -183,6 +231,7 @@ export const zhTW = {
      panel_editor: "編輯器",
      panel_timeline: "時間軸",
      panel_io: "輸入輸出",
@@ -97959,7 +98460,7 @@ index 176638e2..a9b2b8d9 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1492,61 @@ export const zhTW = {
+@@ -1446,4 +1495,61 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -99807,6 +100308,34 @@ index d42792c8..5cff5620 100644
 +        animation: none !important;
 +    }
  }
+diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
+index 030bbc5a..e1f2888f 100644
+--- a/frontend/src/main.tsx
++++ b/frontend/src/main.tsx
+@@ -6,6 +6,7 @@ import { Provider } from "react-redux";
+ import "@radix-ui/themes/styles.css";
+ import "./index.css";
+ import App from "./App.tsx";
++import { AppErrorBoundary } from "./components/AppErrorBoundary";
+ import { store } from "./app/store";
+ import { AppTooltipProvider } from "./components/AppTooltip";
+ import { fadeToolTipSuppress } from "./components/layout/timeline/FadeContextMenu";
+@@ -53,8 +54,13 @@ createRoot(document.getElementById("root")!).render(
+                     <AppTooltipProvider
+                         isSuppressedExternal={() => fadeToolTipSuppress.isSuppressed}
+                     >
+-                        <GlobalGestureServices />
+-                        <App />
++                        {/* 应用级错误边界（E10-②）：此前没有任何边界 ⇒ 任意一处渲染/帧回调
++                            抛错都会让 React 卸载整棵树、界面变成"整页空白"（`#root` 子节点 0）。
++                            放在 I18n/Theme 之内是为了能画出像样的报错界面。 */}
++                        <AppErrorBoundary>
++                            <GlobalGestureServices />
++                            <App />
++                        </AppErrorBoundary>
+                     </AppTooltipProvider>
+                 </AppThemeProvider>
+             </I18nProvider>
 diff --git a/frontend/src/services/api/core.ts b/frontend/src/services/api/core.ts
 index cf451bd3..f8f4233b 100644
 --- a/frontend/src/services/api/core.ts
@@ -100784,7 +101313,7 @@ index 90012222..800b049e 100644
      ctrlKey: boolean;
      metaKey?: boolean;
 diff --git a/frontend/src/waveform/surfaceRenderer.ts b/frontend/src/waveform/surfaceRenderer.ts
-index 260aa737..2edd9a22 100644
+index 260aa737..50afae55 100644
 --- a/frontend/src/waveform/surfaceRenderer.ts
 +++ b/frontend/src/waveform/surfaceRenderer.ts
 @@ -304,7 +304,7 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
@@ -100796,7 +101325,7 @@ index 260aa737..2edd9a22 100644
      }
  
      /**
-@@ -344,15 +344,34 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
+@@ -344,15 +344,37 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
          );
          gl.enable(gl.BLEND);
          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -100829,9 +101358,43 @@ index 260aa737..2edd9a22 100644
 +    }
 +}
 +
++/** 同一会话只提示一次（每帧 warn 会把控制台刷爆）。 */
++let canvas2dUnavailableWarned = false;
++
  export class Canvas2dWaveformRenderer implements WaveformSurfaceRenderer {
      readonly kind = "canvas2d" as const;
      private readonly backCanvas = document.createElement("canvas");
+@@ -412,7 +434,29 @@ export class Canvas2dWaveformRenderer implements WaveformSurfaceRenderer {
+         rasterize(this.backCanvas, widthPx, heightPx, dpr);
+         const back = this.backCanvas.getContext("2d");
+         const visible = this.canvas.getContext("2d");
+-        if (!back || !visible) throw new Error("Canvas 2D is unavailable");
++        if (!back || !visible) {
++            /* 🔴 E10-②「反复切面板后整页空白」的**直接原因**（2026-09-30 抓到的未捕获异常）：
++             * 这里原本 `throw new Error("Canvas 2D is unavailable")`，而 `paint()` 是从
++             * **帧回调**里调的 ⇒ 未捕获异常 ⇒ 本工程**没有 ErrorBoundary**（当时）
++             * ⇒ React 卸载整棵树 ⇒ `#root` 子节点 0 = 用户看到的"白屏/整页空"。
++             *
++             * 取证（模拟器，`scripts/_dbg-e10b-whitescreen.mjs` 拖手柄 10 轮）：
++             * `logs/android.log` 里正好留下 1 条
++             *   `[frontend] Uncaught error: Uncaught Error: Canvas 2D is unavailable
++             *      at D.paint (surfaceRenderer-*.js) ← at D.render ← at Object.current`
++             * 其余 11 条是它的余波（错误上报本身也失败，见 `vibLog` 的修复）。
++             *
++             * 正确姿势：**渲染路径绝不抛错**。拿不到 2D 上下文就这一帧不画
++             * （画面停留在上一帧 / 空白），下一次 `render()` 若环境恢复仍会正常绘制。
++             * 一帧画不出来远好过整个 App 消失。 */
++            if (!canvas2dUnavailableWarned) {
++                canvas2dUnavailableWarned = true;
++                console.warn(
++                    "[WaveformSurface] Canvas 2D context unavailable; skipping this frame",
++                );
++            }
++            return;
++        }
+ 
+         // 顶点是窗口局部坐标，视口原点即平移量（物理像素 = 局部差 × dpr）。
+         back.setTransform(
 diff --git a/frontend/vite.config.ts b/frontend/vite.config.ts
 index df3cb0aa..44b4259a 100644
 --- a/frontend/vite.config.ts

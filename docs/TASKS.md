@@ -2334,6 +2334,7 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 | E7 | 轨道头菜单调整**辈分**后有概率选中第一个导入的音频（**未能复现**） | 记录下来；排查 `moveTrackRemote` 后是否触发了选中重置 | ⬜ TODO（待复现）|
 | E8 | **（覆盖之前说法）** 带参数页面的分屏模式下：上工具栏显示在**参数界面上方**，且**可上下拖动调整分屏高度**；让**参数界面的拍数栏不能用于调整分屏高度** | 手柄从"下方面板标题栏"改为"上工具栏所在的那条"；参数拍数栏退出 `HANDLE_SELECTOR` | ⬜ TODO（覆盖 C5/C6 旧口径）|
 | E9 | 轨道+参数分屏下开启**同步位置与缩放**后，应**隐藏参数界面左上角的速度映射键** | ✅ **DONE**：`body[data-hs-paramsync="on"]`（App.tsx 按 `paramEditorSyncTimeline && params && timeline` 设置）本就是"分屏+同步"这个状态 ⇒ 在 `PianoRollPanel` 给那颗按钮加 `data-hs-params-tempo-map` 包裹层（`display:contents` 不参与布局），CSS 在该状态下 `display:none` | ✅ DONE（真机 `_probe-e9-e11-e15-e6.mjs`：置位 paramsync 后 `paramTempoMapVisible:false`）|
+| E10-② | **反复切换「参数全屏 ⇄ 分屏」后参数界面白屏**（用户 2026-09-30：拖上工具栏切换，10 次内通常触发）| ✅ **已收口（真机/模拟器双验）**：真因有**两层** —— ① `Canvas2dWaveformRenderer.paint()` 拿不到 2D 上下文时 `throw`，而它跑在**帧回调**里 ⇒ 未捕获异常；当时**没有任何错误边界** ⇒ React 卸载整棵树 ⇒ `#root` 子节点 0 = 「整页空」；② WebGL context 被强制丢失后**内核从不处理 `webglcontextrestored`** ⇒ 那块画布**永久空白**。详见文末 §E10-② ｜ **第②/③ 步（抓未捕获异常 + 降 context 数）已完成（2026-10-01）**：overlay 复用主 GL 画布 ⇒ 参数面板 GL **4→3**、分屏稳态 **6→5**（上限 8）；12 轮拖手柄切换 `live` 恒 5、孤儿 0、`Too many` ×0、白屏判据 **5/5**。详见 §E10-② 第③步 |
 | E10 | 从轨道+参数分屏切到**参数界面全屏**：参数界面**无法占满全屏**（稳现）、有概率**卡崩**（白屏）、有概率状态栏闪"剪贴板没有可粘贴的内容" | ✅ **①不满屏已修**：拖过分屏边界时 `paintRatio()` 直接把"分屏比例"写在子元素的 inline `flexGrow` 上（为了不每帧重渲），切到**单面板全屏**时没人清它 ⇒ 面板只占 38% 高（实测容器 411px / 视口 708px）。修法：`mobilePanels` 只剩一个时把容器子元素的 `flexGrow` 归 1 并清掉 inline basis。<br>🔎 **③已确认真因**（详见下节）：应用无条件**每 2 秒读一次系统剪贴板**。<br>🔍 **②白屏待续**（用户：需反复切换后才出现）| ✅ ① DONE（真机量测：修前容器 411px → 修后 **557px**，86顶尖+557+65底栏=708 正好占满可用区；分屏态仍正常 227px 画布）· ③ 待修 · ② 待复现 |
 | E11 | **轨道头增益划不动了**；为防误触可设为**长按后划动** | 🟡 **部分完成**：① 防误触已生效（不等长按直接划动 ⇒ `volume` 1→1 ✅）；② 长按后拖动**仍未通**。已逐层排查并留证（工具 `_dbg-gain-trace.mjs` 逐帧采样 + 事件序列）：<br>· ① `startVolumeKnobDragNow` 开头对 touch/pen 直接 return（"触摸不拖增益旋钮"）—— 已改为长按后放行；<br>· ② 门槛阶段 `preventDefault()` 太晚 ⇒ 已加非被动 `touchmove` 阻止；<br>· ③ 改用**原生 touch 事件驱动**拖动；<br>· ④ 实测事件序列 `pointerdown → pointermove×2 → **pointercancel** → touchmove×6`，且合成触摸的 `pointercancel` **不带 `pointerType`** ⇒ 原来的 `ev.pointerType === "touch"` 判断挡不住、拖动被提前收尾 ⇒ 已改为 **`pointercancel` 一律不收尾**（收尾只认 pointerup 与原生 touchend/touchcancel）。<br>改完仍 `volume` 不变 ⇒ 下一层怀疑：`registerDragAbort(finish)` 的全局 abort 在手势层开始时中止了本拖动，或 `onVolumeUiChange` 的 store 路径未生效（诊断命令已备好）| 🟡 ①② 待续 |
 | E12 | 长按并划动的操作都在识别到长按后**震动一下**（"已完成部分，设计得不错"）| ✅ 已补全：增益旋钮（本次新增）、**文件浏览器长按拖拽**（本次新增），与既有长按手势统一 `navigator.vibrate(12)`（失败静默：部分 WebView 无振动权限）| ✅ 已实现（震动本身无法用脚本断言，靠手感确认）|
@@ -2353,7 +2354,7 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 | E25 | **三屏及以上分屏无法分别调节每个窗口的高度** | 待做。现状：`mobileSplitRatio` 只描述"轨道块 vs 下方块"两段；≥3 块时需要推广成"每块一个比例 + 相邻分界各自可拖"，属 C5/C6 的扩展 |
 | E26 | 「存储设置」窗口**层级在参数界面之后**（被参数界面盖住）| 记录待做；用户口径「设计统一化（E23）之后应该会自动被修」⇒ 与 E23 一并处理（z-index / 面板统一容器）|
 | E10-③ | 剪贴板节拍（"剪贴板没有可粘贴的内容"闪现）| 🅿️ **暂挂**：用户 2026-09-30 反馈「近期没有遇见了」——不再排期，复现再加回 |
-| E7 | 轨道头菜单调整**辈分**后选中跳到第一个导入的音频 | ⏳ 用户 2026-09-30 说「可以按此前描述尝试复现」——待做（此前一直未能复现）|
+| E7 | 轨道头菜单调整**辈分**后选中跳到第一个导入的音频 | ✅ **已修（2026-09-30）**：真因＝`applyTimelineState` **无条件**采纳后端快照里的选中态（`state.selectedTrackId/selectedClipId = timeline.selected_*`，`sessionSlice.ts:1724`；且 `applyTimelineTracksOnly:898` 也会覆写 `selectedTrackId`），而「调整辈分」= `moveTrackRemote.fulfilled` → 全量覆写 ⇒ 前端刚选中的块被**后端自己记的那份**顶掉（后端常记着本会话最初选中的 = 「第一个导入的音频」）。「有概率」＝两者一致时看不出来。<br>修法：`applyTimelineState` 新增 `preserveSelection`（两级都尊重），只挂在 `moveTrackRemote` 上。<br>**判据**：新增 reducer 单测 `sessionSlice.selectionGuard.test.ts`（把"前端选中 B、快照说 A"直接喂给 reducer ⇒ 必须仍是 B；对照组用 `removeClipRemote` 证明护栏是**有选择**生效、非空转）· 设备侧 `_probe-e7-selection.mjs` **4/4**（造 2 轨 2 块 → 导入后选中后一个 → 点「降低辈分」⇒ 轨道树真的变成父子、选中**不动**）|
 
 
 ## E 组执行顺序（我的建议）
@@ -3596,3 +3597,125 @@ logcat: WARNING: Too many active WebGL contexts. Oldest context will be lost.   
 ⇒ 说明还有一个**未捕获异常**在反复切换中被打出来。下一步：
 1. 在页面里先装 `window.onerror` + `unhandledrejection` 记录器，再跑同一套循环 ⇒ 抓出那段错误栈；
 2. 从根上**减少每面板的 context 数**（或做 context 池化），别再撞 16 上限。
+
+---
+
+## ✅ E10-② 白屏：两层真因 + 自愈（2026-09-30，模拟器 emulator-5554 x86_64）
+
+**用户口径**：「使用拖动上工具栏的方式反复切换 参数界面全屏 与 参数+轨道分屏，10 次之内通常就能触发参数界面的白屏」。
+
+### 采样与判据（`scripts/_dbg-e10b-whitescreen.mjs`）
+
+每轮 = 拖手柄到参数全屏 → 桥接恢复分屏；同时记录：`#root` 子节点数（**「整页空」判据**）、
+每个 canvas 的 context 是否被强制丢失、未捕获异常 / 未处理 rejection、`getContext` 失败现场、
+logcat 里 `Too many active WebGL contexts` 计数。
+
+### 真因 ①：帧回调抛错 + **没有任何错误边界**（→ 整页空白）
+
+`logs/android.log` 里留下**唯一一条**未捕获异常，界面却整片空白：
+
+```
+[frontend] Uncaught error: Uncaught Error: Canvas 2D is unavailable
+    at D.paint  (surfaceRenderer-*.js)     ← Canvas2dWaveformRenderer.paint()
+    at D.render (surfaceRenderer-*.js)
+    at Object.current (main-*.js)          ← 帧回调
+```
+
+⇒ `waveform/surfaceRenderer.ts` 的 `paint()` 在 `getContext("2d")` 拿不到时 `throw`，
+而它被**帧回调**调用 ⇒ 未捕获 ⇒ React 18 默认**卸载整棵组件树** ⇒ `#root` 子节点 0。
+
+**改法**：
+| 位置 | 改动 |
+| :--- | :--- |
+| `waveform/surfaceRenderer.ts` | `paint()` 不再抛错 —— 这一帧不画并只提示一次（**渲染路径绝不抛错**） |
+| 新增 `components/AppErrorBoundary.tsx` + `main.tsx` | **应用级错误边界**（此前一个都没有）：出错的那棵子树被换成可读的报错界面（含原始 message + 「重新加载」），其余部分继续工作；异常照旧回传后端日志 |
+
+### 真因 ②：WebGL context 被强制丢失后**永不恢复**（→ 单个面板永久白屏）
+
+实测（模拟器 SwiftShader，`scripts/_dbg-ctx-lifecycle.mjs`）：
+
+| 事实 | 读数 |
+| :--- | :--- |
+| `getContext("webgl2")` 超限时**不返回 null** | 连开 60 个，`nullAt = -1` —— 它是**静默强制丢失最旧的**（所以靠返回值判失败是错的） |
+| **同时能活几个** | **8** 个（不是常说的 16） |
+| `WEBGL_lose_context` 是否可用 / 释放是否有效 | 活着的 context 上 **100% 可用**；`loseContext()` 立刻生效（释放后 `stillAlive = 0`） |
+| 分屏稳态需要几个 | **4 个**（参数：钢琴窗 glScene/glAxis/glOverlay + 波形 webgl；轨道：内核 gl + 波形） |
+
+⇒ 切换时的 churn 会瞬时越过 8 ⇒ 被强制丢失的正是**刚挂载那个面板**的画布；而**钢琴窗 / 时间线内核从不处理 `webglcontextrestored`**（program 已失效、没人重建）⇒ 那个面板**永久空白**。这就是用户报的「参数界面白屏」。
+
+**改法**：
+| 位置 | 改动 |
+| :--- | :--- |
+| `renderKernel/gl/glContext.ts` | `webglcontextrestored` 时广播 `hs-gl-restored`（只**告知**，不重建资源） |
+| `App.tsx` | 监听该事件 ⇒ bump `glRecoveryEpoch` ⇒ 面板块换 `key` ⇒ 内核重建（既有且已验证的重建路径）。**带冷却（1.6s）+ 上限（6 次）**，避免"丢失→重挂→又超限→又丢失"抖动 |
+| `pianoRollKernelHost.ts` | `dispose()` 里三个 GL 句柄原先只 `= null`、**从不调 `dispose()`** ⇒ 每次挂载漏 3 个 context。现补上 `glHandle/glAxisHandle/glOverlayHandle?.dispose()` |
+| `glDiagnostics.ts` | 探测用的临时 canvas 探完即 `loseContext()`（原先每调一次漏 2 个，而它恰好被"内核不可用"页调用） |
+
+### 验收（10 轮，与用户口径同一手势）
+
+```
+✅ 页面全程未整页空（#root 子节点最小值 = 1）
+✅ 无未捕获异常（除 ResizeObserver 噪音）
+✅ 无未处理 rejection
+✅ 未出现错误边界（＝没有渲染期抛错）
+✅ 结束后不残留被丢失的 context（自愈生效）
+   通过 5 / 5        logcat："Too many active WebGL contexts" ×0（修前 ×20）
+每轮读数稳定：全屏 {ok:0,lost:0,none:4} · 分屏 {ok:4,lost:0,none:7}
+```
+
+### 🔴 顺带查出**探针自己的测量缺陷**（重要，影响此前所有 E10-② 读数）
+
+健康检查里写的 `canvas.getContext("webgl2")` 会在**尚无任何 context 的画布上创建一个**
+—— 于是"测量"本身吃掉了那 8 个名额，还把本该是 2D 的候补画布变成 WebGL 画布。
+这既**报大了**"分屏态 9 个 GL canvas"（那些 300x150、从未 rasterize 的"GL 画布"里
+有一部分是探针造的），也**自己贡献**了 logcat 里每轮 2 条 `Too many` warning。
+
+⇒ 纪律：**探测用 `getContext` 只能包在包装器里记录一次（WeakMap），健康读数只读已记录的
+context 对象调 `isContextLost()`**（只读，不创建）。改成非侵入式之后，同样的手势下
+`Too many` 从 ×20 掉到 ×0。方法论见 `docs/17`。
+
+### ✅ E10-② 第③步「降 context 数」：overlay 合并（2026-10-01，模拟器 emulator-5554 x86_64）
+
+**做了什么**：钢琴窗面板原先有 **3 块 GL 画布**（网格 `glScene` / 键盘轴 `glAxis` / 动态叠加层
+`glOverlay`）。overlay 单独开一块的理由原写在入参注释里——"曲线留在 Canvas2D 细节层，播放头
+另开画布才能避免播放帧重绘曲线"。**该前提在阶段 3（曲线迁上 GL）之后已不成立**：曲线本身就画在
+主 GL 画布上（`glCurveProgram` 复用 `glHandle`），且网格 / 选区 / 曲线 / overlay 全部由**同一个**
+`draw()` 按序绘制 ⇒ 独立画布只剩"多占一个 WebGL context"的副作用。改为 **overlay 复用主 GL 画布**：
+`pianoRollKernelHost.ts` 删掉 `glOverlayHandle`、`glOverlayProgram` 改挂 `glHandle.gl`；
+`drawGlOverlay()` **不再 `clear()`**（留着会抹掉同帧刚画好的网格/曲线）。层序不变 —— overlay 在
+`draw()` 里最后绘制，天然在曲线之上。
+
+**判据（全部设备实测）**：
+
+| 项 | 修前 | 修后 | 取证 |
+| :--- | :--- | :--- | :--- |
+| **参数面板 GL context 数** | 4（波形+scene+axis+overlay） | **3**（波形+scene+axis） | `_dbg-gl-inventory.mjs` 清单：`params` 恰 3 条 webgl2 |
+| **分屏稳态活跃 context** | 6 | **5**（时间线 2 + 参数 3） | 同上（页面加载前注入包装 + 重载后从零计数） |
+| 分屏态 DOM 内活 GL | 4 | **3** | `_dbg-e10b-whitescreen.mjs`：`gl={ok:4}` → `{ok:3}` |
+| 页面 canvas 总数（分屏） | 11 | **10** | 同上 |
+| 反复切换是否累积 | — | **live 恒 5、孤儿 0**；12 轮里 36 个中途新建的 context 全部 `lost=1` 且已移出 DOM | `_dbg-gl-inventory.mjs emulator-5554 12` |
+| E10-② 白屏 5 条判据 | — | **5 / 5 通过**；logcat `Too many active WebGL contexts` **×0** | `_dbg-e10b-whitescreen.mjs emulator-5554 12` |
+
+**裕度**：上限 **8**，稳态 **5** ⇒ 余 **3** 个名额（修前 6 ⇒ 只剩 2）。这也是后续做 E25
+（三屏及以上分屏）时 context 会继续增加、必须先看清的那条线。
+
+**新增工具**：`scripts/_dbg-gl-inventory.mjs`（第③步的取证脚本）——在**页面加载前**用
+`Page.addScriptToEvaluateOnNewDocument` 注入 `getContext` 包装，`Page.reload` 后**从零**枚举
+"每个新建过的 webgl canvas：在不在 DOM / 尺寸 / 属于哪个 pane / 是否已丢失"，并可直接跑 N 轮
+**拖手柄切全屏/分屏** 再重报 ⇒ 一眼看出"谁在建、谁没放"。用法：
+`node scripts/_dbg-gl-inventory.mjs emulator-5554 12`。
+
+**顺带修掉一个阻断构建的坑**：上一轮为 E7 新增的 `sessionSlice.selectionGuard.test.ts` 有一处
+类型错误（`removeClipRemote.fulfilled` 的 arg 应为 `string`，却传了 `{ clipId }`）——`vitest` 走
+esbuild 转译**不做类型检查**所以测试照过，但 `tsc -b` 会失败，而构建命令是 `tsc -b && vite build`
+⇒ **APK 根本构建不出来**。已修正；该测试文件此前也**没进补丁**（`regen-frontend-patch.sh` 的
+`ls-files --others` 现已把它收进来）。
+
+### 其余（用户同批反馈的处置）
+
+| 项 | 状态 |
+| :--- | :--- |
+| **E25 三屏及以上分屏无法分别调高** | 待做（`mobileSplitRatio` 只有两段，需推广为"每块一个比例 + 相邻分界各自可拖"）|
+| **E26 存储设置窗口层级在参数界面之后** | 按用户口径**与 E23 设计统一化一并处理** |
+| **E10-③ 剪贴板节拍** | 🅿️ 暂挂（用户：近期没遇见）|
+| **E24 音频块浮条按钮全部点不动** | ✅ 已修并验证（见上一节）|
