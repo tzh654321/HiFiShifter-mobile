@@ -142,6 +142,58 @@ async function main() {
 
         /* ── G4：拖动**过程中**是否与轨道头其它手势串味（记录信息）────────── */
         console.log(`▸ 拖动后提示浮层是否残留：G1=${g1.tooltipVisible} G2=${g2.tooltipVisible} G3=${g3.tooltipVisible}`);
+
+        /* ── G6（E15）：**从非 0 复位** —— 双击旋钮回到 0dB ────────────────────
+         *
+         * 这条一直挂在"⚠️ 判据受限"里：以前 E11-b 让增益根本调不离 0，
+         * 双击"回到 0"这件事无法与"本来就在 0"区分。现在 G1 已经能稳定把增益
+         * 推到 +12dB，所以从这里双击才构成**强验证**。
+         *
+         * ⚠️ 必须用**真触摸双击**（两次 touchStart/End，间隔 ~90ms）——
+         * 合成 `dblclick` 只能证明"处理函数挂着"，证明不了"手机上打得中"。
+         * 若真触摸双击无效，再补一次合成 dblclick 以区分"handler 缺失"与
+         * "WebView 不给触摸合成 dblclick"。
+         */
+        {
+            const g = await probe();
+            const before = g.volume;
+            const k = g.knob;
+            const dblTap = async () => {
+                await touch('touchStart', [{ x: k.x, y: k.y }]);
+                await sleep(70);
+                await touch('touchEnd', []);
+                await sleep(90);
+                await touch('touchStart', [{ x: k.x, y: k.y }]);
+                await sleep(70);
+                await touch('touchEnd', []);
+                await sleep(900);
+            };
+            await dblTap();
+            const after = await probe();
+            const dbAfter = 20 * Math.log10(Math.max(1e-6, after.volume));
+            const okTouch = Math.abs(dbAfter) <= 0.6;
+            check(
+                'G6（E15）**从非 0 复位**：真触摸双击旋钮 ⇒ 增益回到 0dB',
+                okTouch,
+                `volume ${before}（${(20 * Math.log10(Math.max(1e-6, before))).toFixed(2)}dB）→ ${after.volume}（${dbAfter.toFixed(2)}dB）  标签=${after.gainLabel}`,
+            );
+            if (!okTouch) {
+                /* 区分两种失败：① handler 没挂（合成也无效）② 触摸没合成出 dblclick。 */
+                await cdp.call(() => {
+                    const el = document.querySelector('[data-track-volume-knob]');
+                    el.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+                    return true;
+                });
+                await sleep(800);
+                const syn = await probe();
+                check(
+                    'G6b 合成 dblclick 是否有效（区分「handler 缺失」/「触摸不合成 dblclick」）',
+                    true,
+                    `合成后 volume=${syn.volume}（${(20 * Math.log10(Math.max(1e-6, syn.volume))).toFixed(2)}dB）—— ` +
+                        `若这里也非 0 ⇒ handler 缺失；若这里回到 0 ⇒ 只是触摸路径没合成 dblclick`,
+                );
+            }
+        }
     }
 
     /* ── G5：短按（<门槛）后拖动 ⇒ 不该改增益（门槛生效）───────────────── */

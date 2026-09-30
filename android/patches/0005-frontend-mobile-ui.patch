@@ -78804,10 +78804,10 @@ index 5dda3c55..5e198282 100644
  
 diff --git a/frontend/src/components/layout/touchGesture.ts b/frontend/src/components/layout/touchGesture.ts
 new file mode 100644
-index 00000000..5b7f6399
+index 00000000..d1123533
 --- /dev/null
 +++ b/frontend/src/components/layout/touchGesture.ts
-@@ -0,0 +1,562 @@
+@@ -0,0 +1,828 @@
 +/**
 + * touchGesture.ts — 双指触控手势层（Android）。
 + *
@@ -78899,6 +78899,31 @@ index 00000000..5b7f6399
 +     * 传 false 时纵向捏合退化为纯平移（行高恒定），避免对无意义的 rowHeight 做 NaN 运算。
 +     */
 +    verticalZoom?: boolean;
++    /**
++     * ## E18（用户口径）
++     *
++     * 逐帧**轴死区**（CSS px）：某轴「双指坐标」小于此值 ⇒ **该轴缩放算 0**
++     * （于是单轴缩放变得容易；跨过阈值那一刻把该轴基线重置到当前，不积累出跳变）。
++     * 缺省 14。
++     */
++    axisNearPx?: number;
++    /**
++     * **绝对**缩放律系数（E18，用户口径「双指靠近 1 单位就缩放百分之几」）：
++     * 每 1px 分离度变化 ⇒ 缩放 ×e^(该值)（= 每像素固定百分比）。
++     *
++     * 为什么不用比例律（旧 `span/span0`）：起始分离度很小时（手机上两指常常近乎平行，
++     * span₀ ≈ 20~30px）比例律被小分母放大 —— 手指只张开 60px，比例就是 3×，
++     * 正是用户报的「纵向缩放经常产生**巨大**缩放」。绝对律与起始分离度**无关**：
++     * 同样张开 60px 永远是同一倍数。缺省 0.007（≈ 每 px +0.7%）。
++     */
++    zoomPerPx?: number;
++    /**
++     * 平滑时间常数（ms）：视口按 `1 − e^(−dt/τ)` 追目标值，消除逐帧抖动
++     * （E17「纵向缩放明显上下抖动」）。0 = 不平滑。缺省 35。
++     */
++    smoothTauMs?: number;
++    /** 抬手**惯性**（E22 平滑/惯性化的一部分）。缺省 true。 */
++    inertia?: boolean;
 +}
 +
 +/**
@@ -78931,6 +78956,24 @@ index 00000000..5b7f6399
 +    /** 本次会话的轴向策略（由起始两指中点落在哪个表面决定，见 `resolveAxis`）。 */
 +    axis: GestureAxisMode;
 +}
++
++/** 视口四元快照（平滑 / 惯性内部用；与 `GestureViewportState` 同域）。 */
++interface ViewportSnapshot {
++    pxPerSec: number;
++    scrollLeft: number;
++    rowHeight: number;
++    scrollTop: number;
++}
++
++/**
++ * 抬手惯性的指数衰减（每毫秒）与速率上限。
++ *
++ * 取 0.008/ms 的理由：滑行总路程 ≈ v₀/friction。v₀ 上限 3px/ms（3000px/s，已经是很快的甩）
++ * ⇒ 最坏也只会多滑 375px 就停 —— 在 360px 宽的手机上不至于"甩飞出去撞到边界再卡住"。
++ * （原先试过 0.0045 + 上限 6 ⇒ 最坏 1300px，实测观感就是"甩没了"。）
++ */
++const INERTIA_FRICTION_PER_MS = 0.008;
++const INERTIA_V_MAX = 3;
 +
 +function clamp(v: number, lo: number, hi: number): number {
 +    return Math.min(hi, Math.max(lo, v));
@@ -79009,6 +79052,28 @@ index 00000000..5b7f6399
 +    private rectLeft = 0;
 +    private rectTop = 0;
 +
++    private readonly axisNearPx: number;
++    private readonly zoomPerPx: number;
++    private readonly smoothTauMs: number;
++    private readonly inertiaEnabled: boolean;
++
++    /**
++     * 平滑 / 惯性用的**目标值**（`update()` 按会话基线算出来，rAF 循环读）。
++     * `applied` 是真正提交给视口的当前值，按 `1 − e^(−dt/τ)` 向 `target` 收敛。
++     */
++    private smoothTarget: ViewportSnapshot | null = null;
++    private smoothApplied: ViewportSnapshot | null = null;
++    private rafId: number | null = null;
++    private lastFrameTs = 0;
++    /** 抬手惯性：各字段的「每毫秒」速率（已按字段钳制上限）。 */
++    private inertiaVel: ViewportSnapshot | null = null;
++    /** 速度采样：上一次目标快照与时刻 / 相邻两次的差分。 */
++    private velPrev: { t: number; s: ViewportSnapshot } | null = null;
++    private velPrevRate: ViewportSnapshot | null = null;
++    /** 本帧的「轴过近」判定（E18；调试钩子会读）。 */
++    private nearX = false;
++    private nearY = false;
++
 +    constructor(target: HTMLElement, viewport: GestureViewport, options: TwoFingerGestureOptions = {}) {
 +        this.target = target;
 +        this.viewport = viewport;
@@ -79016,6 +79081,10 @@ index 00000000..5b7f6399
 +        this.axisLockPx = options.axisLockPx ?? 24;
 +        this.cooldownMs = options.cooldownMs ?? 150;
 +        this.verticalZoom = options.verticalZoom ?? true;
++        this.axisNearPx = options.axisNearPx ?? 14;
++        this.zoomPerPx = options.zoomPerPx ?? 0.007;
++        this.smoothTauMs = Math.max(0, options.smoothTauMs ?? 35);
++        this.inertiaEnabled = options.inertia ?? true;
 +    }
 +
 +    attach(): void {
@@ -79107,9 +79176,18 @@ index 00000000..5b7f6399
 +        this.target.removeEventListener("pointerup", this.onPointerUp);
 +        this.target.removeEventListener("pointercancel", this.onPointerCancel);
 +        window.removeEventListener("wheel", this.onWheel, { capture: true } as EventListenerOptions);
++        if (this.rafId !== null) {
++            cancelAnimationFrame(this.rafId);
++            this.rafId = null;
++        }
 +        this.pointers.clear();
 +        this.pointerSurface.clear();
 +        this.session = null;
++        this.smoothTarget = null;
++        this.smoothApplied = null;
++        this.inertiaVel = null;
++        this.velPrev = null;
++        this.velPrevRate = null;
 +        this.setActiveFlag(false);
 +    }
 +
@@ -79122,6 +79200,8 @@ index 00000000..5b7f6399
 +
 +    private readonly onPointerDown = (e: PointerEvent): void => {
 +        if (e.pointerType === "mouse") return; // 鼠标走既有滚轮/拖拽，不接管
++        /* E22：手指再次落下 ⇒ 立刻停住上一次的甩动（否则"按住了还在跑"）。 */
++        this.inertiaVel = null;
 +        // 1→2 过渡：先存在的单指拖拽必须干净中止（docs/08 §4.1）。
 +        if (this.pointers.size === 1) {
 +            for (const id of this.pointers.keys()) this.abortPointer(id);
@@ -79204,13 +79284,43 @@ index 00000000..5b7f6399
 +            if (this.session !== null) {
 +                this.cooldownUntil = this.now() + this.cooldownMs;
 +                this.session = null;
-+                this.setActiveFlag(false);
++                /* E22：抬手惯性 —— 用最后一次速度把目标继续推下去。进入惯性期间
++                   活动标志**保持为真**（单指处理器必须继续让位），收尾由循环负责。 */
++                if (!this.startInertia()) this.setActiveFlag(false);
 +            }
-+            if (this.pointers.size === 0) {
++            if (this.pointers.size === 0 && this.inertiaVel === null) {
 +                this.cooldownUntil = 0;
 +                this.viewport.reclamp();
 +            }
 +        }
++    }
++
++    /**
++     * 抬手惯性（E22）：把最后一次采到的「每毫秒速率」交给循环继续推目标，
++     * 各字段按自己的阈值判定（低于阈值视为 0 ⇒ 那一路不甩）。
++     *
++     * @returns 是否真的进入了惯性（调用方据此决定「活动标志」要不要立刻放下）。
++     */
++    private startInertia(): boolean {
++        const r = this.velPrevRate;
++        this.velPrevRate = null;
++        this.velPrev = null;
++        if (!this.inertiaEnabled || r === null) return false;
++        const pick = (v: number, eps: number): number =>
++            Math.abs(v) > eps ? clamp(v, -INERTIA_V_MAX, INERTIA_V_MAX) : 0;
++        const vel: ViewportSnapshot = {
++            pxPerSec: pick(r.pxPerSec, 0.02),
++            scrollLeft: pick(r.scrollLeft, 0.25),
++            rowHeight: pick(r.rowHeight, 0.02),
++            scrollTop: pick(r.scrollTop, 0.25),
++        };
++        if (vel.pxPerSec === 0 && vel.scrollLeft === 0 && vel.rowHeight === 0 && vel.scrollTop === 0) {
++            return false;
++        }
++        this.inertiaVel = vel;
++        this.schedule();
++        this.setActiveFlag(true);
++        return true;
 +    }
 +
 +    /**
@@ -79253,6 +79363,12 @@ index 00000000..5b7f6399
 +        const mid = this.midInContainer(a, b);
 +        const span = spanOf(a, b);
 +        const v = this.viewport.get();
++        /* 新手势从零开始：清掉上一次残留的目标 / 平滑值 / 速度 / 惯性。 */
++        this.smoothTarget = null;
++        this.smoothApplied = null;
++        this.inertiaVel = null;
++        this.velPrev = null;
++        this.velPrevRate = null;
 +        this.session = {
 +            mid0: mid,
 +            span0: span,
@@ -79293,15 +79409,42 @@ index 00000000..5b7f6399
 +        }
 +
 +        const multiFinger = this.pointers.size >= 3;
-+        const kx = s.zoomArmed && !s.axisLockX && !multiFinger ? span.x / s.span0.x : 1;
-+        const ky = s.zoomArmed && !s.axisLockY && !multiFinger ? span.y / s.span0.y : 1;
-+
 +        // 轴向策略（会话开始时由「两指落在哪个表面」定，见 `axisForSession`）：
-+        // 被禁的那一轴**既不缩放也不平移**，且**完全不调用** viewport 提交 ——
-+        // 拍数栏下方没有内容、琴键列右侧也不是时间轴，在这些窄条上顺手动另一轴
-+        // 只会让画面莫名其妙地跑偏（用户实测反馈）。
++        // 被禁的那一轴**既不缩放也不平移** —— 拍数栏下方没有内容、琴键列右侧也不是
++        // 时间轴，在这些窄条上顺手动另一轴只会让画面莫名其妙地跑偏（用户实测反馈）。
++        const axisLockedX = s.axisLockX || multiFinger || s.axis === "y";
++        const axisLockedY = s.axisLockY || multiFinger || s.axis === "x";
 +        const allowX = s.axis !== "y";
 +        const allowY = s.axis !== "x";
++
++        /* ── E18 逐帧轴死区（用户口径：「某轴双指坐标过近 ⇒ 该轴缩放算作 0」）─────
++         * 同一轴上两指几乎重合时，那一点点分离度的**相对**变化毫无意义
++         * （5px ↔ 9px 就能算出 1.8×），单轴缩放（最常见用法）还会被顺带成双轴。
++         * 逐帧判：当前分离度 < axisNearPx ⇒ 本帧该轴不缩放，**且把该轴基线重置到当前**
++         * —— 跨过阈值后从「刚跨过的那一点」开始计，不积累出跳变。 */
++        this.nearX = span.x < this.axisNearPx;
++        this.nearY = span.y < this.axisNearPx;
++        if (this.nearX) s.span0.x = span.x;
++        if (this.nearY) s.span0.y = span.y;
++
++        /* ── E18 绝对缩放律：每 1px 分离度变化 ⇒ 缩放 ×e^(zoomPerPx) ─────────────
++         * 与起始分离度**无关**（同一次「张开 60px」永远是同一倍数）⇒ 不再出现
++         * 「起始两指太近 ⇒ 巨大缩放」；也天然对称（远离 k、靠近 1/k），不会像线性律
++         * 那样在窄屏幕上被下界截断。 */
++        const zoomK = (delta: number): number =>
++            Math.exp(clamp(delta, -600, 600) * this.zoomPerPx);
++        const kx = s.zoomArmed && !axisLockedX && !this.nearX ? zoomK(span.x - s.span0.x) : 1;
++        const ky = s.zoomArmed && !axisLockedY && !this.nearY ? zoomK(span.y - s.span0.y) : 1;
++
++        /* 目标值一律**从会话基线**推出（不读「当前视口」）⇒ 平滑滞后不会污染解算。 */
++        const cur = this.viewport.get();
++        const next: ViewportSnapshot =
++            this.smoothTarget ?? {
++                pxPerSec: cur.pxPerSec,
++                scrollLeft: cur.scrollLeft,
++                rowHeight: cur.rowHeight,
++                scrollTop: cur.scrollTop,
++            };
 +
 +        // 水平：秒锚定（docs/08 §2.2）。先 clamp 再代入，避免锚点漂移。
 +        if (allowX) {
@@ -79318,13 +79461,14 @@ index 00000000..5b7f6399
 +                      })
 +                    : null;
 +            if (authoritative !== null && authoritative !== undefined) {
-+                this.viewport.setHorizontal(authoritative.pxPerSec, authoritative.scrollLeft);
++                next.pxPerSec = authoritative.pxPerSec;
++                next.scrollLeft = authoritative.scrollLeft;
 +            } else {
 +                const pxBounds = this.viewport.getPxPerSecBounds();
 +                const secAtMid0 = (s.scrollLeft0 + s.mid0.x) / s.pxPerSec0;
 +                const targetPxPerSec = clamp(s.pxPerSec0 * kx, pxBounds.min, pxBounds.max);
-+                const newScrollLeft = secAtMid0 * targetPxPerSec - mid.x;
-+                this.viewport.setHorizontal(targetPxPerSec, newScrollLeft);
++                next.pxPerSec = targetPxPerSec;
++                next.scrollLeft = secAtMid0 * targetPxPerSec - mid.x;
 +            }
 +        }
 +
@@ -79337,29 +79481,151 @@ index 00000000..5b7f6399
 +                ? clamp(s.rowHeight0 * ky, rhBounds.min, rhBounds.max)
 +                : s.rowHeight0;
 +            const rowAtMid0 = (s.scrollTop0 + s.mid0.y) / s.rowHeight0;
-+            const newScrollTop = rowAtMid0 * targetRowH - mid.y;
-+            this.viewport.setVertical(targetRowH, newScrollTop);
++            next.rowHeight = targetRowH;
++            next.scrollTop = rowAtMid0 * targetRowH - mid.y;
 +        }
 +
++        /* 速度采样（抬手惯性用）：相邻两次目标的差分 ÷ 时间差。
++         *
++         * ⚠️ 时间差必须有**下限**：一次 `touchMove` 会拆成两个 `pointermove`（每指一个），
++         * 两者相隔 ~1ms ⇒ 用它们算速度会得到一个荒唐的大数（实测把慢速拖动也判成"甩"，
++         * 抬手后莫名其妙地继续滑）。所以只接受 ≥ 8ms 的采样对；> 120ms 视为断点。 */
++        const ts = this.now();
++        if (this.velPrev !== null && ts - this.velPrev.t >= 8 && ts - this.velPrev.t <= 120) {
++            const dts = ts - this.velPrev.t;
++            this.velPrevRate = {
++                pxPerSec: (next.pxPerSec - this.velPrev.s.pxPerSec) / dts,
++                scrollLeft: (next.scrollLeft - this.velPrev.s.scrollLeft) / dts,
++                rowHeight: (next.rowHeight - this.velPrev.s.rowHeight) / dts,
++                scrollTop: (next.scrollTop - this.velPrev.s.scrollTop) / dts,
++            };
++        } else {
++            this.velPrevRate = null;
++        }
++        this.velPrev = { t: ts, s: { ...next } };
++
++        this.smoothTarget = next;
++        this.schedule();
++
 +        // 调试钩子（CDP 验收用）：暴露"为什么这一轴没动"的中间量 ——
-+        // `axis` / 两个轴锁 / 多指标志 / kx,ky / verticalZoom / 行高前后值。
++        // axis / 轴锁 / 多指 / 过近判定 / 缩放因子 / 缩放律系数 / 行高前后值。
 +        // 只写基本类型字段，不给每帧分配大对象（move 频率高）。
 +        const dbg = window as unknown as { __hsGestureDebug?: unknown };
 +        dbg.__hsGestureDebug = {
 +            axis: s.axis,
 +            allowX,
 +            allowY,
-+            lockX: s.axisLockX,
-+            lockY: s.axisLockY,
++            lockX: axisLockedX,
++            lockY: axisLockedY,
 +            multi: multiFinger,
 +            armed: s.zoomArmed,
++            nearX: this.nearX,
++            nearY: this.nearY,
++            /** 当前分离度与**会话基线**（探头据此精确复算期望倍数）。 */
++            sx: +span.x.toFixed(2),
++            sy: +span.y.toFixed(2),
++            sx0: +s.span0.x.toFixed(2),
++            sy0: +s.span0.y.toFixed(2),
++            /** 两指中点在**容器坐标系**（与 scrollLeft 同域）。 */
++            mx: +mid.x.toFixed(2),
++            my: +mid.y.toFixed(2),
++            law: this.zoomPerPx,
 +            kx: +kx.toFixed(4),
 +            ky: +ky.toFixed(4),
 +            vZoom: this.verticalZoom,
 +            rowH0: +s.rowHeight0.toFixed(3),
 +            rowH: +this.viewport.get().rowHeight.toFixed(3),
++            inertia: this.inertiaVel !== null,
 +        };
 +    }
++
++    /** 请求下一帧（幂等）。E22：平滑与惯性共用同一条 rAF 循环。 */
++    private schedule(): void {
++        if (this.rafId !== null) return;
++        this.rafId = requestAnimationFrame(this.loop);
++    }
++
++    /**
++     * 平滑 / 惯性循环（E18 + E22）。
++     *
++     * 每一帧做三件事：① 惯性把「目标」继续推下去并按指数衰减；② 让「当前值」
++     * 按 `1 − e^(−dt/τ)` 追目标；③ 只在**真的变了**的时候提交给视口
++     * （避免每帧 no-op 地打内核入口）。没有活会话、没有惯性、且已追上 ⇒ 收尾
++     * （`reclamp()` + 清活动标志）。
++     */
++    private readonly loop = (): void => {
++        this.rafId = null;
++        const now = this.now();
++        const dt = Math.max(1, Math.min(64, now - (this.lastFrameTs || now)));
++        this.lastFrameTs = now;
++
++        const cur = this.viewport.get();
++        if (this.smoothApplied === null) {
++            this.smoothApplied = {
++                pxPerSec: cur.pxPerSec,
++                scrollLeft: cur.scrollLeft,
++                rowHeight: cur.rowHeight,
++                scrollTop: cur.scrollTop,
++            };
++        }
++        if (this.smoothTarget === null) this.smoothTarget = { ...this.smoothApplied };
++
++        if (this.inertiaVel !== null) {
++            const v = this.inertiaVel;
++            this.smoothTarget.pxPerSec += v.pxPerSec * dt;
++            this.smoothTarget.scrollLeft += v.scrollLeft * dt;
++            this.smoothTarget.rowHeight += v.rowHeight * dt;
++            this.smoothTarget.scrollTop += v.scrollTop * dt;
++            const decay = Math.exp(-INERTIA_FRICTION_PER_MS * dt);
++            v.pxPerSec *= decay;
++            v.scrollLeft *= decay;
++            v.rowHeight *= decay;
++            v.scrollTop *= decay;
++            if (
++                Math.abs(v.scrollLeft) < 0.02 &&
++                Math.abs(v.scrollTop) < 0.02 &&
++                Math.abs(v.pxPerSec) < 0.002 &&
++                Math.abs(v.rowHeight) < 0.003
++            ) {
++                this.inertiaVel = null;
++            }
++        }
++
++        const ap = this.smoothApplied;
++        const a = this.smoothTauMs <= 0 ? 1 : 1 - Math.exp(-dt / this.smoothTauMs);
++        ap.pxPerSec += (this.smoothTarget.pxPerSec - ap.pxPerSec) * a;
++        ap.scrollLeft += (this.smoothTarget.scrollLeft - ap.scrollLeft) * a;
++        ap.rowHeight += (this.smoothTarget.rowHeight - ap.rowHeight) * a;
++        ap.scrollTop += (this.smoothTarget.scrollTop - ap.scrollTop) * a;
++
++        const movedH =
++            Math.abs(ap.pxPerSec - cur.pxPerSec) > 1e-6 ||
++            Math.abs(ap.scrollLeft - cur.scrollLeft) > 1e-3;
++        const movedV =
++            Math.abs(ap.rowHeight - cur.rowHeight) > 1e-6 ||
++            Math.abs(ap.scrollTop - cur.scrollTop) > 1e-3;
++        if (movedH) this.viewport.setHorizontal(ap.pxPerSec, ap.scrollLeft);
++        if (movedV) this.viewport.setVertical(ap.rowHeight, ap.scrollTop);
++
++        const converging =
++            Math.abs(this.smoothTarget.scrollLeft - ap.scrollLeft) > 0.4 ||
++            Math.abs(this.smoothTarget.scrollTop - ap.scrollTop) > 0.4 ||
++            Math.abs(this.smoothTarget.pxPerSec - ap.pxPerSec) > 0.4 ||
++            Math.abs(this.smoothTarget.rowHeight - ap.rowHeight) > 0.04;
++        if (this.session !== null || this.inertiaVel !== null || converging) {
++            this.schedule();
++            return;
++        }
++        this.smoothTarget = null;
++        this.smoothApplied = null;
++        this.velPrev = null;
++        this.velPrevRate = null;
++        /* ⚠️ **不要**在这里清 `cooldownUntil`：它是 2→1 过渡的防误触窗口
++           （docs/08 §4.2），归零会让"第二指刚抬起时的那一下单指事件"立刻被当成
++           新的单指手势。冷却由 `endPointer` 负责，自己会到期。 */
++        this.viewport.reclamp();
++        this.setActiveFlag(false);
++    };
 +
 +    private setActiveFlag(on: boolean): void {
 +        const w = window as unknown as { __hsGestureActive?: boolean };
