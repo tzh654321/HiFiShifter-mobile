@@ -46,6 +46,7 @@ function inPage() {
         const c0 = clips[0] || null;
         const norm = c0 && {
             id: c0.id,
+            trackId: c0.track_id,
             startSec: c0.start_sec,
             lengthSec: c0.length_sec,
             sourceStartSec: c0.source_start_sec,
@@ -105,7 +106,10 @@ async function main() {
             await sleep(900);
         }
         const b64 = readFileSync(o.wav).toString('base64');
-        await cdp.call((n, b, at) => window.__hsImportAudioBase64(n, b, at), label, b64, 0);
+        /* 起点给 0.3s 而不是 0：块左缘要**离开容器左缘**，否则左控制点会被
+           `dotPressable` 判定"按不到就不画"（贴左缘时它中心落在轨道头列里），
+           「左圆点改起始位置」这条就永远没机会验。 */
+        await cdp.call((n, b, at) => window.__hsImportAudioBase64(n, b, at), label, b64, 0.3);
         await sleep(1500);
         return snap();
     }
@@ -148,10 +152,15 @@ async function main() {
         const vp = s.vp;
         const leftPx = vp.containerRect.left + s.clip.startSec * vp.pxPerSec - vp.scrollLeft;
         const w = s.clip.lengthSec * vp.pxPerSec;
-        const y = await cdp.call(() => {
-            const r = document.querySelector('[data-hs-track-row]');
+        /* ⚠️ 必须取**块所在轨道**的 DOM 行：原先写死 `querySelector('[data-hs-track-row]')`
+           拿的是**第一条**轨道（Main），而导入的块常落在新建轨道上 ⇒ y 整行错开、
+           点了个空 ⇒ 永远选不中（实测 `dotLeft=null dotRight=null` 的假象就是这么来的）。 */
+        const y = await cdp.call((tid) => {
+            const r =
+                (tid ? document.querySelector(`[data-hs-track-row="${tid}"]`) : null) ??
+                document.querySelector('[data-hs-track-row]');
             return r ? Math.round(r.getBoundingClientRect().top + 45) : 0;
-        });
+        }, s.clip.trackId);
         await tap(Math.round(leftPx + w / 2), y);
         await sleep(600);
         return snap();
@@ -223,6 +232,19 @@ async function main() {
                 lengthSec: d(before, after, "lengthSec"),
                 sourceStartSec: d(before, after, "sourceStartSec"),
             })}  before=${JSON.stringify(before)}  after=${JSON.stringify(after)}`,
+        );
+    }
+
+    /* ── CP1b 按**左**圆点横拖 ⇒ 改的是「起始位置」（`startSec` 变）──────── */
+    {
+        const { before, after, dot } = await gestureOnDot(false, o.dx, 0, "left");
+        check(
+            'CP1b 按块外**左**控制点横拖 ⇒ 改动音频块**起始位置**（startSec 变）',
+            Math.abs(d(before, after, "startSec")) > 1e-4,
+            `圆点=${JSON.stringify(dot)}  Δ=${JSON.stringify({
+                startSec: d(before, after, "startSec"),
+                lengthSec: d(before, after, "lengthSec"),
+            })}`,
         );
     }
 

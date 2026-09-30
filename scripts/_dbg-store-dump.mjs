@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /**
- * 一次性取证：dump 前端 store 里与"块 / 选中"有关的状态 + **页面基本身份信息**。
+ * 一次性取证：dump 页面状态 —— 块 / 选中 / **控制点渲染前提** / 视口真值。
  *
- * 【要回答的问题】
- *  1) F1/G-1（浮条「更多」⇒ 右键那套菜单）一直不出菜单 —— 是不是"前端 store 里没有块"？
- *     （探针用后端 `import_audio_item` 造块，而它**不更新前端 store**，可能是前提不满足。）
- *  2) 真机上调 `Runtime.evaluate` 读 `[data-hs-pane]` 返回空数组，但同一时刻**截屏里面板都在**
- *     —— 需要确认到底连到了哪个文档（href / readyState / 是否有 iframe / 元素总数）。
+ * 【为什么需要】E5「音频块头尾的控制点」在设备上测到 `dotLeft=null dotRight=null`
+ * （圆点一个都没渲染），但代码里渲染条件有好几层，必须一次把前提全打出来才能定位：
+ *   `ClipControlPoints` 的守卫 —— `g !== null` → `isPhone` → `multiSelectedCount ≤ 1`
+ *   → `horizontallyVisible` → `dotPressable(baseX)`（圆点中心要落在时间线容器内）。
+ * 任何一个不成立都表现为"圆点不见了"，而外表完全一样。
  *
  * 用法：node scripts/_dbg-store-dump.mjs [serial]
  */
@@ -23,33 +23,63 @@ const cdp = await Cdp.attach({ host: '127.0.0.1', port: 9222 });
 await cdp.send('Runtime.enable');
 
 const r = await cdp.call(() => {
-    const s = window.__hsStore ?? window.__hfsStore;
+    const rect = (el) => {
+        const b = el.getBoundingClientRect();
+        return [Math.round(b.left), Math.round(b.top), Math.round(b.width), Math.round(b.height)];
+    };
+    const w = window;
+    const s = w.__hsStore ?? w.__hfsStore;
     const out = {
-        /* ── 页面身份（判断 evaluate 落在哪个文档）── */
         href: String(location.href),
-        readyState: String(document.readyState),
-        title: String(document.title),
-        allEls: document.querySelectorAll('*').length,
-        frames: window.frames.length,
-        hasTauri: typeof window.__TAURI_INTERNALS__ !== 'undefined',
-        bodyLen: (document.body?.innerText || '').length,
-        bodyHead: (document.body?.innerText || '').replace(/\s+/g, ' ').slice(0, 120),
-        /* ── 面板 / DOM 证据 ── */
+        innerWidth: window.innerWidth,
         panes: [...document.querySelectorAll('[data-hs-pane]')].map((el) => el.getAttribute('data-hs-pane')),
-        splitEl: Boolean(document.querySelector('[data-hs-mobile-split]')),
-        canvases: document.querySelectorAll('canvas').length,
-        /* ── store ── */
+        /* ── 控制点渲染证据 ── */
+        cpRoot: Boolean(document.querySelector('[data-hs-clip-control-points]')),
+        dots: [...document.querySelectorAll('[data-hs-clip-control-point]')].map((el) => ({
+            side: el.getAttribute('data-hs-clip-control-point'),
+            mode: el.getAttribute('data-hs-control-mode'),
+            dragging: el.getAttribute('data-hs-control-dragging'),
+            rect: rect(el),
+        })),
+        quickActions: document.querySelectorAll('[data-hs-clip-actions]').length,
+        /* ── 轨道行（控制点纵坐标的真值来源）── */
+        trackRows: [...document.querySelectorAll('[data-hs-track-row]')].map((el) => ({
+            id: el.getAttribute('data-hs-track-row'),
+            rect: rect(el),
+        })),
+        /* ── 内核视口真值 ── */
+        viewport: (() => {
+            const v = w.__hsViewport ? w.__hsViewport() : null;
+            if (!v) return null;
+            return {
+                scrollLeft: Math.round(v.scrollLeft),
+                scrollTop: Math.round(v.scrollTop),
+                pxPerSec: +(v.pxPerSec ?? 0).toFixed(3),
+                rowHeight: v.rowHeight,
+                containerRect: v.containerRect
+                    ? [
+                          Math.round(v.containerRect.left),
+                          Math.round(v.containerRect.top),
+                          Math.round(v.containerRect.width),
+                          Math.round(v.containerRect.height),
+                      ]
+                    : null,
+            };
+        })(),
         hasStore: Boolean(s),
-        domQuickActions: document.querySelectorAll('[data-hs-clip-actions]').length,
     };
     if (s) {
         const st = s.getState().session;
         out.clips = (st.clips || []).length;
-        out.tracks = (st.tracks || []).length;
         out.selectedClipId = st.selectedClipId ?? null;
-        out.selectedTrackId = st.selectedTrackId ?? null;
-        out.clipIds = (st.clips || []).slice(0, 5).map((c) => c.id);
-        out.mobilePanels = st.mobilePanels ?? null;
+        out.multiSelectedClipIds = (st.multiSelectedClipIds || []).length;
+        out.clipBrief = (st.clips || []).slice(0, 4).map((c) => ({
+            id: c.id,
+            trackId: c.trackId,
+            startSec: +(c.startSec ?? 0).toFixed(2),
+            lengthSec: +(c.lengthSec ?? 0).toFixed(2),
+            sourceStartSec: +(c.sourceStartSec ?? 0).toFixed(2),
+        }));
     }
     return out;
 });

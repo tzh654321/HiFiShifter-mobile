@@ -49309,10 +49309,10 @@ index 87fcc4b0..5534f0b1 100644
      const vMax = view.center + span / 2;
      const start = Math.ceil(vMin / spec.step) * spec.step;
 diff --git a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-index 08455bfd..f962b40d 100644
+index 08455bfd..3f7aff3c 100644
 --- a/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
 +++ b/frontend/src/components/layout/pianoRoll/usePianoRollInteractions.ts
-@@ -1,4435 +1,4924 @@
+@@ -1,4435 +1,4938 @@
 -import type {
 -    KeyboardEvent,
 -    MouseEvent as ReactMouseEvent,
@@ -58173,7 +58173,14 @@ index 08455bfd..f962b40d 100644
 +                };
 +
 +                const onMove = (ev: globalThis.PointerEvent) => {
-+                    if ((ev.buttons & requiredButtonMask) !== requiredButtonMask) {
++                    /* 🔴 E19a 真根因（2026-10-01）：判定必须是「**任一**所需位按下」，
++                       而不是「同时含所有位」。`restore` 工具下
++                       `requiredButtonMask = 1 | 2 = 3`（左键**或**右键都算），而触摸只给
++                       `buttons = 1` ⇒ 旧的"全含"判定（`1 !== 3`）**恒不成立** ⇒ 每个
++                       `pointermove` 都当场 `onUp()` 收尾 ⇒ 用户看到的「还原画笔只能点
++                       一个点、拖不动」。此前只修了 mask 的**取值**（`2` → `1 | 2`），
++                       没改**判定方式**，所以一直没生效。 */
++                    if ((ev.buttons & requiredButtonMask) === 0) {
 +                        onUp();
 +                        return;
 +                    }
@@ -58438,7 +58445,14 @@ index 08455bfd..f962b40d 100644
 +                };
 +
 +                const onMove = (ev: globalThis.PointerEvent) => {
-+                    if ((ev.buttons & requiredButtonMask) !== requiredButtonMask) {
++                    /* 🔴 E19a 真根因（2026-10-01）：判定必须是「**任一**所需位按下」，
++                       而不是「同时含所有位」。`restore` 工具下
++                       `requiredButtonMask = 1 | 2 = 3`（左键**或**右键都算），而触摸只给
++                       `buttons = 1` ⇒ 旧的"全含"判定（`1 !== 3`）**恒不成立** ⇒ 每个
++                       `pointermove` 都当场 `onUp()` 收尾 ⇒ 用户看到的「还原画笔只能点
++                       一个点、拖不动」。此前只修了 mask 的**取值**（`2` → `1 | 2`），
++                       没改**判定方式**，所以一直没生效。 */
++                    if ((ev.buttons & requiredButtonMask) === 0) {
 +                        onUp();
 +                        return;
 +                    }
@@ -80887,10 +80901,10 @@ index 00000000..bbe16b02
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..90ee4b12
+index 00000000..ec70b21d
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1957 @@
+@@ -0,0 +1,1981 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -80912,6 +80926,7 @@ index 00000000..90ee4b12
 +
 +import React from "react";
 +import { useI18n } from "../../i18n/I18nProvider";
++import type { MessageKey } from "../../i18n/messages";
 +import { useAppDispatch, useAppSelector } from "../../app/hooks";
 +import { shallowEqual } from "react-redux";
 +import {
@@ -81676,23 +81691,42 @@ index 00000000..90ee4b12
 +    }, []);
 +
 +    return (
-+        <div ref={menuRef} className="hs-select-tool-menu" data-hs-select-tool-menu style={menuStyle}>
-+            {rows.map((row) => (
-+                <button
-+                    key={row.mode}
-+                    type="button"
-+                    className="hs-select-tool-menu__item"
-+                    data-active={current === row.mode ? "true" : undefined}
-+                    onClick={() => {
-+                        onPick(row.mode);
-+                        onClose();
-+                    }}
-+                >
-+                    {row.icon}
-+                    <span>{row.label}</span>
-+                </button>
-+            ))}
-+        </div>
++        /* E19b（2026-10-01 设备验收暴露）：**必须与 `DrawToolMenu` 一样带全屏透明 backdrop**。
++           原先只有「绘制」菜单有 → 用户口径「菜单展开后点别处收起」在「选择」菜单上**不成立**：
++           实测点参数面板任意处（如 `(8,405)`，`elementFromPoint` = 面板关闭按钮 z20）
++           菜单仍在（`[data-hs-select-tool-menu]` 保持存在），而且点击会**穿透**到下层按钮
++           （顺手把工具切成了「选择」）—— 既收不起来、又误触发。两层都要「同步」。 */
++        <>
++            <button
++                type="button"
++                aria-label={t("mobile_close_tool_menu")}
++                onClick={onClose}
++                className="fixed border-0 cursor-pointer"
++                style={{ inset: 0, background: "transparent", zIndex: 40 }}
++            />
++            <div
++                ref={menuRef}
++                className="hs-select-tool-menu"
++                data-hs-select-tool-menu
++                style={menuStyle}
++            >
++                {rows.map((row) => (
++                    <button
++                        key={row.mode}
++                        type="button"
++                        className="hs-select-tool-menu__item"
++                        data-active={current === row.mode ? "true" : undefined}
++                        onClick={() => {
++                            onPick(row.mode);
++                            onClose();
++                        }}
++                    >
++                        {row.icon}
++                        <span>{row.label}</span>
++                    </button>
++                ))}
++            </div>
++        </>
 +    );
 +}
 +
@@ -82112,13 +82146,15 @@ index 00000000..90ee4b12
 +/** 参数工具行行高。视觉 32px 内容 + 上下各 4px 内边距（命中区仍由按钮自己保证 40/44）。 */
 +export const MOBILE_PARAM_TOOL_ROW_HEIGHT = 40;
 +
-+const PARAM_TABS: ReadonlyArray<[string, string]> = [
-+    ["pitch", "音高"],
-+    ["formant_shift_cents", "共振峰"],
-+    ["breathiness", "气声"],
-+    ["tension", "张力"],
-+    ["volume", "音量"],
-+    ["pan", "声像"],
++/** 参数 id → i18n 键。**只作兜底**（正常情况下面板一挂载就会写入镜像
++    `window.__hsParamUiState`，标签直接来自算法侧的真实名称）。 */
++const PARAM_TABS: ReadonlyArray<[string, MessageKey]> = [
++    ["pitch", "pitch"],
++    ["formant_shift_cents", "clip_formant_title"],
++    ["breathiness", "breath"],
++    ["tension", "tension"],
++    ["volume", "volume_label"],
++    ["pan", "pan_label"],
 +];
 +
 +/**
@@ -82155,11 +82191,12 @@ index 00000000..90ee4b12
 +}
 +
 +/** 镜像还没到位时的兜底（正常情况下面板一挂载就会写入镜像）。 */
-+const PARAM_UI_FALLBACK: ParamUiRow[] = PARAM_TABS.map(([id, label]) => ({
-+    id,
-+    label,
-+    secondary: false,
-+}));
++const paramUiFallback = (t: (k: MessageKey) => string): ParamUiRow[] =>
++    PARAM_TABS.map(([id, key]) => ({
++        id,
++        label: t(key),
++        secondary: false,
++    }));
 +
 +/**
 + * 竖排双功能面板（👁 菜单）。
@@ -82208,7 +82245,8 @@ index 00000000..90ee4b12
 +        return () => window.removeEventListener("hs-param-ui-state", on);
 +    }, []);
 +
-+    const rows: ParamUiRow[] = ui.params && ui.params.length > 0 ? ui.params : PARAM_UI_FALLBACK;
++    const rows: ParamUiRow[] =
++        ui.params && ui.params.length > 0 ? ui.params : paramUiFallback(t);
 +    const setSecondary = (param: string, visible: boolean) =>
 +        window.dispatchEvent(
 +            new CustomEvent("hs-set-secondary-param", { detail: { param, visible } }),
@@ -82353,7 +82391,7 @@ index 00000000..90ee4b12
 +                            <circle cx="8" cy="8" r="2.2" />
 +                        </SvgWrap>
 +                    </span>
-+                    <span style={{ flex: "1 1 auto", fontSize: 13 }}>覆盖层</span>
++                    <span style={{ flex: "1 1 auto", fontSize: 13 }}>{t("mobile_overlay_section")}</span>
 +                    {pill(
 +                        overlaysVisible,
 +                        // 状态语义（不是动作语义）：亮底＝当前全部覆盖层可见。
@@ -82372,7 +82410,7 @@ index 00000000..90ee4b12
 +                    <span style={{ display: "inline-flex", width: 20, justifyContent: "center" }}>
 +                        <IconLink />
 +                    </span>
-+                    <span style={{ flex: "1 1 auto", fontSize: 13 }}>同步位置</span>
++                    <span style={{ flex: "1 1 auto", fontSize: 13 }}>{t("mobile_sync_position")}</span>
 +                    {pill(
 +                        s.paramEditorSyncTimeline,
 +                        s.paramEditorSyncTimeline ? t("mobile_synced") : t("mobile_not_synced"),
@@ -82850,10 +82888,10 @@ index 00000000..90ee4b12
 +}
 diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
 new file mode 100644
-index 00000000..89b39867
+index 00000000..6303a257
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileTopBar.tsx
-@@ -0,0 +1,973 @@
+@@ -0,0 +1,975 @@
 +/**
 + * MobileTopBar — 触摸形态顶部**横向菜单栏**（按 PS 设计稿 ps1.png）。
 + *
@@ -83495,7 +83533,7 @@ index 00000000..89b39867
 +                ],
 +            },
 +            { sep: true, label: "" },
-+            ...(HS_MODELS_BUNDLED ? [] : [{ label: "模型管理…", action: () => setModelManagerOpen(true) }]),
++            ...(HS_MODELS_BUNDLED ? [] : [{ label: t("mobile_model_manager"), action: () => setModelManagerOpen(true) }]),
 +            {
 +                label: tAny("menu_background_prerender"),
 +                checked: s.autoBackgroundRender,
@@ -83671,8 +83709,8 @@ index 00000000..89b39867
 +            {/* 平板：侧栏常驻开关（撤销/重做已移到底部工具条的播放键左侧） */}
 +            {wide ? (
 +                <>
-+                    {iconBtn("files", "文件面板", "📁", onToggleFiles, fileBrowserVisible)}
-+                    {iconBtn("notes", "笔记面板", "📝", onToggleNotebook, notebookVisible)}
++                    {iconBtn("files", t("file_panel"), "📁", onToggleFiles, fileBrowserVisible)}
++                    {iconBtn("notes", t("mobile_notes_panel"), "📝", onToggleNotebook, notebookVisible)}
 +                </>
 +            ) : null}
 +
@@ -83680,7 +83718,7 @@ index 00000000..89b39867
 +                <>
 +                    <button
 +                        type="button"
-+                        aria-label="关闭菜单"
++                        aria-label={t("mobile_close_menu")}
 +                        onClick={close}
 +                        className="fixed border-0 cursor-pointer"
 +                        style={{ inset: 0, background: "transparent", zIndex: 40 }}
@@ -83748,7 +83786,7 @@ index 00000000..89b39867
 +                                        borderTop: "1px solid var(--qt-border, rgba(255,255,255,0.14))",
 +                                    }}
 +                                >
-+                                    ‹ 返回
++                                    <span aria-hidden>‹</span> {t("mobile_back")}
 +                                </button>
 +                            </>
 +                        ) : items.length > 0 ? (
@@ -83802,7 +83840,9 @@ index 00000000..89b39867
 +                                ),
 +                            )
 +                        ) : (
-+                            <div style={{ padding: "12px 14px", fontSize: 14, opacity: 0.55 }}>{tAny(openMenu)} 菜单整理中</div>
++                            <div style={{ padding: "12px 14px", fontSize: 14, opacity: 0.55 }}>
++                                {tAny(openMenu)} {t("mobile_menu_organizing")}
++                            </div>
 +                        )}
 +                    </div>
 +                </>
@@ -97854,7 +97894,7 @@ index 59e658ed..3939ddf1 100644
          const anchorSec = state.session.playheadSec;
  
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..d16e3ac3 100644
+index 858bca55..a7b17b2d 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
 @@ -1,9 +1,57 @@
@@ -97923,7 +97963,7 @@ index 858bca55..d16e3ac3 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1528,69 @@ export const enUS = {
+@@ -1479,4 +1528,76 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -97947,6 +97987,13 @@ index 858bca55..d16e3ac3 100644
 +    mobile_tool_menu: "Draw tool",
 +    mobile_close_tool_menu: "Close tool menu",
 +    mobile_close_overlay: "Close overlay",
++    mobile_overlay_section: "Overlays",
++    mobile_sync_position: "Sync position",
++    mobile_model_manager: "Manage models…",
++    mobile_notes_panel: "Notes panel",
++    mobile_close_menu: "Close menu",
++    mobile_back: "Back",
++    mobile_menu_organizing: "menu is being organized",
 +    mobile_ripple_off: "Ripple: Off",
 +    mobile_ripple_track: "Ripple: Track",
 +    mobile_ripple_all: "Ripple: All",
@@ -97994,7 +98041,7 @@ index 858bca55..d16e3ac3 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..b882439f 100644
+index ef08ef81..3ffddb89 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
 @@ -1,9 +1,57 @@
@@ -98063,7 +98110,7 @@ index ef08ef81..b882439f 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1541,61 @@ export const jaJP = {
+@@ -1492,4 +1541,68 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -98079,6 +98126,13 @@ index ef08ef81..b882439f 100644
 +    mobile_tool_menu: "描画ツール",
 +    mobile_close_tool_menu: "ツールメニューを閉じる",
 +    mobile_close_overlay: "オーバーレイを閉じる",
++    mobile_overlay_section: "オーバーレイ",
++    mobile_sync_position: "位置を同期",
++    mobile_model_manager: "モデル管理…",
++    mobile_notes_panel: "ノートパネル",
++    mobile_close_menu: "メニューを閉じる",
++    mobile_back: "戻る",
++    mobile_menu_organizing: "メニューを整理中",
 +    mobile_ripple_off: "リップル: オフ",
 +    mobile_ripple_track: "リップル: トラック",
 +    mobile_ripple_all: "リップル: すべて",
@@ -98126,7 +98180,7 @@ index ef08ef81..b882439f 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..bc6b602b 100644
+index 508fcb25..2539f375 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
 @@ -1,9 +1,57 @@
@@ -98195,7 +98249,7 @@ index 508fcb25..bc6b602b 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1518,61 @@ export const koKR = {
+@@ -1469,4 +1518,68 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -98211,6 +98265,13 @@ index 508fcb25..bc6b602b 100644
 +    mobile_tool_menu: "그리기 도구",
 +    mobile_close_tool_menu: "도구 메뉴 닫기",
 +    mobile_close_overlay: "오버레이 닫기",
++    mobile_overlay_section: "오버레이",
++    mobile_sync_position: "위치 동기화",
++    mobile_model_manager: "모델 관리…",
++    mobile_notes_panel: "노트 패널",
++    mobile_close_menu: "메뉴 닫기",
++    mobile_back: "뒤로",
++    mobile_menu_organizing: "메뉴 정리 중",
 +    mobile_ripple_off: "리플: 끔",
 +    mobile_ripple_track: "리플: 트랙",
 +    mobile_ripple_all: "리플: 전체",
@@ -98258,7 +98319,7 @@ index 508fcb25..bc6b602b 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..20d5c294 100644
+index 8bcc3071..7bd00d40 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
 @@ -1,9 +1,57 @@
@@ -98327,7 +98388,7 @@ index 8bcc3071..20d5c294 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1493,69 @@ export const zhCN = {
+@@ -1444,4 +1493,76 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -98351,6 +98412,13 @@ index 8bcc3071..20d5c294 100644
 +    mobile_tool_menu: "绘制工具",
 +    mobile_close_tool_menu: "关闭工具菜单",
 +    mobile_close_overlay: "关闭浮层",
++    mobile_overlay_section: "覆盖层",
++    mobile_sync_position: "同步位置",
++    mobile_model_manager: "模型管理…",
++    mobile_notes_panel: "笔记面板",
++    mobile_close_menu: "关闭菜单",
++    mobile_back: "返回",
++    mobile_menu_organizing: "菜单整理中",
 +    mobile_ripple_off: "波纹:关",
 +    mobile_ripple_track: "波纹:轨",
 +    mobile_ripple_all: "波纹:全",
@@ -98398,7 +98466,7 @@ index 8bcc3071..20d5c294 100644
 +
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..b7f732ba 100644
+index 176638e2..ee7f22c9 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
 @@ -1,10 +1,58 @@
@@ -98468,7 +98536,7 @@ index 176638e2..b7f732ba 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1495,61 @@ export const zhTW = {
+@@ -1446,4 +1495,68 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -98484,6 +98552,13 @@ index 176638e2..b7f732ba 100644
 +    mobile_tool_menu: "繪製工具",
 +    mobile_close_tool_menu: "關閉工具選單",
 +    mobile_close_overlay: "關閉浮層",
++    mobile_overlay_section: "覆蓋層",
++    mobile_sync_position: "同步位置",
++    mobile_model_manager: "模型管理…",
++    mobile_notes_panel: "筆記面板",
++    mobile_close_menu: "關閉選單",
++    mobile_back: "返回",
++    mobile_menu_organizing: "選單整理中",
 +    mobile_ripple_off: "波紋:關",
 +    mobile_ripple_track: "波紋:軌",
 +    mobile_ripple_all: "波紋:全",

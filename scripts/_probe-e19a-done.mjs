@@ -38,25 +38,51 @@ const main = async () => {
             await inv('import_audio_item', { audioPath: '/sdcard/Download/test-rr.wav', trackId: null, startSec: 0, mediaAudioStreamIndex: null });
             await new Promise((r) => setTimeout(r, 3000));
         }
-        await inv('set_track_state', { trackId: 'track_main', composeEnabled: true });
+        /* ⚠️ 参数必须写在**块所在的轨道**上：`commitStroke` 用的是 `rootTrackId`
+           （= 当前编辑轨道），而导入的块常落在**新建轨道** ⇒ 硬编码 `track_main`
+           会让"写 A / 读 A"与"提交到 B"错位，判据永远 Δ0（本次实测就是这样）。 */
+        const trackId = (st0?.clips || [])[0]?.track_id ?? 'track_main';
+        await inv('set_track_state', { trackId, composeEnabled: true });
         await new Promise((r) => setTimeout(r, 1500));
         const st = await inv('get_timeline_state', {});
-        const t = (st?.tracks || [])[0];
-        return { clips: (st?.clips || []).length, compose: t?.compose_enabled ?? null };
+        const t = (st?.tracks || []).find((x) => x.id === trackId) ?? (st?.tracks || [])[0];
+        return { clips: (st?.clips || []).length, compose: t?.compose_enabled ?? null, trackId, algo: t?.pitch_analysis_algo ?? null };
     });
     console.log('前置：' + JSON.stringify(setup));
     check('E19a-0 有块且 compose 已开', setup.clips > 0 && setup.compose === true, JSON.stringify(setup));
 
     // ② 切参数面板 + 写基线
+    /* ⚠️ 必须先**点亮块所在轨道的轨道头**：参数面板编辑的是钢琴窗的 rootTrackId
+       （= `selectedTrackId ?? tracks[0]`），没选中时会回退到 `tracks[0]`（空的 Main）——
+       而空轨上 `set_param_frames` 虽然回 `ok:true`、`get_param_frames` 的 `edit` 却恒为
+       `[]`（写进去不存）⇒ 拖动"提交成功"但读数永远 Δ0。（本次实测就是这样：
+       未选轨时 0 IPC / Σ差 0；选轨后同一动作 Σ差 13295。） */
+    await cdp.call(async () => {
+        window.dispatchEvent(new CustomEvent('hs-mobile-switch-tab', { detail: { tab: 'timeline' } }));
+        await new Promise((r) => setTimeout(r, 2500));
+    });
+    const rowRect = await cdp.call((tk) => {
+        const el = document.querySelector(`[data-hs-track-row="${tk}"]`);
+        if (!el) return null;
+        const r = el.getBoundingClientRect();
+        return { x: Math.round(r.left + 30), y: Math.round(r.top + Math.min(20, r.height / 2)) };
+    }, setup.trackId);
+    console.log('轨道头：' + JSON.stringify(rowRect));
+    if (rowRect) {
+        await touch('touchStart', [{ id: 0, x: rowRect.x, y: rowRect.y }]);
+        await sleep(70);
+        await touch('touchEnd', []);
+        await sleep(1200);
+    }
     await cdp.call(async () => {
         window.dispatchEvent(new CustomEvent('hs-mobile-switch-tab', { detail: { tab: 'params' } }));
-        await new Promise((r) => setTimeout(r, 2600));
+        await new Promise((r) => setTimeout(r, 3000));
     });
     const values = Array.from({ length: FRAMES }, (_, i) => Math.sin(i / 30) * 250);
-    await invoke('set_param_frames', { trackId: 'track_main', param: 'pitch', startFrame: 0, values, checkpoint: false });
+    await invoke('set_param_frames', { trackId: setup.trackId, param: 'pitch', startFrame: 0, values, checkpoint: false });
     await sleep(2000);
     const readParam = async () => {
-        const res = await invoke('get_param_frames', { trackId: 'track_main', param: 'pitch', startFrame: 0, frameCount: FRAMES, stride: 1 });
+        const res = await invoke('get_param_frames', { trackId: setup.trackId, param: 'pitch', startFrame: 0, frameCount: FRAMES, stride: 1 });
         const edit = Array.isArray(res?.edit) ? res.edit : [];
         const idxs = [];
         edit.forEach((v, i) => { if (typeof v === 'number' && Number.isFinite(v) && v !== 0) idxs.push(i); });
