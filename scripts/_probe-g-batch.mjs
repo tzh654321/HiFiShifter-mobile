@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { Cdp } from "./lib/cdp.mjs";
-const serial = "221deeb";
+const serial = process.argv[2] ?? "emulator-5554"; /* 别硬编码真机序列号：模拟器上就跑不了 */
 const adb = (c) => execSync(`adb -s ${serial} ${c}`, { stdio: "pipe" }).toString();
 const pid = adb("shell pidof com.arounder.hifishifter").trim();
 adb("forward tcp:9222 localabstract:webview_devtools_remote_" + pid);

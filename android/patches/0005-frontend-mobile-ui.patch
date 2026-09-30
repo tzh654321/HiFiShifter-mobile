@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..dbbd787d 100644
+index 3802022a..c53c28bc 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4686 @@
+@@ -1,4006 +1,4694 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -8446,7 +8446,15 @@ index 3802022a..dbbd787d 100644
 +                            <div
 +                                key="hs-pane-lower"
 +                                className="hs-mobile-split-pane relative flex flex-col"
-+                                style={{ flexGrow: 1 - mobileSplitRatio }}
++                                /* 🔴 E10-① 同型的**另一半**（2026-10-01 补）：上方块早就有
++                                   "只有一块时 `flexGrow: 1`"的保护（见上），下方块却一直
++                                   无条件用 `1 - mobileSplitRatio` —— 于是**关掉轨道面板、
++                                   只剩参数/文件块**时，那块仍按比例分高：ratio=0.5 只占半屏，
++                                   ratio=0.94（拖过分屏边界留下的极端值）只剩 **26px**，
++                                   整块几乎看不见。没有轨道块就不存在"分界线"，下方块必须独占。
++                                   实测（模拟器）：修前 params 高 26px（ratio 被探针拖到 0.94 后）；
++                                   修后应占满可用区（与 E10-① 的 557px 同一口径）。 */
++                                style={{ flexGrow: mobilePanels.timeline ? 1 - mobileSplitRatio : 1 }}
 +                            >
 +                                {/* C5/C6-b：**上工具栏放进"下方块"的最上面**。
 +                                    它就是分屏手柄（E8 用户口径），放进下方块后

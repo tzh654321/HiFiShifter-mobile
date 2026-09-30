@@ -43,6 +43,14 @@ const main = async () => {
     };
 
     // ── F3 + F4：打开工程设置浮层并量测 ──────────────────────────
+    /* ⚠️ 前置：确保**轨道面板**在场。设置浮层挂在 `TimelinePanel` 内的 `SettingsOverlays` 里，
+       若面板被关成"只剩参数/文件块"（例如刚跑过 E27 探针），浮层连 DOM 都没有 ⇒ F3 会全线误判成
+       "浮层打不开"（实测真机：`{"open":false}` 而代码并无问题）。 */
+    await cdp.call(() => {
+        window.dispatchEvent(new CustomEvent('hs-mobile-switch-tab', { detail: { tab: 'timeline' } }));
+        return true;
+    });
+    await sleep(2200);
     await cdp.call(() => {
         window.dispatchEvent(new CustomEvent('hs-open-settings', { detail: { which: 'project' } }));
     });
@@ -67,6 +75,11 @@ const main = async () => {
             gridPresets: [...el.querySelectorAll('button')].filter((b) => /^\d+\/\d+$/.test((b.textContent || '').trim())).length,
             unsavedShort: txt.includes('（未保存）'),
             unsavedLong: /未保存：/.test(txt),
+            /* G-3 覆盖了 F3-f 的旧口径：网格**不再自造"手动输入框"**，只留一个
+               「吸附/网格设置…」入口（原版里网格间距属于那个对话框）。 */
+            hasSnapGridEntry: [...el.querySelectorAll('button')].some(
+                (b) => /吸附/.test(b.textContent || '') && /网格/.test(b.textContent || ''),
+            ),
             head: txt.slice(0, 120),
         };
     });
@@ -87,9 +100,9 @@ const main = async () => {
         `短=(${f3.unsavedShort}) 长=(${f3.unsavedLong})`,
     );
     check(
-        'F3-f 网格有预设按钮**且有手动输入框**',
-        f3.open && f3.gridPresets >= 6 && f3.gridInput === true,
-        `预设按钮 ${f3.gridPresets} 个；输入框=${f3.gridInput}`,
+        'F3-f 网格只给「吸附/网格设置…」入口、不自造手动输入框（G-3 覆盖旧口径）',
+        f3.open && f3.hasSnapGridEntry === true && f3.gridInput === false,
+        `入口按钮=${f3.hasSnapGridEntry}；手动输入框=${f3.gridInput}（应为 false）`,
     );
     check(
         'F4 浮层高度按内容自适应（明显小于视口）',

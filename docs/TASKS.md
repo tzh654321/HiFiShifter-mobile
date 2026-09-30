@@ -2353,6 +2353,7 @@ java.lang.ClassCastException: com.arounder.hifishifter.HsShellService cannot be 
 | E24 | 音频块**浮条上的按钮全部点不动**（用户只注意到「…」：点击后打不开菜单）| ✅ **已修并验证（模拟器）**：真因＝B2 的"点别处收起"写在 `pointerdown` 的**捕获阶段**，对浮条**自己内部的按钮**也执行 ⇒ 浮条在 `click` 派发**之前**就被卸载 ⇒ `click` 没有 target ⇒ 7 个按钮（复制/剪切/粘贴/删除/分割/编辑/更多）**全都无效**。实测事件序列 `BAR-REMOVED → pointerdown → touchstart → touchend`（没有 click）。修法：捕获阶段只判"浮条以外"；E6 的"点选项后收起"挪进 `click`；另给 `ClipContextMenu` 加捕获阶段派发 `hs-hide-clip-actions`。验证后事件序列补齐 `… → pointerup → click`、`[role=menu]=1` |
 | E25 | **三屏及以上分屏无法分别调节每个窗口的高度** | 待做。现状：`mobileSplitRatio` 只描述"轨道块 vs 下方块"两段；≥3 块时需要推广成"每块一个比例 + 相邻分界各自可拖"，属 C5/C6 的扩展 |
 | E26 | 「存储设置」窗口**层级在参数界面之后**（被参数界面盖住）| 记录待做；用户口径「设计统一化（E23）之后应该会自动被修」⇒ 与 E23 一并处理（z-index / 面板统一容器）|
+| E27 | **（2026-10-01 本轮新发现）关掉轨道面板、只剩「参数 / 文件」块时，那块被按比例压扁** | ✅ **已修**（一行）：`App.tsx` 里**上方块**早就有"只有一块 ⇒ `flexGrow: 1`"的保护（E10-① 那次修的），**下方块漏了这半边** —— 一直无条件写 `1 - mobileSplitRatio`。于是只剩非轨道块时仍按比例分高：`ratio=0.5` 只占半屏、`ratio=0.9`（拖过分屏边界留下的极端值）**只剩 26px**。改为 `mobilePanels.timeline ? 1 - mobileSplitRatio : 1`（没有轨道块就不存在分界线，下方块必须独占）。<br>判据 `scripts/_probe-lower-pane-full.mjs`：ratio 推 0.9 + 关轨道块 ⇒ params 高度应 ≥ 容器 80%（修前 ≈6%）| ✅ **DONE（真机 221deeb）**：只剩参数块时 params 高 **557px / 容器 598px = 93.1%**（≥80%）。修前是 `1 - ratio`，真机 ratio=0.5 ⇒ 只会占 50% |
 | E10-③ | 剪贴板节拍（"剪贴板没有可粘贴的内容"闪现）| 🅿️ **暂挂**：用户 2026-09-30 反馈「近期没有遇见了」——不再排期，复现再加回 |
 | E7 | 轨道头菜单调整**辈分**后选中跳到第一个导入的音频 | ✅ **已修（2026-09-30）**：真因＝`applyTimelineState` **无条件**采纳后端快照里的选中态（`state.selectedTrackId/selectedClipId = timeline.selected_*`，`sessionSlice.ts:1724`；且 `applyTimelineTracksOnly:898` 也会覆写 `selectedTrackId`），而「调整辈分」= `moveTrackRemote.fulfilled` → 全量覆写 ⇒ 前端刚选中的块被**后端自己记的那份**顶掉（后端常记着本会话最初选中的 = 「第一个导入的音频」）。「有概率」＝两者一致时看不出来。<br>修法：`applyTimelineState` 新增 `preserveSelection`（两级都尊重），只挂在 `moveTrackRemote` 上。<br>**判据**：新增 reducer 单测 `sessionSlice.selectionGuard.test.ts`（把"前端选中 B、快照说 A"直接喂给 reducer ⇒ 必须仍是 B；对照组用 `removeClipRemote` 证明护栏是**有选择**生效、非空转）· 设备侧 `_probe-e7-selection.mjs` **4/4**（造 2 轨 2 块 → 导入后选中后一个 → 点「降低辈分」⇒ 轨道树真的变成父子、选中**不动**）|
 
@@ -2515,7 +2516,7 @@ WebView 在后台**暂停 JS**，于是随后所有 `Runtime.evaluate` 都 30s �
 
 | # | 用户原话（要点）| 处理 | 状态 |
 | :--- | :--- | :--- | :--- |
-| F1 | 临时菜单-省略号 点击后展开**右键会出现的菜单**，而不是另一个小菜单 | ✅ 已实现：浮条「更多」不再开小菜单，改为派发 `hs-open-clip-context-menu`，由 `TimelinePanel` 里**已装配好的** `ClipContextMenu` 实例呈现（它有 ~40 个 props，复制进浮条必然漂移）| 🟡 已实现待验：`TimelinePanel` **只在轨道面板可见时挂载** ⇒ 事件监听也只在那时存在（探针已修为"先切轨道面板 + 确保有块 + `select_clip` 选中"）；设备已断开，未跑通 |
+| F1 | 临时菜单-省略号 点击后展开**右键会出现的菜单**，而不是另一个小菜单 | ✅ 已实现：浮条「更多」不再开小菜单，改为派发 `hs-open-clip-context-menu`，由 `TimelinePanel` 里**已装配好的** `ClipContextMenu` 实例呈现（它有 ~40 个 props，复制进浮条必然漂移）| ✅ **DONE（真机 221deeb，F 组 7/7）**：真因是**探针造不出"前端块"** —— 它用后端 `import_audio_item`，而该命令**不更新前端 store**（前端始终没有块 ⇒ 渲染分支 `if (!ctxClip) return null` 静默吞掉菜单）；另外触摸拖拽会被 `pointercancel` 打断。改用**鼠标事件** + drop 落到**轨道**面板 + 只挑**可见**行之后，一次造出块 ⇒ 事件立刻唤起菜单（`menus:1`，含"删除所有/静音所有/Take/编辑…"）。详见文末 §G/F 组验收 |
 | F2 | ^ 菜单中**分割过渡、吸附网格**要能**长按打开另一个菜单**，并命名为「分割过渡…」「吸附网格…」 | ✅ **两项都完成**：① 命名 —— `吸附网格…`、`分割过渡…`（实测文案；`autoCrossfade` 保持原名「自动交叉」）；② **长按**已接入 `FoldPanel`（承载 `items.map` 的组件，上一轮插错到 `trackFoldItems` 所在组件导致编译不过）：260ms 门槛 + 震动，长按成立时**吃掉**随后的 click（否则松手会把开关翻掉）；未提供 `longPress` 的项打开「工程设置」浮层（网格设置在其中，对「吸附网格…」语义正确）| 🟡 长按已实现待验（设备断开）|
 | F3 | 工程设置：a 基准音阶要可调；b 下方已有网格/每小节拍数 ⇒ 上方不再赘述；c 删掉「工程级设置……生效。」；d 「工程路径」不要换行；e 「（未保存：……路径）」简化成「（未保存）」；f 网格选项不全，要能手动输入 | ✅ **全部完成**：a 基准音阶改为 12 个按钮的音阶组；b 上方只留"别处改不了"的三项（工程名/路径/撤销历史）；c 说明句删除；d 路径值 `nowrap + ellipsis`；e 新增 `project_unsaved_short=「（未保存）」`；f 网格 8 个预设 + **手动输入框**（对齐桌面端：允许任意 `a/b`，回车或「保存」应用）| ✅ DONE（模拟器 4/4）|
 | F4 | 新窗口高度不要固定值，要与内容匹配 | ✅ 完成：两个浮层都去掉固定的 `bottom`，改为 `maxHeight: calc(100vh - Npx)` 按内容自适应 | ✅ DONE（实测浮层高 459px / 视口 731px）|
@@ -2535,7 +2536,7 @@ WebView 在后台**暂停 JS**，于是随后所有 `Runtime.evaluate` 都 30s �
 
 | # | 用户原话（要点）| 处理 | 状态 |
 | :--- | :--- | :--- | :--- |
-| G-1 | 临时菜单-省略号 点击后展开**右键那套菜单**（而不是另一个小菜单）| ✅ 实现：浮条「更多」派发 `hs-open-clip-context-menu`（**事件里带 `clipId`** —— 后端 `select_clip` 不更新前端 store，之前正是这个原因导致"发了事件没反应"），由 `TimelinePanel` 里已装配好的 `ClipContextMenu` 实例渲染 | 🔴 **仍未验成**：面板已挂载、块已选中、事件已派发，但 DOM 无变化（div 97→97）、console 无报错 ⇒ 下一步查：① 那个 effect 是否真被编译进产物；② `contextMenu` 的渲染分支条件（需要 `ctxClip` 等派生值）|
+| G-1 | 临时菜单-省略号 点击后展开**右键那套菜单**（而不是另一个小菜单）| ✅ 实现：浮条「更多」派发 `hs-open-clip-context-menu`（**事件里带 `clipId`** —— 后端 `select_clip` 不更新前端 store，之前正是这个原因导致"发了事件没反应"），由 `TimelinePanel` 里已装配好的 `ClipContextMenu` 实例渲染 | ✅ **DONE（真机 221deeb，2026-10-01）**：与 F1 同一需求。"DOM 无变化"的真因是**前端 store 里没有块**（渲染分支要先 `clips.find(...)` 命中，否则 `return null`）—— 当时所谓的"块已选中"只是**后端** `select_clip` 的结果，而前端 store 不跟着更新。用**前端流程**造出块之后，菜单正常弹出。详见文末 §G/F 组验收 |
 | G-2 | **吸附网格与分割过渡**的长按后界面对应原版软件的**吸附网格设置**与**分割过渡设置**，不是工程设置；**不要所有按钮长按都进工程设置** | ✅ **两项修正都已落地**：① 两项各自带 `longPress`，分别派发 `which:"snap-grid"` / `"split-transition"`，打开项目**已有**的 `SnapGridSettingsDialog` / `SplitTransitionSettingsDialog`；② 长按处理里**删掉**"没给 longPress 就打开工程设置"的兜底 ⇒ 无 longPress 的项长按**无反应** | ✅ G-2a（长按吸附网格 ⇒ 原版「吸附/网格设置...」，实测内容含网格线/间距/最小像素间距/Swing/吸附总开关）· ✅ G-2c（长按节拍器**不**打开工程设置）· 🟡 G-2b（长按分割过渡）待确认 —— 探针里前一个对话框的关闭不稳（radix backdrop 无我们的 data-* 属性），已改用 Escape，需再跑一次 |
 | G-3 | **工程设置完全参考原软件的上工具栏设计**，不要自己猜选项是什么、是否有输入框，还缺 **BPM** | ✅ 按此重做：**加 BPM**（`set_transport({bpm})`，−1/+1/输入/保存）；**删掉我自己猜的"网格手动输入框"** —— 网格间距在原版属于「吸附网格设置」，这里只给一个"吸附/网格设置…"入口按钮；保留上工具栏里确实有的：基准音阶（按钮组）、拍号（分子/分母）、撤销历史（只读展示）| 🟡 已实现待验 |
 | G-4 | **「节拍器」更名「节拍器…」**，因为它也有长按菜单 | ✅ 已改名（实测文案为「节拍器…」）| ✅ DONE（文案已确认）|
@@ -3719,3 +3720,75 @@ esbuild 转译**不做类型检查**所以测试照过，但 `tsc -b` 会失败�
 | **E26 存储设置窗口层级在参数界面之后** | 按用户口径**与 E23 设计统一化一并处理** |
 | **E10-③ 剪贴板节拍** | 🅿️ 暂挂（用户：近期没遇见）|
 | **E24 音频块浮条按钮全部点不动** | ✅ 已修并验证（见上一节）|
+
+---
+
+## ✅ G/F 组验收：**7 / 7 全部通过**（真机 221deeb，2026-10-01）+ 三处对账缺口
+
+**跑法**：`node scripts/_probe-f-batch.mjs 221deeb`（F 组 7 条）。**结果：通过 7 / 7。**
+
+> 过程：先在模拟器上跑到 5/7，两条"失败"经对账发现**都不是产品缺陷**（见下①②）；
+> 把**造块探针**修好之后（见下③）在**真机**上重跑 ⇒ **7/7，连 F1 也过了**：
+> 菜单真的弹出来了（`menus:1`，文本 `已选 2 个 / 删除所有 / 静音所有 / Take / 跨轨道聚合为 Take /
+> 倒放选中项 / 复制所有 / … / 编辑`）。**⇒ F1 / G-1 的产品逻辑本来就是对的。**
+
+### ① F1（= G-1）：**是探针造不出"前端块"，不是菜单坏了**
+
+现象：派发 `hs-open-clip-context-menu` 后菜单不出现（`menus:0`）。
+
+对账（读代码）：
+- 菜单渲染分支是 `const ctxClip = sessionRef.current.clips.find(...); if (!ctxClip) return null;`
+  —— `session.clips` 是**前端 store** 的块列表（`TimelinePanel.tsx` 的 `{contextMenu && (…)()}`);
+- 监听器同样以前端块为准：`target = (id ? clips.find(id) : undefined) ?? clips[0]`，**空则直接 return**；
+- 而探针用**后端 `import_audio_item`** 造块 —— 该命令**不更新前端 store**（与 `select_clip` 同型，
+  项目里早有记录）⇒ 前端**始终没有块** ⇒ 菜单必然不渲染。
+- 实测佐证：`scripts/_dbg-store-dump.mjs` + 截屏 ⇒ 当前工程**只有 1 条空轨道、没有任何块**。
+
+⇒ **产品这段逻辑是对的**（真实场景里浮条只在"有块 + 选中"时才渲染，前端一定有块，且浮条事件自带
+`clipId`）。F1 分支**判据空转**。
+
+### ② F3-f：**判据已被 G-3 覆盖，忘了同步**
+
+F3-f 要求"网格有预设按钮**且有手动输入框**"—— 但 **G-3（用户口径）明确要求删掉那个手动输入框**
+（网格间距属于「吸附网格设置」对话框，这里只留一个入口按钮）。代码已按 G-3 改，**判据没跟上**。
+⇒ 已把 F3-f 改为"**有**「吸附/网格设置…」入口按钮 **且没有**手动输入框"。
+
+### 🔴 造块（走前端流程）在探针里跑不通 —— 记下这个坑
+
+为验 F1 写了 `scripts/_dbg-import-drag.mjs`（真实路径：长按文件列表项 → 拖到参数面板）。实测：
+
+```
+pointerdown:touch:b0 → touchstart → pointermove → touchmove → **pointercancel** → touchmove×7 → touchend
+hifi-file-drag 事件：**一条都没有**
+```
+
+⇒ 浏览器在**第一次 `pointermove`** 就发了 `pointercancel`（把手势当列表滚动抢走），React 的
+pointer 链路就此断掉、`onPointerMove` 收不到后续移动 ⇒ 拖拽从未激活。
+（与 E11 增益旋钮同型的"合成触摸会发 pointercancel"；`FileBrowserPanel` 注释里写了
+"长按后挂非被动 `touchmove` + `preventDefault()` 阻止 pointercancel"，**实测没能阻止**。）
+
+⇒ **要验 F1，得先在设备上造出"前端块"。可选路子（留给下一轮）**：
+1. 在设备上**手动**长按拖一次（人手触摸与 CDP 合成路径不同）；
+2. 走 `open-with` 打开一个**含块**的 `.hshp` 工程；
+3. 给生产前端也留一个"造块"调试入口（现在 `__hfsStore` 只在 `import.meta.env.DEV` 下挂，
+   而 debug APK 用的是**生产**前端 ⇒ 取不到）。
+
+### ✅ 造块终于跑通：三个坑全排掉后，F1 立刻通过（真机）
+
+`scripts/_dbg-import-drag.mjs` 最终跑通的配方（缺一不可）：
+
+| # | 坑 | 现象 | 修法 |
+| :-: | :--- | :--- | :--- |
+| ① | **用触摸事件** | 第一次 `pointermove` 就吃 `pointercancel`（浏览器当成列表滚动抢走）⇒ `hifi-file-drag` **一条都不派发** | 改**鼠标事件**（`Input.dispatchMouseEvent`）：不参与滚动抢手势，`pointerdown → 长按 340ms → move×8 → pointerup` 干净走完 |
+| ② | **落点选错面板** | 把轨道面板关掉后**没有接收者** —— 音频 drop 的接收者是 `useTimelineDragDrop`（挂在 **TimelinePanel** 里）；参数面板只收 **MIDI**（`PianoRollPanel.onHifiFileDrag`） | 保留 **轨道 + 文件** 同屏，drop 落到**轨道**面板 |
+| ③ | **行不可见** | 列表滚出面板的行照样 `getBoundingClientRect()` 给坐标，但坐标落在面板**之外** ⇒ `onPointerDown` 从未触发 ⇒ 长按从未武装 ⇒ 后续移动全被当滚动丢弃 | 只挑 **rect 落在文件面板可视区内**的行；关键字找不到就退回"面板内任意一个可见音频行" |
+
+跑通后一次即造出块（截图：轨道上出现新块 + 底部「导入完成」），**再跑 F 组就是 7/7**。
+
+### ✅ E27 真机验证（同一轮）
+
+- `node scripts/_probe-lower-pane-full.mjs 221deeb`：把面板关到**只剩参数块** ⇒
+  **params 高 557px / 分屏容器 598px = 93.1%** ⇒ ✅ 独占（判据 ≥80%）。
+- 修前是确定的一行表达式 `flexGrow = 1 - mobileSplitRatio`：真机 `ratio = 0.5` ⇒ 只占 **50%**
+  （与 E10-① 记录的"容器 411px → 修后 557px"同类的压扁）。
+- 旁证：只剩 `params + files` 时两块各 279px、**合计占满容器**（修前各只有 `(1-0.5)/2`）。
