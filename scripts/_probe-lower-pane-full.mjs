@@ -48,18 +48,29 @@ const before = await cdp.call(() => ({
 }));
 console.log('▸ 起始面板：' + JSON.stringify(before));
 
-/* 2. 逐个关掉除 params 以外的面板（点每个面板自己的 ✕），每关一个等一拍 */
+/* 2. 逐个关掉除 params 以外的面板，每关一个等一拍。
+ * ⚠️ 用 `hs-mobile-close-panel`（App 的官方路径）而不是点 ✕：只有 timeline / params 两块
+ * 的 ✕ 带 `.hs-panel-close`（App 自己渲染的），files / notes 的 ✕ 在各自组件里
+ * （Radix `IconButton`）⇒ 点按钮那条路**关不掉它们**，会让探针停在"params+files 平分
+ * 下半块"的状态上，把 46.7% 误报成"被压扁"（2026-10-01 实测踩到）。
+ * 🕳️ 那条事件进的是 `toggleMobilePanel` —— 是**翻转**不是关闭！对**已关闭**的面板派发
+ * 反而会把它打开（实测：连派三次之后剩 pane = timeline+params+files）。所以先判在场再派发，
+ * 且要排除"正在出场"的那块（闸门会把它多留 160ms）。 */
 for (const k of ['timeline', 'files', 'notes']) {
-    const hit = await cdp.call((key) => {
-        const btn = document.querySelector(`[data-hs-pane="${key}"] .hs-panel-close`);
-        if (!btn) return false;
-        btn.click();
-        return true;
+    const onScreen = await cdp.call((key) => {
+        const el = document.querySelector(`[data-hs-pane="${key}"]`);
+        return !!el && !el.hasAttribute('data-hs-leaving');
     }, k);
-    if (hit) {
-        console.log(`  ▸ 关掉 ${k}`);
-        await sleep(1400);
-    }
+    if (!onScreen) continue;
+    await cdp.call(
+        (key) => {
+            window.dispatchEvent(new CustomEvent('hs-mobile-close-panel', { detail: { key } }));
+            return true;
+        },
+        k,
+    );
+    console.log(`  ▸ 关掉 ${k}`);
+    await sleep(900);
 }
 await sleep(1000);
 

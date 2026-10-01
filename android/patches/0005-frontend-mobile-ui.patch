@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..c53c28bc 100644
+index 3802022a..d0ab42fe 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4694 @@
+@@ -1,4006 +1,4790 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -4144,6 +4144,8 @@ index 3802022a..c53c28bc 100644
 +import { useAutoBackupScheduler } from "./hooks/useAutoBackupScheduler";
 +import { useClipFormantStatusListener } from "./hooks/useClipFormantStatusListener";
 +import { useRecordingListener } from "./hooks/useRecordingListener";
++/* E22 第二刀（出场动画）：面板收起时多留一个出场时长再卸载，见 hooks/useExitPresence.tsx */
++import { ExitPresence, useExitLayoutLag } from "./hooks/useExitPresence";
 +import {
 +    cancelRecordingCountdown,
 +    loadRecordingSettings,
@@ -4536,6 +4538,47 @@ index 3802022a..c53c28bc 100644
 +            delete (window as unknown as { __hsSelection?: unknown }).__hsSelection;
 +        };
 +    }, []);
++
++    /* 验收钩子（E24-②「控制点两段式手势」，2026-10-01）：
++       判"**上划后横滑**有没有真的改到淡变 / **下划后横滑**有没有真的改到变速"只能**读数值** ——
++       块是 canvas 画的，淡变时长 / 速率在 DOM 上没有任何痕迹（`__hsSelection` 只给 id）。
++       与上面同款：经 `store.getState()` **同步读**而不订阅 ⇒ 不引入额外重渲。
++       同帧把长按提示图标的在场情况与锚点也带出来（那是 DOM，可直接查）。 */
++    useEffect(() => {
++        const scope = window as unknown as { __hsClipProbe?: () => unknown };
++        scope.__hsClipProbe = () => {
++            const s = store.getState().session;
++            const id = s.selectedClipId;
++            const c = id ? s.clips.find((x) => x.id === id) : null;
++            const hint = document.querySelector("[data-hs-edge-longpress-hint]");
++            return {
++                clip: c
++                    ? {
++                          id: c.id,
++                          startSec: c.startSec,
++                          lengthSec: c.lengthSec,
++                          durationSec: c.durationSec ?? null,
++                          fadeInSec: c.fadeInSec,
++                          fadeOutSec: c.fadeOutSec,
++                          autoFadeInSec: c.autoFadeInSec ?? 0,
++                          autoFadeOutSec: c.autoFadeOutSec ?? 0,
++                          playbackRate: c.playbackRate,
++                          clipPlaybackRate: c.clipPlaybackRate ?? c.playbackRate,
++                      }
++                    : null,
++                hint: hint
++                    ? {
++                          side: hint.getAttribute("data-hs-edge-side"),
++                          fade: !!hint.querySelector('[data-hs-edge-hint="fade"]'),
++                          stretch: !!hint.querySelector('[data-hs-edge-hint="stretch"]'),
++                      }
++                    : null,
++            };
++        };
++        return () => {
++            delete (window as unknown as { __hsClipProbe?: unknown }).__hsClipProbe;
++        };
++    }, []);
 +    // 注意：playbackPositionSec 以 ~30Hz 持续变化，这里不能订阅（否则每次
 +    // 播放 tick 都重渲 AppInner）；需要它的地方（录音自动停止）在回调内经
 +    // store.getState() 同步读取最新值。
@@ -4593,6 +4636,9 @@ index 3802022a..c53c28bc 100644
 +    const mobileSplitRef = useRef<HTMLDivElement | null>(null);
 +    /** 分屏边界是否正在被拖动（I-2：拖动中禁止"单面板归位"重写 flexGrow，否则不跟手）。 */
 +    const mobileSplitDraggingRef = useRef(false);
++    /** E22 第四刀：拖动收尾过渡的计时器（抬手后给容器挂 `data-hs-split-settling`，
++     *  窗口一过就摘掉 —— 过渡只该存在于"收尾"那一下，绝不能常驻，否则拖动变橡皮筋）。 */
++    const mobileSplitSettleTimerRef = useRef<number | null>(null);
 +    /** C5/C6：手柄绑定挂在 document 上（跨挂载/重绘不失效），所以要按引用读当前面板态。 */
 +    const mobilePanelsRef = useRef<{ timeline: boolean; params: boolean; files: boolean; notes: boolean }>(
 +        { timeline: true, params: false, files: false, notes: false },
@@ -4609,6 +4655,11 @@ index 3802022a..c53c28bc 100644
 +    /* C5/C6：手机端**是否还有"非轨道面板"** —— 决定上下两块要不要按 `splitRatio`
 +       分高度（只有一块时那一块独占 = 全屏；两块都在时才需要分界线）。 */
 +    const mobileHasNonTrackPanel = mobilePanels.params || mobilePanels.files || mobilePanels.notes;
++    /* E22 第二刀（出场动画）：**布局**要滞后一个出场时长再变，否则正在淡出的那块会被
++       另一块当场抢走高度、淡出期间被压扁一次（真机实测 252px → 177px，判据 E22-X4）。
++       注意这两个滞后值只喂给 `flexGrow` 计算，**不**参与面板显隐（那是 ExitPresence 的事）。 */
++    const mobileTimelineForLayout = useExitLayoutLag(mobilePanels.timeline);
++    const mobileHasNonTrackForLayout = useExitLayoutLag(mobileHasNonTrackPanel);
 +
 +    /**
 +     * D3（2026-09-27）：打开「同步参数编辑器水平位置与缩放」且**两块面板同屏**时，
@@ -5078,6 +5129,10 @@ index 3802022a..c53c28bc 100644
 +        const COLLAPSE_TOP = 0.14;
 +        /** 死区：小于它只当"点了一下标题条"（同一根条上还有各自的点击语义）。 */
 +        const DEAD_PX = 14;
++        /** E22 第四刀：收尾过渡窗口。要盖住两件事 —— ① `flex-grow` 过渡本身（CSS
++         *  `--hs-anim-dur-settle` 180ms）；② 跨塌陷阈值关面板时，布局要等**出场动画**跑完
++         *  才真正收（`useExitLayoutLag` 160ms）⇒ 160 + 180 = 340ms 才够。 */
++        const SPLIT_SETTLE_MS = 340;
 +        /* E8（用户口径）：手柄**只**认带 `data-hs-split-handle` 的那几条（上工具栏 / 文件浏览器标题栏 /
 +   记事本标题栏）。**参数界面的拍数栏不再参与** —— 它原先被塞进这个选择器，导致"拖拍数栏改分屏高度"。 */
 +const HANDLE_SELECTOR = '[data-hs-split-handle]';
@@ -5140,6 +5195,25 @@ index 3802022a..c53c28bc 100644
 +            window.removeEventListener("pointercancel", onUp);
 +            mobileSplitDraggingRef.current = false;   /* 即使只是点一下也必须清：否则标志残留会让 E10-① 的归位永久失效 */
 +            if (!d.moved) return; // 只是点了一下标题条 ⇒ 边界不动
++            /* ── E22 第四刀（拖动收尾的平滑）────────────────────────────────────
++               拖动期间 `paintRatio()` 是**每帧直接写 DOM** 的（不重渲整棵树），落到 0.93 就是 0.93；
++               而抬手这里会 `clamp(ratio, 0.15, 0.85)` 再 setState ⇒ **瞬跳**回 0.85；
++               跨过 `COLLAPSE_*` 阈值那一下更是直接跳成全屏。
++               修法：抬手时给分屏容器挂 `data-hs-split-settling`，CSS 只在这段时间里对
++               `flex-grow` 上过渡 ⇒ 从"指尖最后的位置"滑到落位值（`flex-grow` 是数值、可插值）。
++               ⚠️ 窗口必须**在 React 提交新比例之前**打开（这里就是），且拖动中绝不能带过渡
++               （否则每帧写一次 flexGrow 都会重启过渡 = 橡皮筋，正是 I-2 抱怨的"不跟手"）。 */
++            const settleBox = mobileSplitRef.current;
++            if (settleBox) {
++                settleBox.dataset.hsSplitSettling = "1";
++                if (mobileSplitSettleTimerRef.current !== null) {
++                    window.clearTimeout(mobileSplitSettleTimerRef.current);
++                }
++                mobileSplitSettleTimerRef.current = window.setTimeout(() => {
++                    mobileSplitSettleTimerRef.current = null;
++                    delete settleBox.dataset.hsSplitSettling;
++                }, SPLIT_SETTLE_MS);
++            }
 +            const settled = clamp(d.ratio, 0.15, 0.85);
 +            if (d.ratio >= COLLAPSE_BOTTOM) {
 +                /* 下方被压得太小 ⇒ 关掉所有"非轨道"面板 ⇒ 回到全屏轨道界面。 */
@@ -5157,6 +5231,14 @@ index 3802022a..c53c28bc 100644
 +        const onDown = (e: PointerEvent) => {
 +            if (e.pointerType === "mouse") return; // 鼠标走桌面那条分割条
 +            if (findHandle(e.target) === null) return;
++            /* E22 第四刀：新的一次拖动开始 ⇒ 立刻摘掉收尾过渡，否则拖动期间每帧写的
++               `flexGrow` 都会被过渡"追着跑"，手感变成橡皮筋。 */
++            const box = mobileSplitRef.current;
++            if (mobileSplitSettleTimerRef.current !== null) {
++                window.clearTimeout(mobileSplitSettleTimerRef.current);
++                mobileSplitSettleTimerRef.current = null;
++            }
++            if (box) delete box.dataset.hsSplitSettling;
 +            drag = { pointerId: e.pointerId, startY: e.clientY, moved: false, ratio: mobileSplitRatioRef.current };
 +            mobileSplitDraggingRef.current = true;   /* I-2：拖动期间禁止重写 flexGrow */
 +            window.addEventListener("pointermove", onMove, { passive: false });
@@ -5170,6 +5252,12 @@ index 3802022a..c53c28bc 100644
 +            window.removeEventListener("pointermove", onMove);
 +            window.removeEventListener("pointerup", onUp);
 +            window.removeEventListener("pointercancel", onUp);
++            /* E22 第四刀：卸载时把收尾计时器与标记一起清掉（别留悬挂的 setTimeout 去改已卸载的 DOM） */
++            if (mobileSplitSettleTimerRef.current !== null) {
++                window.clearTimeout(mobileSplitSettleTimerRef.current);
++                mobileSplitSettleTimerRef.current = null;
++            }
++            if (mobileSplitRef.current) delete mobileSplitRef.current.dataset.hsSplitSettling;
 +            drag = null;
 +        };
 +    }, [isPhone, dispatch]);
@@ -5198,19 +5286,24 @@ index 3802022a..c53c28bc 100644
 +           这段"单面板归位"会在 **`mobilePanels` 每次变化时**跑，而**下拉进分屏**恰好会
 +           dispatch 面板变化（`showMobilePanel("timeline")`）—— 于是拖动刚起步就被它把
 +           `flexGrow` 重置成 1 ⇒ 拖动被"拉回去"，手感就是不跟手。
-+           修法：**拖动进行中一律跳过**；并且只在"面板数确实 ≤1"时才归位（保持 E10-① 的修复）。 */
-+        if (
-+            splitBox &&
-+            !mobileSplitDraggingRef.current &&
-+            Object.values(mobilePanels).filter(Boolean).length <= 1
-+        ) {
++           修法：**拖动进行中一律跳过**；并且只在"面板数确实 ≤1"时才归位（保持 E10-① 的修复）。
++
++           🔴 E22 第二刀再补一层（判据 E22-X4 实测 419px→299px）：本段是**直接写 DOM** 的，
++           会把**正在淡出的那块**也一起写成 `flexGrow: 1`（它那时还在 DOM 里等出场动画跑完）
++           ⇒ 淡出期间布局被压成 50/50，等于"白淡了"。所以：
++           ① 用**滞后过的**在场标志判断"是否真的只剩一块"（闸门留多久，布局就等多久）；
++           ② 顺手跳过带 `data-hs-leaving` 的节点，兜住"滞后刚到期、那块还没卸载"的那一帧。 */
++        const mobileBlocksForLayout =
++            (mobileTimelineForLayout ? 1 : 0) + (mobileHasNonTrackForLayout ? 1 : 0);
++        if (splitBox && !mobileSplitDraggingRef.current && mobileBlocksForLayout <= 1) {
 +            for (const child of Array.from(splitBox.children)) {
 +                const el = child as HTMLElement;
++                if (el.hasAttribute("data-hs-leaving") || el.querySelector("[data-hs-leaving]") !== null) continue;
 +                el.style.flexGrow = "1";
 +                if (el.style.flexBasis) el.style.flexBasis = "";
 +            }
 +        }
-+    }, [mobilePanels, isPhone]);
++    }, [mobilePanels, isPhone, mobileTimelineForLayout, mobileHasNonTrackForLayout]);
 +
 +    const statusText = useMemo(() => {
 +        // 精确匹配
@@ -8404,13 +8497,16 @@ index 3802022a..c53c28bc 100644
 +                        className="flex-1 min-h-0 relative bg-qt-base flex flex-col"
 +                        data-hs-mobile-split="1"
 +                    >
-+                        {mobilePanels.timeline ? (
++                        {/* E22 第二刀（出场动画）：收起时**先淡出再卸载** —— 闸门见
++                            `hooks/useExitPresence.tsx`；面板含 `position: fixed` 后代，
++                            所以出场只能动 opacity（与入场的 `hs-fade-in` 同规）。 */}
++                        <ExitPresence open={mobilePanels.timeline} anim="pane">
 +                            <div
 +                                key={"hs-pane-timeline-" + glRecoveryEpoch}
 +                                data-hs-pane="timeline"
 +                                className="hs-mobile-split-pane relative"
 +                                style={
-+                                    mobileHasNonTrackPanel
++                                    mobileHasNonTrackForLayout
 +                                        ? { flexGrow: mobileSplitRatio }
 +                                        : { flexGrow: 1 }
 +                                }
@@ -8441,8 +8537,8 @@ index 3802022a..c53c28bc 100644
 +                                    `position: fixed` 落在指针处，故与操作条并列挂载。 */}
 +                                <ClipEdgeLongPressHint />
 +                            </div>
-+                        ) : null}
-+                        {mobileHasNonTrackPanel ? (
++                        </ExitPresence>
++                        <ExitPresence open={mobileHasNonTrackPanel} anim="pane">
 +                            <div
 +                                key="hs-pane-lower"
 +                                className="hs-mobile-split-pane relative flex flex-col"
@@ -8454,7 +8550,7 @@ index 3802022a..c53c28bc 100644
 +                                   整块几乎看不见。没有轨道块就不存在"分界线"，下方块必须独占。
 +                                   实测（模拟器）：修前 params 高 26px（ratio 被探针拖到 0.94 后）；
 +                                   修后应占满可用区（与 E10-① 的 557px 同一口径）。 */
-+                                style={{ flexGrow: mobilePanels.timeline ? 1 - mobileSplitRatio : 1 }}
++                                style={{ flexGrow: mobileTimelineForLayout ? 1 - mobileSplitRatio : 1 }}
 +                            >
 +                                {/* C5/C6-b：**上工具栏放进"下方块"的最上面**。
 +                                    它就是分屏手柄（E8 用户口径），放进下方块后
@@ -8462,7 +8558,7 @@ index 3802022a..c53c28bc 100644
 +                                    **之外**的上方 ⇒ 手柄与分界线永远差着一段，
 +                                    拖起来像"跑偏/拖不动"。工具行属于参数界面 ⇒ 只有它存在。 */}
 +                                {mobilePanels.params ? <MobileParamToolRow /> : null}
-+                                {mobilePanels.params ? (
++                                <ExitPresence open={mobilePanels.params} anim="pane">
 +                                    <div
 +                                        key={"hs-pane-params-" + glRecoveryEpoch}
 +                                        data-hs-pane="params"
@@ -8494,8 +8590,8 @@ index 3802022a..c53c28bc 100644
 +                                        </button>
 +                                        <PianoRollPanel />
 +                                    </div>
-+                                ) : null}
-+                                {mobilePanels.files ? (
++                                </ExitPresence>
++                                <ExitPresence open={mobilePanels.files} anim="pane">
 +                                    <div
 +                                        key="hs-pane-files"
 +                                        data-hs-pane="files"
@@ -8503,8 +8599,8 @@ index 3802022a..c53c28bc 100644
 +                                    >
 +                                        <FileBrowserPanel />
 +                                    </div>
-+                                ) : null}
-+                                {mobilePanels.notes ? (
++                                </ExitPresence>
++                                <ExitPresence open={mobilePanels.notes} anim="pane">
 +                                    <div
 +                                        key="hs-pane-notes"
 +                                        data-hs-pane="notes"
@@ -8512,9 +8608,9 @@ index 3802022a..c53c28bc 100644
 +                                    >
 +                                        <NotebookPanel />
 +                                    </div>
-+                                ) : null}
++                                </ExitPresence>
 +                            </div>
-+                        ) : null}
++                        </ExitPresence>
 +                    </Box>
 +                </Flex>
 +            ) : (
@@ -35250,10 +35346,10 @@ index 00000000..ccf42cee
 +    );
 +}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..c4358571 100644
+index 242997f5..8319c30b 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7161 @@
+@@ -1,6438 +1,7175 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -41934,6 +42030,7 @@ index 242997f5..c4358571 100644
 +import { expandClipIdsWithGroups } from "./timeline/hooks/useGroupExpansion";
 +import { useVisualPlayhead } from "../../hooks/useVisualPlayhead";
 +import { useDebouncedPersist } from "../../hooks/useDebouncedPersist";
++import { ExitPresence } from "../../hooks/useExitPresence";
 +import { ClipRateEditorDialog } from "./timeline/ClipRateEditorDialog";
 +import {
 +    computeAutoFollowScrollLeft,
@@ -48344,6 +48441,11 @@ index 242997f5..c4358571 100644
 +                    )}
 +
 +                    <FadeContextMenuHost />
++                    {/* E22 第二刀（出场动画）：右键菜单关闭时**先淡出再卸载**
++                        （闸门 `hooks/useExitPresence.tsx`）。这里 children 是 portal，
++                        闸门会重建 portal 并把里面的节点标记成 `data-hs-leaving`；
++                        保留的是"关门那一下的快照"⇒ 淡出时菜单不会跳到 (0,0)。 */}
++                    <ExitPresence open={contextMenu !== null} anim="menu">
 +                    {contextMenu
 +                        ? (() => {
 +                              const ctxClip = sessionRef.current.clips.find(
@@ -48624,6 +48726,7 @@ index 242997f5..c4358571 100644
 +                              );
 +                          })()
 +                        : null}
++                    </ExitPresence>
 +
 +                    {trackAreaMenu
 +                        ? createPortal(
@@ -48806,6 +48909,12 @@ index 242997f5..c4358571 100644
 +                    />
 +
 +                    {/* 右键播放速率角标 → 高级编辑（倍率 + BPM 换算，批量应用） */}
++                    {/* E22 第二刀（出场动画）：这块面板根节点也是 `[role="menu"]`（渲染在原地、
++                        不是 portal）⇒ 同样过闸门，关闭时先淡出再卸载。 */}
++                    <ExitPresence
++                        open={rateEditorClipId != null && rateEditorPosition != null}
++                        anim="menu"
++                    >
 +                    <ClipRateEditorDialog
 +                        open={rateEditorClipId != null && rateEditorPosition != null}
 +                        clip={
@@ -48837,6 +48946,7 @@ index 242997f5..c4358571 100644
 +                            if (!o) setRateEditorClipId(null);
 +                        }}
 +                    />
++                    </ExitPresence>
 +
 +                    <TimelineDisplaySettingsDialog
 +                        open={timeDisplaySettingsOpen}
@@ -58925,10 +59035,16 @@ index d2d25db8..8ae953df 100644
  
              dispose() {
 diff --git a/frontend/src/components/layout/timeline/ClipContextMenu.tsx b/frontend/src/components/layout/timeline/ClipContextMenu.tsx
-index e9858a5c..20ed9cbc 100644
+index e9858a5c..78c267de 100644
 --- a/frontend/src/components/layout/timeline/ClipContextMenu.tsx
 +++ b/frontend/src/components/layout/timeline/ClipContextMenu.tsx
-@@ -49,7 +49,11 @@ const MenuItem: React.FC<{
+@@ -1,4 +1,5 @@
+ import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
++import { ExitPresence } from "../../../hooks/useExitPresence";
+ import { FadeShapeIcon } from "./FadeShapeIcon";
+ import type { ClipInfo } from "../../../features/session/sessionTypes";
+ import { useI18n } from "../../../i18n/I18nProvider";
+@@ -49,7 +50,11 @@ const MenuItem: React.FC<{
          }}
      >
          <span>{label}</span>
@@ -58941,7 +59057,15 @@ index e9858a5c..20ed9cbc 100644
      </button>
  );
  
-@@ -198,6 +202,12 @@ const SubMenu: React.FC<{
+@@ -192,18 +197,25 @@ const SubMenu: React.FC<{
+                     />
+                 </svg>
+             </button>
+-            {open && !disabled && (
++            {/* E22 第二刀：菜单里的二级下拉（如"淡变形状"）收起时也淡出 */}
++            <ExitPresence open={open && !disabled} anim="menu">
+                 <div
+                     ref={panelRef}
                      role="menu"
                      data-hs-context-menu="1"
                      className="absolute z-[60] min-w-[190px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
@@ -58954,6 +59078,174 @@ index e9858a5c..20ed9cbc 100644
                      onPointerDown={(e) => e.stopPropagation()}
                      onClick={(e) => e.stopPropagation()}
                  >
+                     {children}
+                 </div>
+-            )}
++            </ExitPresence>
+         </div>
+     );
+ };
+@@ -266,6 +278,10 @@ const FadeShapeRow: React.FC<{
+ export const ClipContextMenu: React.FC<{
+     x: number;
+     y: number;
++    /** E22 第二刀（出场动画）：由 `ExitPresence` 注入 —— 本组件是「闸门保留的快照」，
++        属性必须以 **prop** 的形式转交到根节点上，闸门才没法直接 cloneElement 到 DOM
++        （它是组件，不是 div）。见 `hooks/useExitPresence.tsx`。 */
++    "data-hs-leaving"?: string;
+     /** 右键点击的 clip */
+     clip: ClipInfo;
+     /** 多个 clip 列表（含 clip 本身），长度 >= 2 时进入多选模式 */
+@@ -306,6 +322,7 @@ export const ClipContextMenu: React.FC<{
+      *  多选时以右键的 clip 为 anchor 批量应用（提交管线内聚）。 */
+     onEditRate?: (clipId: string, screenX: number, screenY: number) => void;
+ }> = ({
++    "data-hs-leaving": leavingAttr,
+     x,
+     y,
+     clip,
+@@ -429,6 +446,9 @@ export const ClipContextMenu: React.FC<{
+             role="menu"
+             data-hs-context-menu="1"
+             data-hs-floating-menu="1"
++            /* E22 第二刀：由 `ExitPresence` 以 prop 注入（本组件是"闸门保留的快照"），
++               出现在这里 ⇒ `[role="menu"][data-hs-leaving]` 那条出场关键帧才会命中。 */
++            data-hs-leaving={leavingAttr}
+             className="fixed z-[999] min-w-[140px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
+             style={{ left: x, top: y }}
+             onPointerDown={(e) => e.stopPropagation()}
+diff --git a/frontend/src/components/layout/timeline/ClipRateEditorDialog.tsx b/frontend/src/components/layout/timeline/ClipRateEditorDialog.tsx
+index 36ec5fb9..17a70b3c 100644
+--- a/frontend/src/components/layout/timeline/ClipRateEditorDialog.tsx
++++ b/frontend/src/components/layout/timeline/ClipRateEditorDialog.tsx
+@@ -45,6 +45,9 @@ export interface ClipRateEditorPosition {
+ 
+ export interface ClipRateEditorDialogProps {
+     open: boolean;
++    /** E22 第二刀（出场动画）：由 `ExitPresence` 注入 —— 透传给内部 `ClipRateEditorFields`
++        的根节点，让 `[role="menu"][data-hs-leaving]` 的出场关键帧命中。 */
++    "data-hs-leaving"?: string;
+     /** 目标 Clip（打开时由父级从会话状态解析；null 时不渲染）。 */
+     clip: ClipInfo | null;
+     /** 右键触发时的屏幕坐标（浮层锚点）。 */
+@@ -69,6 +72,7 @@ function parseBpmText(raw: string): number | null {
+ 
+ /** 面板内容：仅在 open 时按目标 Clip 挂载（key = clip.id），预填一次。 */
+ function ClipRateEditorFields({
++    "data-hs-leaving": leavingAttr,
+     clip,
+     position,
+     tempoMap,
+@@ -78,6 +82,9 @@ function ClipRateEditorFields({
+     onApply,
+     onClose,
+ }: {
++    /** E22 第二刀（出场动画）：由 `ExitPresence` 经 `ClipRateEditorDialog` 转交
++        （闸门够不到组件的 DOM 根节点，见 hooks/useExitPresence.tsx 约束②）。 */
++    "data-hs-leaving"?: string;
+     clip: ClipInfo;
+     position: ClipRateEditorPosition;
+     tempoMap: TempoMap | null;
+@@ -231,6 +238,7 @@ function ClipRateEditorFields({
+         <div
+             ref={menuRef}
+             role="menu"
++            data-hs-leaving={leavingAttr}
+             data-hs-floating-menu="1"
+             data-hs-context-menu="1"
+             className="fixed z-[999] w-[248px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-2 px-3 flex flex-col gap-2"
+@@ -435,6 +443,7 @@ function ClipRateEditorFields({
+ }
+ 
+ export function ClipRateEditorDialog({
++    "data-hs-leaving": leavingAttr,
+     open,
+     clip,
+     position,
+@@ -449,6 +458,7 @@ export function ClipRateEditorDialog({
+     return (
+         <ClipRateEditorFields
+             key={clip.id}
++            data-hs-leaving={leavingAttr}
+             clip={clip}
+             position={position}
+             tempoMap={tempoMap}
+diff --git a/frontend/src/components/layout/timeline/FadeContextMenu.tsx b/frontend/src/components/layout/timeline/FadeContextMenu.tsx
+index 7e4dc327..9c9a5d7b 100644
+--- a/frontend/src/components/layout/timeline/FadeContextMenu.tsx
++++ b/frontend/src/components/layout/timeline/FadeContextMenu.tsx
+@@ -279,10 +279,13 @@ export const FadeContextMenu: React.FC<{
+     primary: FadeContextSide;
+     /** 交叉点命中时的第二侧（另一条包络线）；无则不渲染。 */
+     secondary?: FadeContextSide | null;
++    /** E22 第二刀（出场动画）：由 `ExitPresence` 以 prop 注入 —— 本组件是"闸门保留的
++        快照"，且自己 `createPortal` ⇒ 闸门没法 cloneElement 到 DOM，只能由这里转交。 */
++    "data-hs-leaving"?: string;
+     onClose: () => void;
+     onShapeChange: (clipId: string, isOut: boolean, shape: number) => void;
+     onDirChange: (clipId: string, isOut: boolean, dir: number) => void;
+-}> = ({ x, y, primary, secondary, onClose, onShapeChange, onDirChange }) => {
++}> = ({ "data-hs-leaving": leavingAttr, x, y, primary, secondary, onClose, onShapeChange, onDirChange }) => {
+     const { t } = useI18n();
+     const menuRef = useRef<HTMLDivElement>(null);
+     // 底部提示展示用户实际配置的曲率修饰键（如 "Alt"）。
+@@ -334,6 +337,9 @@ export const FadeContextMenu: React.FC<{
+             {...{ [FADE_CONTEXT_MENU_ATTR]: "1" }}
+             data-hs-floating-menu="1"
+             data-hs-context-menu="1"
++            /* E22 第二刀：由 `ExitPresence` 以 prop 注入 ⇒ `[role="menu"][data-hs-leaving]`
++               那条出场关键帧才会命中（本组件自建 portal，闸门够不到 DOM）。 */
++            data-hs-leaving={leavingAttr}
+             className="fixed z-[999] min-w-[220px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
+             style={{ left: x, top: y }}
+             onContextMenu={(e) => e.preventDefault()}
+diff --git a/frontend/src/components/layout/timeline/FadeContextMenuHost.tsx b/frontend/src/components/layout/timeline/FadeContextMenuHost.tsx
+index 4f078d3c..4ca75efd 100644
+--- a/frontend/src/components/layout/timeline/FadeContextMenuHost.tsx
++++ b/frontend/src/components/layout/timeline/FadeContextMenuHost.tsx
+@@ -23,6 +23,7 @@
+  * 开/关一个 undo group，保证重置也可单步撤销。
+  */
+ import React from "react";
++import { ExitPresence } from "../../../hooks/useExitPresence";
+ import { batch } from "react-redux";
+ import { useAppDispatch, useAppSelector } from "../../../app/hooks";
+ import { setClipFades } from "../../../features/session/sessionSlice";
+@@ -298,17 +299,24 @@ export const FadeContextMenuHost: React.FC = () => {
+         [commit],
+     );
+ 
+-    if (!menu || !primary) return null; // 目标 clip 已被删除等情形：直接关闭。
++    /* E22 第二刀（出场动画）：原来这里是 `if (!menu || !primary) return null;` —— 菜单
++       关闭（或被"点别处"收起）当场卸载，没有出场可言。改成把条件交给闸门：
++       `open=false` 时它会把**关门那一下的 `FadeContextMenu` 快照**多留 120ms 淡出，
++       再真正卸载。⚠️ 下面那段的入参用 `?.` 兜一下，因为关闭那一帧 `menu` 已经是 null。 */
+     return (
+-        <FadeContextMenu
+-            x={menu.clientX}
+-            y={menu.clientY}
+-            primary={primary}
+-            secondary={secondary}
+-            onClose={closeMenu}
+-            onShapeChange={handleShapeChange}
+-            onDirChange={handleDirChange}
+-        />
++        <ExitPresence open={menu != null && primary != null} anim="menu">
++            {menu && primary ? (
++                <FadeContextMenu
++                    x={menu.clientX}
++                    y={menu.clientY}
++                    primary={primary}
++                    secondary={secondary}
++                    onClose={closeMenu}
++                    onShapeChange={handleShapeChange}
++                    onDirChange={handleDirChange}
++                />
++            ) : null}
++        </ExitPresence>
+     );
+ };
+ 
 diff --git a/frontend/src/components/layout/timeline/TimeRuler.tsx b/frontend/src/components/layout/timeline/TimeRuler.tsx
 index 147331ce..5a625f64 100644
 --- a/frontend/src/components/layout/timeline/TimeRuler.tsx
@@ -60845,10 +61137,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..af12000b 100644
+index c0db2221..5a7e4cc4 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2889 @@
+@@ -1,2297 +1,2945 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -64872,6 +65164,62 @@ index c0db2221..af12000b 100644
 +        () => tracks.slice(visibleTrackWindow.startIndex, visibleTrackWindow.endIndex + 1),
 +        [tracks, visibleTrackWindow.endIndex, visibleTrackWindow.startIndex],
 +    );
++
++    /* ── E22-⑤ 移动轨道动画（FLIP）────────────────────────────────────────────
++     * 用户口径：「**移动轨道动画**」。排序一提交（`moveTrackRemote` 回来、`tracks` 顺序变），
++     * 行不是"哐"地换位，而是从旧位置滑到新位置。
++     *
++     * 三条实现约束（都刻意选的保守解）：
++     *  ① **位置一律取"相对列表容器"的偏移**（`row.top - host.top`）：行是由外层
++     *     `translateY(startIndex × rowHeight)` 做虚拟定位的，绝对坐标会随滚动/窗口一起平移，
++     *     相对偏移才能让差值只反映"顺序变了多少"。
++     *  ② **只在"同一批行 + 顺序真的变了"时动画**（`sameSet && reordered`）：增删轨道不行画，
++     *     滚动导致的窗口滑动也不会误触发 —— 所以 effect 只依赖 `tracks`（顺序的唯一来源），
++     *     不依赖 `listScrollTop`。
++     *  ③ 用 **WAAPI `el.animate(...)` 而不是常驻 `transform`**：动画一结束 transform 自动消失，
++     *     行不会长期变成 `position: fixed` 后代的"包含块"——轨道右键菜单就挂在行里，
++     *     一旦长期带 transform，那些浮层会改成相对行定位（本部踩过：见 index.css E22 注释①）。
++     *     同理尊重 `body[data-hs-no-anim]` 与 `prefers-reduced-motion`。
++     */
++    const flipPrevTopRef = useRef<Map<string, number>>(new Map());
++    const flipOrderRef = useRef<string>("");
++    useLayoutEffect(() => {
++        const host = document.querySelector<HTMLElement>("[data-track-list-panel]");
++        if (!host) return;
++        const hostTop = host.getBoundingClientRect().top;
++        const nodes = Array.from(host.querySelectorAll<HTMLElement>("[data-hs-track-row]"));
++        const cur = new Map<string, number>();
++        const order: string[] = [];
++        for (const el of nodes) {
++            const id = el.getAttribute("data-hs-track-row");
++            if (!id) continue;
++            cur.set(id, el.getBoundingClientRect().top - hostTop);
++            order.push(id);
++        }
++        const orderKey = order.join("|");
++        const prev = flipPrevTopRef.current;
++        const sameSet = prev.size === cur.size && order.every((id) => prev.has(id));
++        const reordered = flipOrderRef.current !== "" && flipOrderRef.current !== orderKey;
++        flipPrevTopRef.current = cur;
++        flipOrderRef.current = orderKey;
++        if (!sameSet || !reordered) return;
++        if (document.body.hasAttribute("data-hs-no-anim")) return;
++        if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
++        for (const el of nodes) {
++            const id = el.getAttribute("data-hs-track-row");
++            if (!id) continue;
++            const from = prev.get(id);
++            const to = cur.get(id);
++            if (from == null || to == null) continue;
++            const dy = from - to;
++            if (Math.abs(dy) < 1) continue;
++            el.animate([{ transform: `translateY(${dy}px)` }, { transform: "none" }], {
++                duration: 180,
++                easing: "cubic-bezier(0.22, 1, 0.36, 1)",
++            });
++        }
++        // eslint-disable-next-line react-hooks/exhaustive-deps
++    }, [tracks]);
 +
 +    const buildVolumeTooltip = (trackId: string, volume: number): string => {
 +        const db = clampGainDb(gainToDb(volume));
@@ -80190,10 +80538,10 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..9ee8d67b
+index 00000000..1412018f
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,200 @@
+@@ -0,0 +1,220 @@
 +/**
 + * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
@@ -80238,6 +80586,12 @@ index 00000000..9ee8d67b
 +const MODE_THRESHOLD_PX = 18;
 +/** 判定为"左右拖动"的横向位移。 */
 +const DRAG_THRESHOLD_PX = 6;
++/** E24-④（用户 2026-10-01 口径：「**限制圆点的显示，让它在音频块附近**」）：
++ *  圆点"跟手"是规格要求（`docs/15`：圆点能跟手），但**不钳制**时手指划到屏幕另一头、
++ *  圆点也跟着飞出去 —— 既看不出在调哪条边，又挡住别处的 UI。这里把**绘制位置**钳在
++ *  「块矩形 + 一圈余量」内再与容器求交：横向左右各留这么多，纵向上下各留这么多
++ *  （竖向余量 ≥ `MODE_THRESHOLD_PX` 才够显示"上=fade / 下=rate"的换图标反馈）。 */
++const DOT_FOLLOW_MARGIN_PX = 44;
 +
 +type Mode = "none" | "fade" | "rate";
 +
@@ -80348,8 +80702,22 @@ index 00000000..9ee8d67b
 +    const dot = (side: "left" | "right"): React.ReactNode => {
 +        const grabbed = grab?.side === side;
 +        const baseX = baseXOf(side);
-+        const x = grabbed ? grab.x : baseX;
-+        const y = grabbed ? grab.y : centerY;
++        /* 跟手 + **不许跑离块附近**（E24-④）：先按"块矩形 ± 余量"钳，再与容器求交
++           （取交集的下/上界，保证既不出屏也不脱离块）。 */
++        const minX = Math.max(g.container.left + DOT_R, g.left - DOT_FOLLOW_MARGIN_PX);
++        const maxX = Math.min(
++            g.container.left + g.container.width - DOT_R,
++            g.left + g.width + DOT_FOLLOW_MARGIN_PX,
++        );
++        const minY = Math.max(g.container.top + DOT_R, g.top - DOT_FOLLOW_MARGIN_PX);
++        const maxY = Math.min(
++            g.container.top + g.container.height - DOT_R,
++            g.top + g.clipHeight + DOT_FOLLOW_MARGIN_PX,
++        );
++        const clamp = (v: number, lo: number, hi: number) =>
++            Math.min(Math.max(v, Math.min(lo, hi)), Math.max(lo, hi));
++        const x = grabbed ? clamp(grab.x, minX, maxX) : baseX;
++        const y = grabbed ? clamp(grab.y, minY, maxY) : centerY;
 +        const mode: Mode = grabbed ? grab.mode : "none";
 +        return (
 +            <div
@@ -80901,10 +81269,10 @@ index 00000000..bbe16b02
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..ec70b21d
+index 00000000..0611eec7
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1981 @@
+@@ -0,0 +1,1985 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -80968,6 +81336,7 @@ index 00000000..ec70b21d
 +} from "../../features/recording/recordingSlice";
 +import { updateMetronome } from "../../features/session/thunks/transportThunks";
 +import { getActiveSurface } from "../../features/uiFocus/focusSurface";
++import { ExitPresence } from "../../hooks/useExitPresence";
 +import {
 +    resolveCopyCutRoute,
 +    resolveEditOpRoute,
@@ -81649,6 +82018,118 @@ index 00000000..ec70b21d
 + * D4：「选择」工具子菜单（点角标 / 长按打开）。
 + * 结构与 `DrawToolMenu` 一致（fixed 定位 + 量锚点 + 夹进视口），避免两处漂移。
 + */
++/**
++ * E24-①（用户 2026-10-01 口径「**统一 选择 与 绘制 的菜单**」）—— 两套工具菜单**共用的外壳**。
++ *
++ * 此前两份各写一遍：选择那份用 CSS 类（`.hs-select-tool-menu__item`），绘制那份用**内联样式**，
++ * 于是字号 / 圆角 / 条目高 / 选中态（一份有 ✔ 一份没有）/ 打开动画 / 定位测量**全都不一样**
++ * —— 同类菜单长得不像同一家的。现在只有一个外壳 + 一套类名，两处只提供 `rows` 与锚点。
++ *
++ * 统一三件事：
++ *   ① **结构样式**：同一套 `.hs-tool-menu` / `.hs-tool-menu__item`（尺寸、字号、选中态、✔ 标记都同款）；
++ *   ② **打开动画**：根节点给 `role="menu"` ⇒ 直接吃到 E22 那层统一动效（`hs-menu-in`）；
++ *   ③ **定位**：量一次菜单与锚点 ⇒ **优先向下弹、放不下向上弹、横向夹进视口**（原绘制那份的做法，
++ *      它修过"菜单跑到屏幕外"）。
++ *
++ * ⚠️ `extraAttrs` 用来**兼容既有探针**的选择器（`[data-hs-select-tool-menu]` 等），别再各自加一套类。
++ */
++function ToolMenu({
++    rows,
++    current,
++    onPick,
++    onClose,
++    label,
++    anchorSelector,
++    extraAttrs,
++}: {
++    rows: Array<{ mode: string; label: string; icon: React.ReactNode }>;
++    current: string;
++    onPick: (mode: string) => void;
++    onClose: () => void;
++    label: string;
++    /** 锚点元素选择器；不传则退回 `offsetParent` / 父元素。 */
++    anchorSelector?: string;
++    /** 兼容旧探针的额外 data 属性。 */
++    extraAttrs?: Record<string, string>;
++}) {
++    const menuRef = React.useRef<HTMLDivElement | null>(null);
++    const [menuStyle, setMenuStyle] = React.useState<React.CSSProperties>({
++        position: "fixed",
++        left: 8,
++        top: 8,
++        visibility: "hidden",
++        zIndex: 41,
++    });
++
++    React.useLayoutEffect(() => {
++        const el = menuRef.current;
++        if (!el) return;
++        const M = 8; // 与视口至少留这么宽
++        const anchor =
++            (anchorSelector ? document.querySelector<HTMLElement>(anchorSelector) : null) ??
++            (el.offsetParent as HTMLElement | null) ??
++            el.parentElement;
++        const r = anchor?.getBoundingClientRect();
++        if (!r) {
++            setMenuStyle((prev) => ({ ...prev, visibility: "visible" }));
++            return;
++        }
++        const box = el.getBoundingClientRect();
++        const below = window.innerHeight - r.bottom - M;
++        const top = below >= box.height ? r.bottom + 6 : Math.max(M, r.top - box.height - 6);
++        const left = Math.min(Math.max(M, r.left), Math.max(M, window.innerWidth - box.width - M));
++        setMenuStyle({ position: "fixed", left, top, visibility: "visible", zIndex: 41 });
++    }, [anchorSelector]);
++
++    return (
++        <>
++            {/* 全屏透明 backdrop：**点别处收起**（两份菜单都必须有，否则点击会穿透到下层按钮） */}
++            <button
++                type="button"
++                aria-label={label}
++                onClick={onClose}
++                className="hs-tool-menu__backdrop"
++                style={{
++                    position: "fixed",
++                    inset: 0,
++                    background: "transparent",
++                    border: 0,
++                    cursor: "pointer",
++                    zIndex: 40,
++                }}
++            />
++            <div
++                ref={menuRef}
++                role="menu"
++                aria-label={label}
++                data-hs-tool-menu=""
++                {...(extraAttrs ?? {})}
++                className="hs-tool-menu"
++                style={menuStyle}
++            >
++                {rows.map((row) => (
++                    <button
++                        key={row.mode}
++                        type="button"
++                        role="menuitemradio"
++                        aria-checked={current === row.mode}
++                        data-active={current === row.mode ? "true" : undefined}
++                        className="hs-tool-menu__item"
++                        onClick={() => {
++                            onPick(row.mode);
++                            onClose();
++                        }}
++                    >
++                        {row.icon}
++                        <span className="hs-tool-menu__label">{row.label}</span>
++                        {current === row.mode ? <CheckIcon width={14} height={14} /> : null}
++                    </button>
++                ))}
++            </div>
++        </>
++    );
++}
++
 +function SelectToolMenu({
 +    current,
 +    onPick,
@@ -81659,74 +82140,21 @@ index 00000000..ec70b21d
 +    onClose: () => void;
 +}) {
 +    const { t } = useI18n();
-+    const rows: Array<{ mode: "select" | "drag"; label: string; icon: React.ReactNode }> = [
++    /* D4：右下角标（与铅笔同款）；当前是「拖动」时图标换成手套。 */
++    const rows = [
 +        { mode: "select", label: t("mobile_tool_select"), icon: <CursorArrowIcon width={15} height={15} /> },
 +        { mode: "drag", label: t("mobile_tool_drag"), icon: <IconGlove /> },
 +    ];
-+    const menuRef = React.useRef<HTMLDivElement | null>(null);
-+    const [menuStyle, setMenuStyle] = React.useState<React.CSSProperties>({
-+        position: "fixed",
-+        left: 8,
-+        bottom: 8,
-+        visibility: "hidden",
-+        zIndex: 41,
-+    });
-+
-+    /* 与 DrawToolMenu 同样的「量一次锚点、优先向下弹、放不下向上、横向夹进视口」。 */
-+    React.useLayoutEffect(() => {
-+        const el = menuRef.current;
-+        if (!el) return;
-+        const M = 8;
-+        const anchor = document.querySelector<HTMLElement>("[data-hs-select-anchor]");
-+        const r = anchor?.getBoundingClientRect();
-+        if (!r) {
-+            setMenuStyle((s) => ({ ...s, visibility: "visible" }));
-+            return;
-+        }
-+        const box = el.getBoundingClientRect();
-+        const below = window.innerHeight - r.bottom - M;
-+        const top = below >= box.height ? r.bottom + 6 : Math.max(M, r.top - box.height - 6);
-+        const left = Math.min(Math.max(M, r.left), Math.max(M, window.innerWidth - box.width - M));
-+        setMenuStyle({ position: "fixed", left, top, visibility: "visible", zIndex: 41 });
-+    }, []);
-+
 +    return (
-+        /* E19b（2026-10-01 设备验收暴露）：**必须与 `DrawToolMenu` 一样带全屏透明 backdrop**。
-+           原先只有「绘制」菜单有 → 用户口径「菜单展开后点别处收起」在「选择」菜单上**不成立**：
-+           实测点参数面板任意处（如 `(8,405)`，`elementFromPoint` = 面板关闭按钮 z20）
-+           菜单仍在（`[data-hs-select-tool-menu]` 保持存在），而且点击会**穿透**到下层按钮
-+           （顺手把工具切成了「选择」）—— 既收不起来、又误触发。两层都要「同步」。 */
-+        <>
-+            <button
-+                type="button"
-+                aria-label={t("mobile_close_tool_menu")}
-+                onClick={onClose}
-+                className="fixed border-0 cursor-pointer"
-+                style={{ inset: 0, background: "transparent", zIndex: 40 }}
-+            />
-+            <div
-+                ref={menuRef}
-+                className="hs-select-tool-menu"
-+                data-hs-select-tool-menu
-+                style={menuStyle}
-+            >
-+                {rows.map((row) => (
-+                    <button
-+                        key={row.mode}
-+                        type="button"
-+                        className="hs-select-tool-menu__item"
-+                        data-active={current === row.mode ? "true" : undefined}
-+                        onClick={() => {
-+                            onPick(row.mode);
-+                            onClose();
-+                        }}
-+                    >
-+                        {row.icon}
-+                        <span>{row.label}</span>
-+                    </button>
-+                ))}
-+            </div>
-+        </>
++        <ToolMenu
++            rows={rows}
++            current={current}
++            onPick={(mode) => onPick(mode as "select" | "drag")}
++            onClose={onClose}
++            label={t("mobile_tool_menu")}
++            anchorSelector="[data-hs-select-anchor]"
++            extraAttrs={{ "data-hs-select-tool-menu": "" }}
++        />
 +    );
 +}
 +
@@ -81790,112 +82218,22 @@ index 00000000..ec70b21d
 +    onClose: () => void;
 +}) {
 +    const { t } = useI18n();
-+    const rows: Array<{
-+        mode: "draw" | "vibrato" | "restore";
-+        label: string;
-+        icon: React.ReactNode;
-+    }> = [
++    const rows = [
 +        { mode: "draw", label: t("mobile_tool_draw"), icon: <Pencil1Icon width={15} height={15} /> },
 +        { mode: "vibrato", label: t("mobile_tool_vibrato"), icon: <IconVibrato /> },
 +        /* D2：等价于电脑上右键拖动参数（手机上无右键/笔杆键，原本不可达） */
 +        { mode: "restore", label: t("mobile_tool_restore"), icon: <IconRestoreTool /> },
 +    ];
-+
-+    /* 🔴 2026-09-22 用户报「长按绘制按钮打开的菜单到屏幕外了」。
-+       原因是原实现写死 `position:absolute; bottom:100%; left:4` ——
-+       即"相对锚点向上弹、左对齐"。而绘制按钮在**参数工具行**（屏幕上部），
-+       向上弹直接顶出上边界；靠右时 `left:4` 也救不了右侧。
-+       改成：`fixed` 定位 + 挂载时量一次锚点矩形，**优先向下弹**、放不下再向上，
-+       横向与锚点左对齐并**夹到视口内**（四周留 8px）。量之前先 `visibility:hidden`
-+       避免闪一下错位。 */
-+    const menuRef = React.useRef<HTMLDivElement | null>(null);
-+    const [menuStyle, setMenuStyle] = React.useState<React.CSSProperties>({
-+        position: "fixed",
-+        left: 8,
-+        bottom: 8,
-+        visibility: "hidden",
-+        zIndex: 41,
-+    });
-+
-+    React.useLayoutEffect(() => {
-+        const el = menuRef.current;
-+        if (!el) return;
-+        const M = 8; // 与视口至少留这么宽
-+        const w = el.offsetWidth || 132;
-+        const h = el.offsetHeight || 92;
-+        const vw = window.innerWidth;
-+        const vh = window.innerHeight;
-+
-+        // 锚点：优先用 offsetParent（原 `absolute` 定位的参照物，即按钮容器），
-+        // 拿不到就退回父元素，再不行就贴在左下角。
-+        const anchor = (el.offsetParent as HTMLElement | null) ?? el.parentElement;
-+        const a = anchor
-+            ? anchor.getBoundingClientRect()
-+            : ({ left: M, top: vh - 60, bottom: vh - 20 } as DOMRect);
-+
-+        let left = Math.round(a.left);
-+        if (left + w > vw - M) left = vw - M - w;
-+        if (left < M) left = M;
-+
-+        const common = { position: "fixed" as const, left, visibility: "visible" as const, zIndex: 41 };
-+        if (a.bottom + 4 + h <= vh - M) {
-+            setMenuStyle({ ...common, top: Math.round(a.bottom + 4) }); // 下方放得下 → 向下弹
-+        } else {
-+            setMenuStyle({ ...common, bottom: Math.round(vh - a.top + 4) }); // 否则向上弹
-+        }
-+    }, []);
-+
 +    return (
-+        <>
-+            <button
-+                type="button"
-+                aria-label={t("mobile_close_tool_menu")}
-+                onClick={onClose}
-+                className="fixed border-0 cursor-pointer"
-+                style={{ inset: 0, background: "transparent", zIndex: 40 }}
-+            />
-+            <div
-+                ref={menuRef}
-+                className="bg-qt-window border border-qt-border"
-+                aria-label={t("mobile_tool_menu")}
-+                style={{
-+                    ...menuStyle,
-+                    minWidth: 132,
-+                    borderRadius: 8,
-+                    padding: 4,
-+                    display: "flex",
-+                    flexDirection: "column",
-+                    gap: 2,
-+                }}
-+            >
-+                {rows.map((row) => (
-+                    <button
-+                        key={row.mode}
-+                        type="button"
-+                        aria-pressed={current === row.mode}
-+                        onClick={() => onPick(row.mode)}
-+                        className="flex items-center gap-2 bg-transparent border-0 cursor-pointer"
-+                        style={{
-+                            minHeight: 40,
-+                            padding: "0 10px",
-+                            fontSize: 12,
-+                            borderRadius: 6,
-+                            color:
-+                                current === row.mode
-+                                    ? "var(--white-a12, #fff)"
-+                                    : "var(--accent-11, rgb(177, 169, 255))",
-+                            background:
-+                                current === row.mode ? "var(--accent-9, rgb(91, 91, 214))" : "transparent",
-+                            WebkitTapHighlightColor: "transparent",
-+                        }}
-+                    >
-+                        {row.icon}
-+                        <span style={{ flex: "1 1 auto", textAlign: "left" }}>{row.label}</span>
-+                        {current === row.mode ? <CheckIcon width={14} height={14} /> : null}
-+                    </button>
-+                ))}
-+            </div>
-+        </>
++        <ToolMenu
++            rows={rows}
++            current={current}
++            onPick={(mode) => onPick(mode as "draw" | "vibrato" | "restore")}
++            onClose={onClose}
++            label={t("mobile_tool_menu")}
++            anchorSelector="[data-hs-draw-anchor]"
++            extraAttrs={{ "data-hs-draw-tool-menu": "" }}
++        />
 +    );
 +}
 +
@@ -82136,7 +82474,10 @@ index 00000000..ec70b21d
 +            {foldOpen ? (
 +                <FoldPanel title={t("mobile_more_switches")} items={trackFoldItems} onClose={() => setFoldOpen(false)} />
 +            ) : null}
-+            {eyeOpen ? <VerticalDualPanel onClose={() => setEyeOpen(false)} /> : null}
++                        {/* E22 第二刀：覆盖层菜单关闭时先淡出再卸载（闸门 hooks/useExitPresence.tsx） */}
++            <ExitPresence open={eyeOpen} anim="menu">
++                {eyeOpen ? <VerticalDualPanel onClose={() => setEyeOpen(false)} /> : null}
++            </ExitPresence>
 +        </div>
 +    );
 +}
@@ -82216,7 +82557,15 @@ index 00000000..ec70b21d
 + * `y = -314 … 45`，也就是**几乎整块在屏幕外**，只剩最后一行可见（用户报「眼睛菜单
 + * 点不出东西」的真正原因）。改成固定浮层、从工具行下方开始、内部可滚动。
 + */
-+function VerticalDualPanel({ onClose }: { onClose: () => void }) {
++function VerticalDualPanel({
++    onClose,
++    "data-hs-leaving": leavingAttr,
++}: {
++    onClose: () => void;
++    /** E22 第二刀（出场动画）：由 `ExitPresence` 以 prop 注入 —— 本组件是"闸门保留的
++        快照"，属性到不了它的 DOM 根节点，只能由这里转交（见 hooks/useExitPresence.tsx 约束②）。 */
++    "data-hs-leaving"?: string;
++}) {
 +    const { t } = useI18n();
 +    const dispatch = useAppDispatch();
 +    const s = useAppSelector(
@@ -82362,6 +82711,8 @@ index 00000000..ec70b21d
 +            />
 +            <div
 +                role="menu"
++                /* E22 第二刀：闸门注入 ⇒ `[role="menu"][data-hs-leaving]` 的出场关键帧才命中 */
++                data-hs-leaving={leavingAttr}
 +                className="bg-qt-window border border-qt-border"
 +                aria-label={t("mobile_params_overlays")}
 +                style={{
@@ -82564,6 +82915,10 @@ index 00000000..ec70b21d
 +        clearDrawLongPress();
 +        setEyeOpen(false);
 +        setVOpen(false);
++        /* E24-①：**两套工具菜单互斥**。原先 `openSelectMenu` 会关绘制菜单、反之却不关
++           ⇒ 两个菜单能同时开着（各有全屏 backdrop ⇒ 两层叠着、点哪儿都先被上层吃掉）。
++           同类菜单行为必须对称。 */
++        setSelectMenuOpen(false);
 +        setDrawMenuOpen(true);
 +    };
 +
@@ -82667,6 +83022,16 @@ index 00000000..ec70b21d
 +            selectLongFiredRef.current = false;
 +            return;
 +        }
++        /* E24-①（用户 2026-10-01 口径）：「点**未选中**的工具 ⇒ **直接切换**；点**已选中**的工具
++           ⇒ **展开工具菜单**」。此前只有"长按 400ms / 点右下角标"两条开菜单的路，点按钮本体
++           永远是切换 ⇒ 用户描述成"点击未选择的工具直接切换而非打开菜单"。
++           判定用**按钮是否处于激活态**（与 `visual/active` 同一条件，含 drag 同组的情况）：
++           激活 ⇒ 开菜单；否则 ⇒ 切换。角标那条路保留（明确的"我要菜单"手势）。 */
++        const activeGroup = s.toolModeGroup === "select" || s.toolModeGroup === "drag";
++        if (activeGroup) {
++            openSelectMenu();
++            return;
++        }
 +        setSelectMenuOpen(false);
 +        dispatch(setToolMode("select"));
 +    };
@@ -82691,10 +83056,12 @@ index 00000000..ec70b21d
 +        // 点击落在右下角三角命中区（按钮右下 18×18）→ 开子菜单；否则切工具
 +        const r = e.currentTarget.getBoundingClientRect();
 +        const inCorner = e.clientX >= r.right - 18 && e.clientY >= r.bottom - 18;
-+        if (inCorner) {
++        /* E24-①：与「选择」同规 —— 角标 或 **已选中** 都表示"我要菜单"，否则才切换工具。 */
++        if (inCorner || s.toolModeGroup === "draw") {
 +            openDrawMenu();
 +            return;
 +        }
++        setDrawMenuOpen(false);
 +        dispatch(setToolMode(currentDrawTool));
 +    };
 +
@@ -82740,6 +83107,8 @@ index 00000000..ec70b21d
 +                    /* 探针/回归钩子：一眼看出当前绘制工具（含 `restore`）。
 +                       也是"界面必须反映当前工具"这条的用户可见证据（D2）。 */
 +                    data-hs-draw-tool={currentDrawTool}
++                    /* E24-①：统一工具菜单外壳用的锚点（与 `[data-hs-select-anchor]` 对称） */
++                    data-hs-draw-anchor=""
 +                    style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
 +                >
 +                    {currentDrawTool === "restore" ? (
@@ -82861,7 +83230,10 @@ index 00000000..ec70b21d
 +                    onClose={() => setSelectMenuOpen(false)}
 +                />
 +            ) : null}
-+            {eyeOpen ? <VerticalDualPanel onClose={() => setEyeOpen(false)} /> : null}
++                        {/* E22 第二刀：覆盖层菜单关闭时先淡出再卸载（闸门 hooks/useExitPresence.tsx） */}
++            <ExitPresence open={eyeOpen} anim="menu">
++                {eyeOpen ? <VerticalDualPanel onClose={() => setEyeOpen(false)} /> : null}
++            </ExitPresence>
 +            {vOpen ? <VMenuPanel onClose={() => setVOpen(false)} /> : null}
 +        </div>
 +    );
@@ -82888,10 +83260,10 @@ index 00000000..ec70b21d
 +}
 diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
 new file mode 100644
-index 00000000..6303a257
+index 00000000..d8e72371
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileTopBar.tsx
-@@ -0,0 +1,975 @@
+@@ -0,0 +1,981 @@
 +/**
 + * MobileTopBar — 触摸形态顶部**横向菜单栏**（按 PS 设计稿 ps1.png）。
 + *
@@ -82958,6 +83330,7 @@ index 00000000..6303a257
 +    resolvePasteRoute,
 +} from "../../features/keybindings/focusRouting";
 +import { getActiveSurface } from "../../features/uiFocus/focusSurface";
++import { ExitPresence } from "../../hooks/useExitPresence";
 +import { webApi } from "../../services/webviewApi";
 +
 +interface MobileTopBarProps {
@@ -83714,7 +84087,10 @@ index 00000000..6303a257
 +                </>
 +            ) : null}
 +
-+            {openMenu != null ? (
++            {/* E22 第二刀：菜单关闭时**先淡出再卸载**（闸门 `hooks/useExitPresence.tsx`）。
++                闸门保留的是"关门那一下的快照" ⇒ 淡出的是刚才那份菜单，不会跳位；
++                遮罩按钮也在这棵子树里 ⇒ 离开期间一并 `pointer-events: none`。 */}
++            <ExitPresence open={openMenu != null} anim="menu">
 +                <>
 +                    <button
 +                        type="button"
@@ -83841,12 +84217,14 @@ index 00000000..6303a257
 +                            )
 +                        ) : (
 +                            <div style={{ padding: "12px 14px", fontSize: 14, opacity: 0.55 }}>
-+                                {tAny(openMenu)} {t("mobile_menu_organizing")}
++                                {/* 闸门（`ExitPresence`）让 children **无条件求值** ⇒ TS 不再
++                                    收窄 `openMenu != null`，这里自己兜一下。 */}
++                                {openMenu ? tAny(openMenu) : null} {t("mobile_menu_organizing")}
 +                            </div>
 +                        )}
 +                    </div>
 +                </>
-+            ) : null}
++            </ExitPresence>
 +
 +            {/* 可选模型管理（Radix Dialog 会 portal 到 body，放在 header 里无副作用） */}
 +            <ModelManagerDialog open={modelManagerOpen} onOpenChange={setModelManagerOpen} />
@@ -97893,6 +98271,172 @@ index 59e658ed..3939ddf1 100644
          const state = getState() as { session: SessionState };
          const anchorSec = state.session.playheadSec;
  
+diff --git a/frontend/src/hooks/useExitPresence.tsx b/frontend/src/hooks/useExitPresence.tsx
+new file mode 100644
+index 00000000..b21518ca
+--- /dev/null
++++ b/frontend/src/hooks/useExitPresence.tsx
+@@ -0,0 +1,160 @@
++/*
++ * E22 · 出场动画的「挂载闸门」（presence 状态机）—— 2026-10-01
++ *
++ * 由来：入场动画是纯 CSS（挂载即跑关键帧），出场却做不到 —— React 一旦把节点卸载，
++ * 就没有"动画期间"可言。所以这里补一个**最小的挂载闸门**：`open` 由 true → false 时
++ * 不立刻卸载，而是把**最后一次打开时的子树快照**多留一个出场时长，期间给节点打上
++ * `data-hs-leaving`，CSS 据此跑 `hs-menu-out` / `hs-fade-out`。
++ *
++ * ── 四条硬约束（都踩过/推演过，**别再简化掉**）────────────────────────────
++ *
++ * ① **快照，而不是"当前 children"**：关门那一下外部状态往往已经清空
++ *    （`openMenu = null`、`contextMenu = null`、`mobilePanels.x = false`…）。
++ *    若继续渲染当前 children，菜单会当场跳位（坐标变 0/undefined）、内容闪一下再淡出。
++ *    快照把"关门前的样子"冻住 ⇒ 淡出的是用户刚才看到的那个东西。
++ *
++ * ② **🔴 绝对不要再加 DOM 包装层**：本闸门一开始给子树套过一层
++ *    `div[data-hs-leaving-root]{display:contents}`（想让后代选择器兜住"组件子节点"）。
++ *    结果直接**打坏了分屏拖动** —— `App.tsx` 的 `paintRatio()` 是按
++ *    `container.children[0]/[1]` **直接改 flexGrow** 的（避免每帧整树重绘），
++ *    多出来的那层 `display: contents` 顶上后，flexGrow 写到了**没有盒子**的包装层上
++ *    ⇒ 拖动不再改变布局（真机 C5/C6 探针 2/5、读数 `h=0`）。
++ *    ⇒ 现在的做法：**普通元素**由 `cloneElement` 直接打属性；**组件**由组件自己把
++ *      `data-hs-leaving` 这个 prop 转到它的根节点上（`ClipContextMenu` /
++ *      `FadeContextMenu` / `VerticalDualPanel` / `ClipRateEditor*` 都是这么做的）。
++ *      新增"根是 `role="menu"` 的组件"时，**记得转发这个 prop**，否则出场动画静默失效。
++ *
++ * ③ **portal 要"拆开再标记"**：`createPortal()` 返回的 `$$typeof` 是 `react.portal`，
++ *    `React.isValidElement()` 判它为 false（只认 `react.element`）⇒ 无法 cloneElement，
++ *    且 portal 的 DOM 挂在 `document.body`、**不在** React 父节点的 DOM 里。
++ *    所以要把 portal 拆开、标记它的 children 之后再 `createPortal` 回去
++ *    （时间线的右键菜单就是这条路径）。
++ *
++ * ④ 尊重 `body[data-hs-no-anim]` 与 `prefers-reduced-motion` ⇒ **立即卸载**，
++ *    与改造前逐字节一致（也是探针的"无动画"对照组；用户嫌晃眼时也能一键退回旧行为）。
++ *
++ * ⚠️ 时长必须与 `index.css` 的 `--hs-anim-dur-out-*` **手工保持一致**（下面 `OUT_MS` 即契约）。
++ */
++import { useLayoutEffect, useRef, useState } from "react";
++import * as React from "react";
++import { createPortal } from "react-dom";
++
++export type ExitAnim = "menu" | "pane" | "bar";
++
++/** 与 index.css 的 `--hs-anim-dur-out-menu/pane/bar` 逐一对应。 */
++const OUT_MS: Record<ExitAnim, number> = {
++    menu: 120,
++    pane: 160,
++    bar: 130,
++};
++
++const animDisabled = (): boolean => {
++    if (typeof document !== "undefined" && document.body.hasAttribute("data-hs-no-anim")) return true;
++    if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
++    return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
++};
++
++type PortalLike = { $$typeof?: symbol; children?: React.ReactNode; containerInfo?: Element; key?: string | null };
++const asPortal = (node: React.ReactNode): PortalLike | null => {
++    if (node === null || typeof node !== "object") return null;
++    const p = node as PortalLike;
++    return p.$$typeof === Symbol.for("react.portal") ? p : null;
++};
++
++/**
++ * 给快照里的**每个元素节点**打上 `data-hs-leaving`（Fragment 无属性位 ⇒ 向下递归；
++ * 数组逐项处理）。打在整个子树上是有意的：菜单的透明遮罩（backdrop 按钮）也在 children 里，
++ * 它同样需要"离开期间不吃点击"。
++ * 组件节点会被打上同名 **prop** —— 组件负责转到自己的根节点（见文件头约束②）。
++ */
++const markLeaving = (node: React.ReactNode): React.ReactNode => {
++    if (Array.isArray(node)) return node.map(markLeaving);
++    if (!React.isValidElement(node)) return node;
++    const el = node as React.ReactElement<{ children?: React.ReactNode }>;
++    if (el.type === React.Fragment) {
++        return React.cloneElement(el, { children: markLeaving(el.props.children) });
++    }
++    return React.cloneElement(el as React.ReactElement<{ "data-hs-leaving"?: string }>, {
++        "data-hs-leaving": "",
++    });
++};
++
++interface ExitPresenceProps {
++    /** 目标是否应当在场。false 时进入"离开"阶段（延迟 `OUT_MS[anim]` 后真正卸载）。 */
++    open: boolean;
++    anim?: ExitAnim;
++    children: React.ReactNode;
++}
++
++/**
++ * 用法：把原来的 `{cond ? <X/> : null}` 换成 `<ExitPresence open={cond}><X/></ExitPresence>`。
++ * children 要**无条件构造**（元素构造本身不渲染，零成本），闸门才有机会接管那次卸载。
++ */
++export function ExitPresence({ open, anim = "pane", children }: ExitPresenceProps): React.ReactElement {
++    /* 只用一个状态：**还挂着没有**。"正在离开"= `mounted && !open`，不需要第二个变量。 */
++    const [mounted, setMounted] = useState(open);
++    const snapshot = useRef<React.ReactNode>(children);
++
++    if (open) snapshot.current = children;
++
++    /* `useLayoutEffect` 而不是 `useEffect`：关闭那一帧要在**上屏之前**就把标记决定好 ——
++       否则会先画一帧"关掉的旧 UI"（动效关闭时更明显：那一帧就是纯残留）。 */
++    useLayoutEffect(() => {
++        if (open) {
++            setMounted(true);
++            return;
++        }
++        if (!mounted) return;
++        if (animDisabled()) {
++            /* 立即卸载：与改造前逐字节一致（探针的"无动画"对照组走这里） */
++            setMounted(false);
++            return;
++        }
++        const timer = window.setTimeout(() => setMounted(false), OUT_MS[anim]);
++        return () => window.clearTimeout(timer);
++    }, [open, mounted, anim]);
++
++    /* 关闭且已过出场时长 ⇒ 彻底不渲染（真正的那次卸载） */
++    if (!open && !mounted) return <></>;
++
++    /* ③：portal ⇒ 拆开、标记它的 children、再 portal 回去。
++       `snapshot.current` 在 open 期间恒等于 `children` ⇒ 两相走同一分支，结构稳定。 */
++    const portal = asPortal(snapshot.current);
++    if (portal) {
++        return createPortal(
++            open ? portal.children : markLeaving(portal.children),
++            portal.containerInfo as Element,
++            portal.key ?? undefined,
++        ) as unknown as React.ReactElement;
++    }
++
++    return <>{open ? children : markLeaving(snapshot.current)}</>;
++}
++
++/**
++ * 布局也"等出场走完"：`true` 立即生效，`false` 滞后 `ms`（默认与 `anim="pane"` 同长）。
++ *
++ * 为什么必须滞后：分屏是**两块按 `flexGrow` 分高**的。面板一关，另一块的 `flexGrow`
++ * 立刻从 `1 - ratio` 变成 `1` ⇒ 正在淡出的那块被**当场压扁**（真机实测 252px → 177px），
++ * 淡出期间内容还会按新高度重排一次。把"布局用的标志"滞后一个出场时长，
++ * 就是"先淡完、再收起来"（与 `ExitPresence` 保留快照的时长同源）。
++ *
++ * ⚠️ 只用于**布局计算**（`flexGrow` 之类），**不要**拿它当面板显隐的闸门 ——
++ * 显隐仍由 `ExitPresence` 的 `open` 决定，两者各管一段。
++ */
++export function useExitLayoutLag(flag: boolean, ms: number = OUT_MS.pane): boolean {
++    const [lagged, setLagged] = useState(flag);
++    useLayoutEffect(() => {
++        if (flag) {
++            setLagged(true);
++            return;
++        }
++        if (animDisabled()) {
++            setLagged(false);
++            return;
++        }
++        const timer = window.setTimeout(() => setLagged(false), ms);
++        return () => window.clearTimeout(timer);
++    }, [flag, ms]);
++    return flag ? true : lagged;
++}
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
 index 858bca55..a7b17b2d 100644
 --- a/frontend/src/i18n/en-US.ts
@@ -98606,143 +99150,13 @@ index 176638e2..ee7f22c9 100644
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..5cff5620 100644
+index d42792c8..fb295d25 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
-@@ -1,471 +1,1335 @@
--@tailwind base;
--@tailwind components;
--@tailwind utilities;
-+@tailwind base;
-+@tailwind components;
-+@tailwind utilities;
-+
-+/*
-+  Qt-like design tokens as CSS variables.
-+  - Dark uses the legacy Qt hex colors.
-+  - Light derives from Radix Theme tokens to avoid inventing a new palette.
-+*/
-+
-+.qt-theme.dark,
-+:root[data-theme="dark"] {
-+    --qt-window: #353535;
-+    --qt-base: #2d2d2d;
-+    --qt-panel: #2a2a2a;
-+    --qt-surface: #404040;
-+    --qt-clip-bg: #343434;
-+    --qt-clip-border: rgba(255, 255, 255, 0.14);
-+    /* Clip 是明亮色块，选中描边一律深色实线（半透明白在彩色块上发灰） */
-+    --qt-clip-selected-border: rgba(24, 28, 35, 0.95);
-+    --qt-text: #d0d0d0;
-+    --qt-text-muted: #909090;
-+    --qt-highlight: #3b82f6;
-+    --qt-playhead: #f05a5a;
-+    --qt-button: #3d3d3d;
-+    --qt-button-hover: #484848;
-+    --qt-border: #505050;
-+    --qt-hover: #484848;
-+    --qt-danger-bg: #4a1a1a;
-+    --qt-danger-text: #fca5a5;
-+    --qt-danger-border: #ef4444;
-+    --qt-warning-bg: #3d2a0a;
-+    --qt-warning-text: #fcd34d;
-+    --qt-warning-border: #f59e0b;
-+    /* 画布区（时间线轨道/参数编辑器）比 chrome 区（window/panel）深一档，
-+       让工具栏/标尺/画布靠明度而不是仅靠 1px 细线分区 */
-+    --qt-graph-bg: #1f1f1f;
-+    /* 半透明白：在泳道和彩色 clip 上都呈同色调细线，
-+       不会在波形上切出生硬的条纹 */
-+    --qt-graph-grid-strong: rgba(255, 255, 255, 0.22);
-+    --qt-graph-grid-weak: rgba(255, 255, 255, 0.1);
-+    --qt-scrollbar-thumb: #555555;
-+    --qt-overlay: rgba(0, 0, 0, 0.35);
-+    --qt-divider: rgba(255, 255, 255, 0.04);
-+    --qt-subtle-1: rgba(255, 255, 255, 0.025);
-+    --qt-subtle-2: rgba(255, 255, 255, 0.045);
-+    --qt-subtle-3: rgba(255, 255, 255, 0.07);
-+    --qt-subtle-hover: rgba(255, 255, 255, 0.04);
-+    --qt-meter-rail: #2a2a2a;
-+    --qt-meter-well: #1d1d1d;
-+    /* 吸附竖线高亮：按吸附目标类型区分颜色 */
-+    --qt-snap-grid: #3b82f6;
-+    --qt-snap-clip: #f59e0b;
-+    --qt-snap-offset: #ec4899;
-+    --qt-snap-source: #a855f7;
-+    --qt-snap-selection: #22d3ee;
-+    --qt-snap-cursor: #f05a5a;
-+    --qt-snap-sample: #94a3b8;
-+    --qt-snap-loop: #22c55e;
-+}
-+
-+.qt-theme.light,
-+:root[data-theme="light"] {
-+    --qt-window: #f2f3f6;
-+    --qt-base: #ebedf1;
-+    --qt-panel: #f8f9fb;
-+    --qt-surface: #e1e4ea;
-+    --qt-clip-bg: #dde1e8;
-+    --qt-clip-border: rgba(32, 38, 52, 0.18);
-+    --qt-clip-selected-border: rgba(24, 28, 35, 0.95);
-+    --qt-text: #1f232b;
-+    --qt-text-muted: #666d79;
-+    --qt-highlight: #4b68d1;
-+    --qt-playhead: #de4f5d;
-+    --qt-button: #e3e6ec;
-+    --qt-button-hover: #d7dbe4;
-+    --qt-border: #b8bdc9;
-+    --qt-hover: #dde1e8;
-+    --qt-danger-bg: #ffe6ea;
-+    --qt-danger-text: #b53a49;
-+    --qt-danger-border: #df6674;
-+    --qt-warning-bg: #fff1dc;
-+    --qt-warning-text: #9b5f13;
-+    --qt-warning-border: #d59140;
-+    --qt-graph-bg: #edf0f5;
-+    /* 半透明蓝灰：在泳道上与旧实色等效，在 clip 色块/波形上则化为
-+       同色调的细线，不再切出高对比条纹 */
-+    --qt-graph-grid-strong: rgba(74, 88, 112, 0.55);
-+    --qt-graph-grid-weak: rgba(74, 88, 112, 0.3);
-+    --qt-scrollbar-thumb: #b4bac7;
-+    --qt-overlay: rgba(20, 24, 32, 0.22);
-+    --qt-divider: rgba(32, 38, 52, 0.1);
-+    --qt-subtle-1: rgba(28, 36, 52, 0.025);
-+    --qt-subtle-2: rgba(28, 36, 52, 0.04);
-+    --qt-subtle-3: rgba(28, 36, 52, 0.06);
-+    --qt-subtle-hover: rgba(28, 36, 52, 0.04);
-+    --qt-meter-rail: #d6dbe5;
-+    --qt-meter-well: #c8ceda;
-+    /* 吸附竖线高亮：按吸附目标类型区分颜色（浅色主题取更深的可读色） */
-+    --qt-snap-grid: #2563eb;
-+    --qt-snap-clip: #d97706;
-+    --qt-snap-offset: #db2777;
-+    --qt-snap-source: #9333ea;
-+    --qt-snap-selection: #0891b2;
-+    --qt-snap-cursor: #de4f5d;
-+    --qt-snap-sample: #64748b;
-+    --qt-snap-loop: #16a34a;
-+}
-+
-+:root {
-+    --qt-font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-+    --default-font-family: var(--qt-font-family);
-+    font-family: var(--qt-font-family);
-+}
-+
-+:root[data-theme="dark"] {
-+    color-scheme: dark;
-+}
-+
-+:root[data-theme="light"] {
-+    color-scheme: light;
-+}
-+
-+html,
-+body,
-+#root {
-+    margin: 0;
-+    width: 100%;
-+    height: 100%;
-+    overflow: hidden; /* Prevent scrolling on body */
+@@ -128,6 +128,22 @@ body,
+     width: 100%;
+     height: 100%;
+     overflow: hidden; /* Prevent scrolling on body */
 +    /*
 +     * Android WebView：必须禁掉**浏览器自己的**双指缩放。
 +     *
@@ -98759,146 +99173,13 @@ index d42792c8..5cff5620 100644
 +     * 桌面端无副作用：那里不存在 pinch-zoom，触屏笔记本仍可正常拖动。
 +     */
 +    touch-action: pan-x pan-y;
-+}
-+
-+/*
-+ * DAW-style interaction baseline: the app itself is not selectable text.
-+ * This is especially important on Linux/WebKitGTK, where `selectstart`
-+ * suppression alone does not always stop mouse-drag text selection.
-+ * Editable controls and explicit `data-hs-selectable` surfaces opt back in.
-+ */
-+html,
-+body,
-+#root,
-+body * {
-+    -webkit-user-select: none;
-+    user-select: none;
-+}
-+
-+body input,
-+body textarea,
-+body select,
-+body [contenteditable="true"],
-+body [data-hs-selectable="true"],
-+body [data-hs-selectable="true"] * {
-+    -webkit-user-select: text;
-+    user-select: text;
-+}
-+
-+body {
-+    background: var(--qt-window, #353535);
-+    color: var(--qt-text, #cccccc);
-+    font-family: var(--qt-font-family);
-+}
-+
-+* {
-+    box-sizing: border-box;
-+}
-+
-+button,
-+input,
-+select,
-+textarea {
-+    font-family: inherit;
-+}
-+
-+.rt-BaseButton:focus-visible,
-+:where(button, [role="button"]):focus-visible {
-+    outline: none;
-+    box-shadow: none;
-+}
-+
-+:where(input, textarea, select, .rt-TextFieldInput, .rt-SelectTrigger):focus-visible {
-+    outline: none;
-+    box-shadow: none;
-+}
-+
-+/*
-+ * Qt/DAW 风格滚动条（标准 CSS 滚动条属性）。
-+ *
-+ * 不用 ::-webkit-scrollbar 自绘：WebView2/Chromium 在分数设备缩放
-+ * （Windows 125%/150%、浏览器缩放）下，作者自绘滚动条的滑块命中与
-+ * 拖拽映射有缺陷 —— 实测拖拽滑块时内容滚动速度被放大约 dpr² 倍，滑块
-+ * 直接飞离指针（同页对照：原生滚动条映射正确）。标准属性走引擎原生
-+ * 主题渲染，任意缩放下命中与拖拽映射都正确，也是各引擎的标准化方向
-+ * （::-webkit-scrollbar 非标准且已废弃）。主题色经 scrollbar-color
-+ * 保留；hover 变色与圆角自绘无法用标准属性表达，让位给交互正确性。
-+ *
-+ * 两个属性都是**继承**的（CSS Scrollbars L1）：挂在 `:root` 即可全局生效，
-+ * 通配选择器只是保守起见保持显式（旧的全局 ::-webkit-scrollbar 语义）。
-+ * 标准滚动条属性 Chromium 121+ 才支持；此前的 WebView2 会回退到无样式的
-+ * 默认滚动条（可接受：Tauri WebView2 是常青更新）。
-+ */
-+* {
-+    scrollbar-width: thin;
-+    scrollbar-color: var(--qt-scrollbar-thumb, #555555) var(--qt-base, #303030);
-+}
-+
-+.qt-overlay {
-+    background: var(--qt-overlay);
-+    backdrop-filter: blur(2px);
-+}
-+
-+/* 紧凑面板变体：透明轨道（时间轴 / 参数编辑器 / 列表等自定义容器沿用） */
-+.custom-scrollbar {
-+    scrollbar-width: thin;
-+    scrollbar-color: var(--qt-scrollbar-thumb, #555555) transparent;
-+}
-+
-+/* 隐藏纵向滚动条（保留滚动功能）用于左侧轨道头。
-+ * 置于 .custom-scrollbar 之后：同类选择器按源序覆盖 scrollbar-width。 */
-+.hide-v-scrollbar {
-+    scrollbar-width: none;
-+    -ms-overflow-style: none;
-+}
-+
-+/* 隐藏两轴原生滚动条但**保留滚动能力**（`scrollbar-width: none` 只改渲染，
-+ * 不改变可滚动范围，程序化 scrollLeft/scrollTop 与原生滚动都照常工作）。
-+ *
-+ * 用途：渲染内核自绘滚动条的面板（参数编辑器）。内核模式下滚动位置由内核持有，
-+ * 原生滚动条只是**被动镜像**——镜像需要保留滚动范围才能接受程序化写入，但它的
-+ * 滚动条本身必须隐藏，否则会与自绘滚动条重复显示。
-+ * 与 `.hide-v-scrollbar` 的区别：本类同时隐藏水平与竖直。 */
-+.hide-scrollbar {
-+    scrollbar-width: none;
-+    -ms-overflow-style: none;
-+}
-+.hide-scrollbar::-webkit-scrollbar {
-+    display: none;
-+}
-+
-+/* Unified popup/menu/dialog surfaces for Radix and custom panels */
-+.rt-DialogOverlay {
-+    background: var(--qt-overlay) !important;
-+    backdrop-filter: blur(2px);
-+}
-+
-+/*
-+ * 层级约定（高 → 低）：
-+ *   快速搜索                99998 / 99999
-+ *   导入模式等全屏选择菜单     9999
-+ *   模态弹窗（Dialog）       1000  —— 打开时独占交互，盖过「操作记录」面板与菜单
-+ *   右键 / 上下文菜单等       999
-+ *   工具栏右键菜单            600
-+ *   「操作记录」面板          500   —— 高于时间轴瞬态元素（选区框 z-40、握把 z-60 之外的内容）
-+ *   时间轴瞬态元素            ≤ 60
-+ *
-+ * Radix 的 Dialog / 菜单 portal 本身不带 z-index（靠 DOM 顺序决定层级），
-+ * 而「操作记录」是常驻浮层（z-500），不显式分层就会挡住后打开的弹窗与菜单。
-+ * 弹层与弹窗同用 1000 时靠 DOM 顺序：后打开的（如弹窗内的下拉）在上。
-+ */
-+.rt-DialogOverlay,
-+.rt-DialogContent {
-+    z-index: 1000 !important;
-+}
-+
-+.rt-DropdownMenuContent,
-+.rt-SelectContent,
-+.rt-ContextMenuContent,
-+.rt-PopoverContent {
-+    z-index: 1000 !important;
-+}
-+
+ }
+ 
+ /*
+@@ -268,6 +284,21 @@ textarea {
+     z-index: 1000 !important;
+ }
+ 
 +/* ── HS-MENU-ALIGN（2026-09-24）──────────────────────────────────────────────
 + * 用户口径「菜单别靠左，要靠在临近母菜单的地方」。
 + *
@@ -98914,207 +99195,13 @@ index d42792c8..5cff5620 100644
 +    max-width: calc(100vw - var(--hs-menu-anchor, 0px) - 8px) !important;
 +}
 +
-+.rt-DialogContent,
-+.rt-DropdownMenuContent,
-+.rt-SelectContent,
-+.rt-ContextMenuContent,
-+.rt-PopoverContent {
-+    background: var(--qt-panel) !important;
-+    color: var(--qt-text) !important;
-+    border: 1px solid var(--qt-border) !important;
-+    border-radius: 10px !important;
-+    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28) !important;
-+}
-+
-+/* Ensure Radix controls follow custom font everywhere */
-+.rt-Theme,
-+.rt-BaseButton,
-+.rt-SelectTrigger,
-+.rt-TextFieldInput,
-+.rt-TextArea,
-+.rt-DialogContent,
-+.rt-DropdownMenuContent,
-+.rt-SelectContent,
-+.rt-SelectItem,
-+.rt-ContextMenuContent,
-+.rt-PopoverContent,
-+.rt-TooltipContent {
-+    font-family: var(--qt-font-family) !important;
-+}
-+
-+/*
-+ * 工具栏/开关图标按钮尺寸稳定：
-+ * Radix 的「ghost」变体会改用 content-box 尺寸并用 padding + 负 margin 做补偿，
-+ * 导致其占用的盒子与固定尺寸的 solid/soft 变体不一致。这样在启用/禁用（solid ↔ ghost）
-+ * 切换时，按钮会产生约 1px 的尺寸/位置抖动。这里把 ghost 图标按钮统一为与其他变体
-+ * 相同的固定尺寸（border-box + 无内边距 + 无负 margin），保证开关切换时布局零位移。
-+ * 用户通过 margin 属性（如 ml="2"）设置的外边距仍然生效。
-+ */
-+.rt-IconButton.rt-variant-ghost {
-+    box-sizing: border-box;
-+    width: var(--base-button-height);
-+    height: var(--base-button-height);
-+    padding: 0;
-+    --margin-top-override: var(--margin-top);
-+    --margin-right-override: var(--margin-right);
-+    --margin-bottom-override: var(--margin-bottom);
-+    --margin-left-override: var(--margin-left);
-+}
-+
-+/*
-+ * 参数编辑器工具栏的“参数分组药丸”：
-+ * 把「眼睛 + 参数名 + 子参数下拉」三个片段整合成一个连续背景的整体，
-+ * 让用户自然看出眼睛/下拉菜单都属于该参数；激活参数的强调色整体铺满，
-+ * 各片段仍保留独立的悬停高亮以提示可点击。
-+ */
-+.param-pill {
-+    display: inline-flex;
-+    align-items: stretch;
-+    height: var(--space-5); /* 与 size-1 按钮一致：24px */
-+    border: 1px solid var(--qt-border);
-+    border-radius: 6px;
-+    background: var(--qt-panel);
-+    overflow: hidden;
-+    white-space: nowrap;
-+}
-+.param-pill[data-active] {
-+    border-color: transparent;
-+    background: var(--accent-9);
-+}
-+.param-pill__seg {
-+    display: inline-flex;
-+    align-items: center;
-+    justify-content: center;
-+    padding: 0 3px;
-+    border: 0;
-+    background: transparent;
-+    color: var(--qt-text);
-+    font: inherit;
-+    text-align: center;
-+    cursor: pointer;
-+}
-+.param-pill[data-active] .param-pill__seg {
-+    color: var(--accent-contrast, #ffffff);
-+}
-+/* 片段之间的细分隔线，取代各自独立的背景 */
-+.param-pill__seg + .param-pill__seg {
-+    box-shadow: inset 1px 0 0 0 var(--qt-divider);
-+}
-+.param-pill[data-active] .param-pill__seg + .param-pill__seg {
-+    box-shadow: inset 1px 0 0 0 rgba(255, 255, 255, 0.22);
-+}
-+/* 悬停：仅高亮当前片段 */
-+.param-pill__seg:not(.param-pill__seg--inert):hover {
-+    background: color-mix(in oklab, var(--accent-9) 16%, transparent);
-+}
-+.param-pill[data-active] .param-pill__seg:not(.param-pill__seg--inert):hover {
-+    background: rgba(255, 255, 255, 0.18);
-+}
-+/* 主参数的眼睛只展示“睁开”状态、不响应点击：不高亮、指针 default */
-+.param-pill__seg--inert {
-+    cursor: default;
-+}
-+.param-pill__seg--eye {
-+    min-width: 24px;
-+    padding-inline: 4px;
-+}
-+.param-pill__seg--label {
-+    padding-inline: 5px;
-+    font-size: var(--font-size-1);
-+    line-height: 16px;
-+}
-+.param-pill__seg--chev {
-+    min-width: 20px;
-+    padding-inline: 2px 4px;
-+}
-+.param-pill__seg--breath {
-+    min-width: 22px;
-+    padding-inline: 3px;
-+}
-+/* 参数整体不可见（眼睛关闭）时，参数名降为弱化色：
-+   与「禁用」的浅灰斜眼、激活态的实底拉开三个层次 */
-+.param-pill[data-eye-off] .param-pill__seg--label {
-+    color: var(--qt-text-muted);
-+}
-+
-+/*
-+ * 原生 range 滑杆（参数编辑器「平滑度」等）：
-+ * 未填充的轨道槽用 --qt-border，保证在浅色工具栏上可见；
-+ * 滑块用全局强调色 --accent-9（跟随 Radix accent 设置）。
-+ */
-+.qt-range {
-+    -webkit-appearance: none;
-+    appearance: none;
-+    height: 14px;
-+    background: transparent;
-+    cursor: pointer;
-+}
-+.qt-range::-webkit-slider-runnable-track {
-+    height: 4px;
-+    border-radius: 2px;
-+    background: var(--qt-border);
-+}
-+.qt-range::-webkit-slider-thumb {
-+    -webkit-appearance: none;
-+    appearance: none;
-+    margin-top: -4px; /* 4px 槽 + 12px 滑块 → 垂直居中 */
-+    width: 12px;
-+    height: 12px;
-+    border: none;
-+    border-radius: 50%;
-+    background: var(--accent-9);
-+}
-+.qt-range::-moz-range-track {
-+    height: 4px;
-+    border-radius: 2px;
-+    background: var(--qt-border);
-+}
-+.qt-range::-moz-range-thumb {
-+    width: 12px;
-+    height: 12px;
-+    border: none;
-+    border-radius: 50%;
-+    background: var(--accent-9);
-+}
-+
-+.rt-DropdownMenuItem,
-+.rt-SelectItem,
-+.rt-ContextMenuItem {
-+    border-radius: 7px !important;
-+}
-+
-+.rt-DropdownMenuItem[data-highlighted],
-+.rt-SelectItem[data-highlighted],
-+.rt-ContextMenuItem[data-highlighted] {
-+    background: color-mix(in oklab, var(--qt-highlight) 24%, transparent) !important;
-+    color: var(--qt-text) !important;
-+}
-+
-+.rt-DropdownMenuSeparator,
-+.rt-SelectSeparator,
-+.rt-ContextMenuSeparator {
-+    background: var(--qt-divider) !important;
-+}
-+
-+/* Unified app tooltip (shared by gain knobs and all data-tooltip elements) */
-+.app-tooltip {
-+    position: fixed;
-+    z-index: 2147483647;
-+    pointer-events: none;
-+    background: var(--qt-panel);
-+    color: var(--qt-text);
-+    padding: 4px 8px;
-+    border-radius: 6px;
-+    font-size: 12px;
-+    line-height: 16px;
-+    border: 1px solid var(--qt-border);
-+    box-shadow: 0 2px 10px var(--qt-overlay);
-+    white-space: pre-line;
-+    /* 400px：容纳关于对话框里两行展示的完整仓库链接（约 320px），其余
-+       短文案不受影响（只在内容超过 320px 时才会用满更宽的气泡）。 */
-+    max-width: 400px;
-+    tab-size: 4;
-+}
+ .rt-DialogContent,
+ .rt-DropdownMenuContent,
+ .rt-SelectContent,
+@@ -469,3 +500,931 @@ textarea {
+     max-width: 400px;
+     tab-size: 4;
+ }
 +
 +/* ── 自绘滚动条 / 滑条：触屏拖拽的两条硬要求（2026-09-19 用户清单）──────────
 +   ① `touch-action: none`：不加的话触屏上手指划几像素就被浏览器接管为翻页/滚动，
@@ -99524,7 +99611,10 @@ index d42792c8..5cff5620 100644
 +    flex-shrink: 0;
 +}
 +
-+/* D4：「选择」工具子菜单（选择 / 拖动）。造型与绘制工具菜单对齐。 */
++/* E24-①（2026-10-01）**工具菜单统一外壳**：`选择` 与 `绘制` 两套菜单共用这一份样式。
++ * 此前「选择」用类、`绘制` 用内联样式（字号/圆角/条目高/选中态/有无 ✔ 都不一样）⇒ 用户口径
++ * 「统一 选择 与 绘制 的菜单」。旧类名 `.hs-select-tool-menu*` 保留为**别名**（老探针还用着）。 */
++.hs-tool-menu,
 +.hs-select-tool-menu {
 +    display: flex;
 +    flex-direction: column;
@@ -99536,10 +99626,12 @@ index d42792c8..5cff5620 100644
 +    box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
 +    gap: 2px;
 +}
++.hs-tool-menu__item,
 +.hs-select-tool-menu__item {
 +    display: flex;
 +    align-items: center;
 +    gap: 7px;
++    min-height: 34px;
 +    padding: 7px 9px;
 +    border: 0;
 +    border-radius: 6px;
@@ -99550,12 +99642,18 @@ index d42792c8..5cff5620 100644
 +    text-align: left;
 +    cursor: pointer;
 +}
++.hs-tool-menu__item:hover,
 +.hs-select-tool-menu__item:hover {
 +    background: color-mix(in oklab, var(--accent-9) 16%, transparent);
 +}
++.hs-tool-menu__item[data-active="true"],
 +.hs-select-tool-menu__item[data-active="true"] {
 +    background: var(--accent-9);
 +    color: var(--accent-contrast, #fff);
++}
++/* 标签占满剩余宽度 ⇒ ✔ 永远贴右边（两份菜单同款，条目再长也不会挤走勾） */
++.hs-tool-menu__label {
++    flex: 1 1 auto;
 +}
 +
 +/*
@@ -99835,126 +99933,14 @@ index d42792c8..5cff5620 100644
 +body[data-hs-paramsync="on"] [data-hs-sb="timeline"] {
 +    display: none !important;
 +}
- 
--/*
--  Qt-like design tokens as CSS variables.
--  - Dark uses the legacy Qt hex colors.
--  - Light derives from Radix Theme tokens to avoid inventing a new palette.
--*/
--
--.qt-theme.dark,
--:root[data-theme="dark"] {
--    --qt-window: #353535;
--    --qt-base: #2d2d2d;
--    --qt-panel: #2a2a2a;
--    --qt-surface: #404040;
--    --qt-clip-bg: #343434;
--    --qt-clip-border: rgba(255, 255, 255, 0.14);
--    /* Clip 是明亮色块，选中描边一律深色实线（半透明白在彩色块上发灰） */
--    --qt-clip-selected-border: rgba(24, 28, 35, 0.95);
--    --qt-text: #d0d0d0;
--    --qt-text-muted: #909090;
--    --qt-highlight: #3b82f6;
--    --qt-playhead: #f05a5a;
--    --qt-button: #3d3d3d;
--    --qt-button-hover: #484848;
--    --qt-border: #505050;
--    --qt-hover: #484848;
--    --qt-danger-bg: #4a1a1a;
--    --qt-danger-text: #fca5a5;
--    --qt-danger-border: #ef4444;
--    --qt-warning-bg: #3d2a0a;
--    --qt-warning-text: #fcd34d;
--    --qt-warning-border: #f59e0b;
--    /* 画布区（时间线轨道/参数编辑器）比 chrome 区（window/panel）深一档，
--       让工具栏/标尺/画布靠明度而不是仅靠 1px 细线分区 */
--    --qt-graph-bg: #1f1f1f;
--    /* 半透明白：在泳道和彩色 clip 上都呈同色调细线，
--       不会在波形上切出生硬的条纹 */
--    --qt-graph-grid-strong: rgba(255, 255, 255, 0.22);
--    --qt-graph-grid-weak: rgba(255, 255, 255, 0.1);
--    --qt-scrollbar-thumb: #555555;
--    --qt-overlay: rgba(0, 0, 0, 0.35);
--    --qt-divider: rgba(255, 255, 255, 0.04);
--    --qt-subtle-1: rgba(255, 255, 255, 0.025);
--    --qt-subtle-2: rgba(255, 255, 255, 0.045);
--    --qt-subtle-3: rgba(255, 255, 255, 0.07);
--    --qt-subtle-hover: rgba(255, 255, 255, 0.04);
--    --qt-meter-rail: #2a2a2a;
--    --qt-meter-well: #1d1d1d;
--    /* 吸附竖线高亮：按吸附目标类型区分颜色 */
--    --qt-snap-grid: #3b82f6;
--    --qt-snap-clip: #f59e0b;
--    --qt-snap-offset: #ec4899;
--    --qt-snap-source: #a855f7;
--    --qt-snap-selection: #22d3ee;
--    --qt-snap-cursor: #f05a5a;
--    --qt-snap-sample: #94a3b8;
--    --qt-snap-loop: #22c55e;
--}
--
--.qt-theme.light,
--:root[data-theme="light"] {
--    --qt-window: #f2f3f6;
--    --qt-base: #ebedf1;
--    --qt-panel: #f8f9fb;
--    --qt-surface: #e1e4ea;
--    --qt-clip-bg: #dde1e8;
--    --qt-clip-border: rgba(32, 38, 52, 0.18);
--    --qt-clip-selected-border: rgba(24, 28, 35, 0.95);
--    --qt-text: #1f232b;
--    --qt-text-muted: #666d79;
--    --qt-highlight: #4b68d1;
--    --qt-playhead: #de4f5d;
--    --qt-button: #e3e6ec;
--    --qt-button-hover: #d7dbe4;
--    --qt-border: #b8bdc9;
--    --qt-hover: #dde1e8;
--    --qt-danger-bg: #ffe6ea;
--    --qt-danger-text: #b53a49;
--    --qt-danger-border: #df6674;
--    --qt-warning-bg: #fff1dc;
--    --qt-warning-text: #9b5f13;
--    --qt-warning-border: #d59140;
--    --qt-graph-bg: #edf0f5;
--    /* 半透明蓝灰：在泳道上与旧实色等效，在 clip 色块/波形上则化为
--       同色调的细线，不再切出高对比条纹 */
--    --qt-graph-grid-strong: rgba(74, 88, 112, 0.55);
--    --qt-graph-grid-weak: rgba(74, 88, 112, 0.3);
--    --qt-scrollbar-thumb: #b4bac7;
--    --qt-overlay: rgba(20, 24, 32, 0.22);
--    --qt-divider: rgba(32, 38, 52, 0.1);
--    --qt-subtle-1: rgba(28, 36, 52, 0.025);
--    --qt-subtle-2: rgba(28, 36, 52, 0.04);
--    --qt-subtle-3: rgba(28, 36, 52, 0.06);
--    --qt-subtle-hover: rgba(28, 36, 52, 0.04);
--    --qt-meter-rail: #d6dbe5;
--    --qt-meter-well: #c8ceda;
--    /* 吸附竖线高亮：按吸附目标类型区分颜色（浅色主题取更深的可读色） */
--    --qt-snap-grid: #2563eb;
--    --qt-snap-clip: #d97706;
--    --qt-snap-offset: #db2777;
--    --qt-snap-source: #9333ea;
--    --qt-snap-selection: #0891b2;
--    --qt-snap-cursor: #de4f5d;
--    --qt-snap-sample: #64748b;
--    --qt-snap-loop: #16a34a;
--}
--
--:root {
--    --qt-font-family: "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
--    --default-font-family: var(--qt-font-family);
--    font-family: var(--qt-font-family);
++
 +/* E9（用户口径）：「轨道+参数分屏下**开启同步位置与缩放**后应**隐藏参数界面左上角的速度映射键**」。
 +   `body[data-hs-paramsync="on"]` 正是"分屏 + 同步开启"这个状态（App.tsx 里按
 +   `paramEditorSyncTimeline && mobilePanels.params && mobilePanels.timeline` 设置）。
 +   两颗速度映射键在同步态下功能一体、且并排容易误按 ⇒ 参数侧那颗隐藏。 */
 +body[data-hs-paramsync="on"] [data-hs-params-tempo-map] {
 +    display: none !important;
- }
--
--:root[data-theme="dark"] {
--    color-scheme: dark;
++}
 +/* ── 手机端分屏的两块（C5/C6）───────────────────────────────────────────────
 +   `flex-basis: 0` **必须走类、不能只写内联样式**：
 +   实测（真机 221deeb，2026-09-30）内联的 `flexBasis` 会在 React 的 style diff 里被漏写
@@ -99966,87 +99952,13 @@ index d42792c8..5cff5620 100644
 +.hs-mobile-split-pane {
 +    flex-basis: 0;
 +    min-height: 0;
- }
- 
--:root[data-theme="light"] {
--    color-scheme: light;
--}
--
--html,
--body,
--#root {
--    margin: 0;
--    width: 100%;
--    height: 100%;
--    overflow: hidden; /* Prevent scrolling on body */
--}
--
--/*
-- * DAW-style interaction baseline: the app itself is not selectable text.
-- * This is especially important on Linux/WebKitGTK, where `selectstart`
-- * suppression alone does not always stop mouse-drag text selection.
-- * Editable controls and explicit `data-hs-selectable` surfaces opt back in.
-- */
--html,
--body,
--#root,
--body * {
--    -webkit-user-select: none;
--    user-select: none;
--}
--
--body input,
--body textarea,
--body select,
--body [contenteditable="true"],
--body [data-hs-selectable="true"],
--body [data-hs-selectable="true"] * {
--    -webkit-user-select: text;
--    user-select: text;
--}
--
--body {
--    background: var(--qt-window, #353535);
--    color: var(--qt-text, #cccccc);
--    font-family: var(--qt-font-family);
--}
--
--* {
--    box-sizing: border-box;
--}
--
--button,
--input,
--select,
--textarea {
--    font-family: inherit;
--}
--
--.rt-BaseButton:focus-visible,
--:where(button, [role="button"]):focus-visible {
--    outline: none;
--    box-shadow: none;
--}
--
--:where(input, textarea, select, .rt-TextFieldInput, .rt-SelectTrigger):focus-visible {
--    outline: none;
--    box-shadow: none;
--}
--
--/*
-- * Qt/DAW 风格滚动条（标准 CSS 滚动条属性）。
++}
++
 +/* ── E22 统一动效层（2026-09-30）─────────────────────────────────────────────
 + * 用户口径：「补充动画：弹出分屏动画、移动轨道动画、菜单展开动画、各种拖动操作的
 + * 平滑化/惯性化 等」，并明确「**统一做一套**」⇒ 这里给出**一套**变量 + 三条关键帧，
 + * 各表面只挑一条用，不再各写各的。
-  *
-- * 不用 ::-webkit-scrollbar 自绘：WebView2/Chromium 在分数设备缩放
-- * （Windows 125%/150%、浏览器缩放）下，作者自绘滚动条的滑块命中与
-- * 拖拽映射有缺陷 —— 实测拖拽滑块时内容滚动速度被放大约 dpr² 倍，滑块
-- * 直接飞离指针（同页对照：原生滚动条映射正确）。标准属性走引擎原生
-- * 主题渲染，任意缩放下命中与拖拽映射都正确，也是各引擎的标准化方向
-- * （::-webkit-scrollbar 非标准且已废弃）。主题色经 scrollbar-color
-- * 保留；hover 变色与圆角自绘无法用标准属性表达，让位给交互正确性。
++ *
 + * 两条硬性约束（都是踩出来的）：
 + *  ① **含 `position: fixed` 后代的容器只能动 `opacity`**：任何 `transform` / `filter`
 + *     都会让该容器成为包含块，那些浮层会改成"相对容器"定位 —— 分屏块里有 fixed 浮层、
@@ -100054,86 +99966,25 @@ index d42792c8..5cff5620 100644
 + *     所以：菜单可以 `translateY + scale`（内容只有普通项），面板/浮条只做淡入。
 + *  ② 必须尊重 `prefers-reduced-motion`，并留一个**全局开关** `body[data-hs-no-anim]`
 + *     —— 验收探针靠它做"有动画 / 无动画"的对照（也方便用户嫌晃眼时一键关掉）。
-  *
-- * 两个属性都是**继承**的（CSS Scrollbars L1）：挂在 `:root` 即可全局生效，
-- * 通配选择器只是保守起见保持显式（旧的全局 ::-webkit-scrollbar 语义）。
-- * 标准滚动条属性 Chromium 121+ 才支持；此前的 WebView2 会回退到无样式的
-- * 默认滚动条（可接受：Tauri WebView2 是常青更新）。
-+ * 出场动画（面板收起、菜单关闭）暂不做：Radix 关闭即卸载内容、面板也是直接卸载，
-+ * 要做就得引入 presence 状态机（保留挂载 + 等动画结束）。留作 E22 的下一刀。
-  */
--* {
--    scrollbar-width: thin;
--    scrollbar-color: var(--qt-scrollbar-thumb, #555555) var(--qt-base, #303030);
--}
--
--.qt-overlay {
--    background: var(--qt-overlay);
--    backdrop-filter: blur(2px);
--}
--
--/* 紧凑面板变体：透明轨道（时间轴 / 参数编辑器 / 列表等自定义容器沿用） */
--.custom-scrollbar {
--    scrollbar-width: thin;
--    scrollbar-color: var(--qt-scrollbar-thumb, #555555) transparent;
--}
--
--/* 隐藏纵向滚动条（保留滚动功能）用于左侧轨道头。
-- * 置于 .custom-scrollbar 之后：同类选择器按源序覆盖 scrollbar-width。 */
--.hide-v-scrollbar {
--    scrollbar-width: none;
--    -ms-overflow-style: none;
--}
--
--/* 隐藏两轴原生滚动条但**保留滚动能力**（`scrollbar-width: none` 只改渲染，
-- * 不改变可滚动范围，程序化 scrollLeft/scrollTop 与原生滚动都照常工作）。
-- *
-- * 用途：渲染内核自绘滚动条的面板（参数编辑器）。内核模式下滚动位置由内核持有，
-- * 原生滚动条只是**被动镜像**——镜像需要保留滚动范围才能接受程序化写入，但它的
-- * 滚动条本身必须隐藏，否则会与自绘滚动条重复显示。
-- * 与 `.hide-v-scrollbar` 的区别：本类同时隐藏水平与竖直。 */
--.hide-scrollbar {
--    scrollbar-width: none;
--    -ms-overflow-style: none;
--}
--.hide-scrollbar::-webkit-scrollbar {
--    display: none;
--}
--
--/* Unified popup/menu/dialog surfaces for Radix and custom panels */
--.rt-DialogOverlay {
--    background: var(--qt-overlay) !important;
--    backdrop-filter: blur(2px);
--}
--
--/*
-- * 层级约定（高 → 低）：
-- *   快速搜索                99998 / 99999
-- *   导入模式等全屏选择菜单     9999
-- *   模态弹窗（Dialog）       1000  —— 打开时独占交互，盖过「操作记录」面板与菜单
-- *   右键 / 上下文菜单等       999
-- *   工具栏右键菜单            600
-- *   「操作记录」面板          500   —— 高于时间轴瞬态元素（选区框 z-40、握把 z-60 之外的内容）
-- *   时间轴瞬态元素            ≤ 60
-- *
-- * Radix 的 Dialog / 菜单 portal 本身不带 z-index（靠 DOM 顺序决定层级），
-- * 而「操作记录」是常驻浮层（z-500），不显式分层就会挡住后打开的弹窗与菜单。
-- * 弹层与弹窗同用 1000 时靠 DOM 顺序：后打开的（如弹窗内的下拉）在上。
-- */
--.rt-DialogOverlay,
--.rt-DialogContent {
--    z-index: 1000 !important;
++ *
++ * 出场动画（面板收起、菜单关闭）**已补上**（2026-10-01，E22 第二刀之后）：
++ * 关键帧不能自己"等着被卸载"，所以配了一个**挂载闸门** `hooks/useExitPresence.tsx` ——
++ * `open` 变 false 后把**关门前的子树快照**多留一个出场时长，期间给节点打 `data-hs-leaving`，
++ * 由下面的规则跑 `hs-menu-out` / `hs-fade-out`。⚠️ 时长两边**手工保持一致**
++ * （`useExitPresence.tsx` 的 `OUT_MS` ↔ 下面的 `--hs-anim-dur-out-*`）。
++ */
 +:root {
 +    --hs-anim-dur-menu: 150ms;
 +    --hs-anim-dur-pane: 190ms;
 +    --hs-anim-ease: cubic-bezier(0.22, 1, 0.36, 1);
- }
- 
--.rt-DropdownMenuContent,
--.rt-SelectContent,
--.rt-ContextMenuContent,
--.rt-PopoverContent {
--    z-index: 1000 !important;
++    /* 出场（略快于入场：关门要干脆） */
++    --hs-anim-dur-out-menu: 120ms;
++    --hs-anim-dur-out-pane: 160ms;
++    --hs-anim-dur-out-bar: 130ms;
++    /* 拖动收尾（抬手后从"指尖最后的位置"滑到落位比例） */
++    --hs-anim-dur-settle: 180ms;
++}
++
 +@keyframes hs-menu-in {
 +    from {
 +        opacity: 0;
@@ -100143,18 +99994,8 @@ index d42792c8..5cff5620 100644
 +        opacity: 1;
 +        transform: none;
 +    }
- }
- 
--.rt-DialogContent,
--.rt-DropdownMenuContent,
--.rt-SelectContent,
--.rt-ContextMenuContent,
--.rt-PopoverContent {
--    background: var(--qt-panel) !important;
--    color: var(--qt-text) !important;
--    border: 1px solid var(--qt-border) !important;
--    border-radius: 10px !important;
--    box-shadow: 0 20px 44px rgba(0, 0, 0, 0.28) !important;
++}
++
 +@keyframes hs-fade-in {
 +    from {
 +        opacity: 0;
@@ -100162,15 +100003,37 @@ index d42792c8..5cff5620 100644
 +    to {
 +        opacity: 1;
 +    }
- }
- 
--/* Ensure Radix controls follow custom font everywhere */
--.rt-Theme,
--.rt-BaseButton,
--.rt-SelectTrigger,
--.rt-TextFieldInput,
--.rt-TextArea,
--.rt-DialogContent,
++}
++
++/* 出场（由 `useExitPresence` 打 `data-hs-leaving` 触发）。
++ * 与入场同规：菜单可以位移+缩放，面板/浮条**只动 opacity**（它们内含 `position: fixed` 后代，
++ * 一旦有 transform 就会变成包含块 ⇒ 那些浮层当场飞走，见本段注释①）。 */
++@keyframes hs-menu-out {
++    from {
++        opacity: 1;
++        transform: none;
++    }
++    to {
++        opacity: 0;
++        transform: translateY(-4px) scale(0.98);
++    }
++}
++
++@keyframes hs-fade-out {
++    from {
++        opacity: 1;
++    }
++    to {
++        opacity: 0;
++    }
++}
++
++/* 离开期间一律不吃命中：否则"已经关掉的菜单"还能被点到（还会连带触发它下面的东西）。
++ * 遮罩按钮也在被标记的子树上 ⇒ 一并失效，正是我们要的。 */
++[data-hs-leaving] {
++    pointer-events: none !important;
++}
++
 +/* ① 菜单展开（关闭时会卸载内容 ⇒ 这里只做进场）。
 + * `[role="menu"]` 这一条是**关键**：手机端的菜单**不是** Radix 弹层，而是各组件
 + * 自己渲染的 `div[role=menu]`（`MobileTopBar` / `MobileBottomBar` / `ClipContextMenu` /
@@ -100178,156 +100041,13 @@ index d42792c8..5cff5620 100644
 + * （实测：Radix 类命中 0 个、`[role=menu]` 命中 1 个）。
 + * 用 role 选择器而不是类名：类的 Tailwind 样式随时会变，role 是语义契约。 */
 +[role="menu"],
- .rt-DropdownMenuContent,
--.rt-SelectContent,
--.rt-SelectItem,
- .rt-ContextMenuContent,
- .rt-PopoverContent,
--.rt-TooltipContent {
--    font-family: var(--qt-font-family) !important;
--}
--
--/*
-- * 工具栏/开关图标按钮尺寸稳定：
-- * Radix 的「ghost」变体会改用 content-box 尺寸并用 padding + 负 margin 做补偿，
-- * 导致其占用的盒子与固定尺寸的 solid/soft 变体不一致。这样在启用/禁用（solid ↔ ghost）
-- * 切换时，按钮会产生约 1px 的尺寸/位置抖动。这里把 ghost 图标按钮统一为与其他变体
-- * 相同的固定尺寸（border-box + 无内边距 + 无负 margin），保证开关切换时布局零位移。
-- * 用户通过 margin 属性（如 ml="2"）设置的外边距仍然生效。
-- */
--.rt-IconButton.rt-variant-ghost {
--    box-sizing: border-box;
--    width: var(--base-button-height);
--    height: var(--base-button-height);
--    padding: 0;
--    --margin-top-override: var(--margin-top);
--    --margin-right-override: var(--margin-right);
--    --margin-bottom-override: var(--margin-bottom);
--    --margin-left-override: var(--margin-left);
--}
--
--/*
-- * 参数编辑器工具栏的“参数分组药丸”：
-- * 把「眼睛 + 参数名 + 子参数下拉」三个片段整合成一个连续背景的整体，
-- * 让用户自然看出眼睛/下拉菜单都属于该参数；激活参数的强调色整体铺满，
-- * 各片段仍保留独立的悬停高亮以提示可点击。
-- */
--.param-pill {
--    display: inline-flex;
--    align-items: stretch;
--    height: var(--space-5); /* 与 size-1 按钮一致：24px */
--    border: 1px solid var(--qt-border);
--    border-radius: 6px;
--    background: var(--qt-panel);
--    overflow: hidden;
--    white-space: nowrap;
--}
--.param-pill[data-active] {
--    border-color: transparent;
--    background: var(--accent-9);
--}
--.param-pill__seg {
--    display: inline-flex;
--    align-items: center;
--    justify-content: center;
--    padding: 0 3px;
--    border: 0;
--    background: transparent;
--    color: var(--qt-text);
--    font: inherit;
--    text-align: center;
--    cursor: pointer;
--}
--.param-pill[data-active] .param-pill__seg {
--    color: var(--accent-contrast, #ffffff);
--}
--/* 片段之间的细分隔线，取代各自独立的背景 */
--.param-pill__seg + .param-pill__seg {
--    box-shadow: inset 1px 0 0 0 var(--qt-divider);
--}
--.param-pill[data-active] .param-pill__seg + .param-pill__seg {
--    box-shadow: inset 1px 0 0 0 rgba(255, 255, 255, 0.22);
--}
--/* 悬停：仅高亮当前片段 */
--.param-pill__seg:not(.param-pill__seg--inert):hover {
--    background: color-mix(in oklab, var(--accent-9) 16%, transparent);
--}
--.param-pill[data-active] .param-pill__seg:not(.param-pill__seg--inert):hover {
--    background: rgba(255, 255, 255, 0.18);
--}
--/* 主参数的眼睛只展示“睁开”状态、不响应点击：不高亮、指针 default */
--.param-pill__seg--inert {
--    cursor: default;
--}
--.param-pill__seg--eye {
--    min-width: 24px;
--    padding-inline: 4px;
--}
--.param-pill__seg--label {
--    padding-inline: 5px;
--    font-size: var(--font-size-1);
--    line-height: 16px;
--}
--.param-pill__seg--chev {
--    min-width: 20px;
--    padding-inline: 2px 4px;
--}
--.param-pill__seg--breath {
--    min-width: 22px;
--    padding-inline: 3px;
--}
--/* 参数整体不可见（眼睛关闭）时，参数名降为弱化色：
--   与「禁用」的浅灰斜眼、激活态的实底拉开三个层次 */
--.param-pill[data-eye-off] .param-pill__seg--label {
--    color: var(--qt-text-muted);
--}
--
--/*
-- * 原生 range 滑杆（参数编辑器「平滑度」等）：
-- * 未填充的轨道槽用 --qt-border，保证在浅色工具栏上可见；
-- * 滑块用全局强调色 --accent-9（跟随 Radix accent 设置）。
-- */
--.qt-range {
--    -webkit-appearance: none;
--    appearance: none;
--    height: 14px;
--    background: transparent;
--    cursor: pointer;
--}
--.qt-range::-webkit-slider-runnable-track {
--    height: 4px;
--    border-radius: 2px;
--    background: var(--qt-border);
--}
--.qt-range::-webkit-slider-thumb {
--    -webkit-appearance: none;
--    appearance: none;
--    margin-top: -4px; /* 4px 槽 + 12px 滑块 → 垂直居中 */
--    width: 12px;
--    height: 12px;
--    border: none;
--    border-radius: 50%;
--    background: var(--accent-9);
--}
--.qt-range::-moz-range-track {
--    height: 4px;
--    border-radius: 2px;
--    background: var(--qt-border);
--}
--.qt-range::-moz-range-thumb {
--    width: 12px;
--    height: 12px;
--    border: none;
--    border-radius: 50%;
--    background: var(--accent-9);
++.rt-DropdownMenuContent,
++.rt-ContextMenuContent,
++.rt-PopoverContent,
 +.rt-SelectContent {
 +    animation: hs-menu-in var(--hs-anim-dur-menu) var(--hs-anim-ease) both;
- }
- 
--.rt-DropdownMenuItem,
--.rt-SelectItem,
--.rt-ContextMenuItem {
--    border-radius: 7px !important;
++}
++
 +/* ② 手机面板弹出（**只淡入**：块内有 fixed 浮层）。
 + * 挂在 `[data-hs-pane]` 而不是 `.hs-mobile-split-pane`：后者是**两个容器块**，
 + * 而用户感知的"面板"是里面的 timeline / params / files / notes 四块 ——
@@ -100335,22 +100055,59 @@ index d42792c8..5cff5620 100644
 + * 于是每次出现都是**新节点**，`animation` 才会重新跑。 */
 +[data-hs-pane] {
 +    animation: hs-fade-in var(--hs-anim-dur-pane) var(--hs-anim-ease) both;
- }
- 
--.rt-DropdownMenuItem[data-highlighted],
--.rt-SelectItem[data-highlighted],
--.rt-ContextMenuItem[data-highlighted] {
--    background: color-mix(in oklab, var(--qt-highlight) 24%, transparent) !important;
--    color: var(--qt-text) !important;
++}
++
 +/* ③ 音频块浮动操作条（根节点是 absolute、内含 fixed 实条 ⇒ 同样只淡入） */
 +[data-hs-clip-actions] {
 +    animation: hs-fade-in calc(var(--hs-anim-dur-pane) * 0.8) var(--hs-anim-ease) both;
- }
- 
--.rt-DropdownMenuSeparator,
--.rt-SelectSeparator,
--.rt-ContextMenuSeparator {
--    background: var(--qt-divider) !important;
++}
++
++/* ④ 出场（`data-hs-leaving` 由 `hooks/useExitPresence.tsx` 打）。
++ * 选择器比上面各条**多一个属性**（0,2,0 > 0,1,0）⇒ 稳定压过入场动画。 */
++[role="menu"][data-hs-leaving],
++.rt-DropdownMenuContent[data-hs-leaving],
++.rt-ContextMenuContent[data-hs-leaving],
++.rt-PopoverContent[data-hs-leaving],
++.rt-SelectContent[data-hs-leaving] {
++    animation: hs-menu-out var(--hs-anim-dur-out-menu) var(--hs-anim-ease) both;
++}
++
++[data-hs-pane][data-hs-leaving] {
++    animation: hs-fade-out var(--hs-anim-dur-out-pane) var(--hs-anim-ease) both;
++}
++
++[data-hs-clip-actions][data-hs-leaving] {
++    animation: hs-fade-out var(--hs-anim-dur-out-bar) var(--hs-anim-ease) both;
++}
++
++/* ⚠️ 这里**没有**"后代选择器版"的规则 —— 曾经有过（`[data-hs-leaving-root] …`，
++ * 靠给子树套一层 `display: contents` 包装层来兜住"组件子节点"），但它会**顶掉分屏容器的
++ * 直接子元素**：`App.tsx` 的 `paintRatio()` 是按 `container.children[0]/[1]` 直接改
++ * `flexGrow` 的，多一层无盒子的包装 ⇒ 拖动分屏当场失效（真机 C5/C6 探针 2/5）。
++ * 现在的口径：**组件自己把 `data-hs-leaving` prop 转到根节点上**，见
++ * `hooks/useExitPresence.tsx` 文件头约束②。*/
++
++/* ⑤ 拖动收尾（E22 第四刀）：抬手后把"指尖最后落到的比例"**滑到**"落位比例"。
++ * 为什么需要：拖动期间 `paintRatio()` 是每帧直接写 DOM 的 `flexGrow`（不值当每帧重渲整树），
++ * 而抬手时 App 会 `clamp(ratio, 0.15, 0.85)` 再 `setMobileSplitRatio` —— 于是 0.93 会**瞬跳**
++ * 到 0.85，跨过塌陷阈值那一下更是直接跳成全屏。
++ * 为什么只在窗口内开过渡：拖动过程中如果带着 `transition`，每帧写一次 `flexGrow` 都会重启过渡
++ * ⇒ 变成橡皮筋、**跟手度直接崩**（用户 I-2 明确抱怨过"不跟手"）。所以由 App 在抬手时打
++ * `data-hs-split-settling`、窗口结束就摘掉。`flex-grow` 是数值属性，可以插值 ⇒ 布局逐帧过渡。 */
++[data-hs-mobile-split][data-hs-split-settling] > * {
++    transition: flex-grow var(--hs-anim-dur-settle) var(--hs-anim-ease);
++}
++
++body[data-hs-no-anim] [data-hs-mobile-split][data-hs-split-settling] > * {
++    transition: none !important;
++}
++
++@media (prefers-reduced-motion: reduce) {
++    [data-hs-mobile-split][data-hs-split-settling] > * {
++        transition: none !important;
++    }
++}
++
 +/* 开关：探针对照 / 用户嫌晃眼 */
 +body[data-hs-no-anim] [role="menu"],
 +body[data-hs-no-anim] .rt-DropdownMenuContent,
@@ -100360,26 +100117,8 @@ index d42792c8..5cff5620 100644
 +body[data-hs-no-anim] [data-hs-pane],
 +body[data-hs-no-anim] [data-hs-clip-actions] {
 +    animation: none !important;
- }
- 
--/* Unified app tooltip (shared by gain knobs and all data-tooltip elements) */
--.app-tooltip {
--    position: fixed;
--    z-index: 2147483647;
--    pointer-events: none;
--    background: var(--qt-panel);
--    color: var(--qt-text);
--    padding: 4px 8px;
--    border-radius: 6px;
--    font-size: 12px;
--    line-height: 16px;
--    border: 1px solid var(--qt-border);
--    box-shadow: 0 2px 10px var(--qt-overlay);
--    white-space: pre-line;
--    /* 400px：容纳关于对话框里两行展示的完整仓库链接（约 320px），其余
--       短文案不受影响（只在内容超过 320px 时才会用满更宽的气泡）。 */
--    max-width: 400px;
--    tab-size: 4;
++}
++
 +@media (prefers-reduced-motion: reduce) {
 +    [role="menu"],
 +    .rt-DropdownMenuContent,
@@ -100390,7 +100129,7 @@ index d42792c8..5cff5620 100644
 +    [data-hs-clip-actions] {
 +        animation: none !important;
 +    }
- }
++}
 diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
 index 030bbc5a..e1f2888f 100644
 --- a/frontend/src/main.tsx
