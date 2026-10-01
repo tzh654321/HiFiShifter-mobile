@@ -352,8 +352,13 @@ ensure_chrome_color "$RES_DIR/values-night/colors.xml"  "#353535"
 if [ -z "$MA" ]; then
   echo "⚠️ 没找到 MainActivity.kt 也推导不出 namespace，跳过（顶部 40 px / 底部 44 px 会被系统栏压住）" >&2
 else
-  if [ -f "$MA" ] && grep -q 'HS-SAFE-AREA-PATCH' "$MA" && grep -q 'HS-SAF-PATCH' "$MA" && grep -q 'HS-RECORD-AUDIO-PATCH' "$MA"; then
-    echo "· MainActivity.kt 已打过补丁（$PKG_FROM_PATH），跳过"
+  # 🔴 判据用**版本号**，不要用"有没有补丁标记"（2026-10-02 踩过）：
+  #    原来是"五个标记都在 ⇒ 跳过"，于是**改了模板也不生效** —— 生成物永远停在
+  #    首次写入的那一版，横屏 padding 口径改了、重跑脚本、自检还报"横屏沉浸补丁: 8"。
+  #    改模板时**必须同时把 `_GEN_REV` 与下面 heredoc 里的 `HS-GEN-REV:` 一起 +1**。
+  _GEN_REV='2026-10-02.4'
+  if [ -f "$MA" ] && grep -q "HS-GEN-REV: $_GEN_REV" "$MA"; then
+    echo "· MainActivity.kt 已是 $_GEN_REV 版（$PKG_FROM_PATH），跳过"
   else
     # ⚠️ 必须用**带引号**的 heredoc（<<'KT'）。
     # Kotlin 的 KDoc 里会出现反引号（引用代码标识符），不加引号的话反引号会被
@@ -374,12 +379,17 @@ import android.view.View
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
+import androidx.core.graphics.Insets
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 
 /*
- * ⚠️ HS-SAFE-AREA-PATCH + HS-SAF-PATCH —— 本文件由 scripts/setup-gen-android.sh 生成。
+ * ⚠️ HS-SAFE-AREA-PATCH + HS-SAF-PATCH + HS-RECORD-AUDIO-PATCH + HS-OPEN-WITH-PATCH
+ *    + HS-LANDSCAPE-PATCH —— 本文件由 scripts/setup-gen-android.sh 生成。
  * gen/ 是 tauri-cli 的生成物，手改会在下次 `tauri android init` 时被抹掉；要改请改脚本。
+ *
+ * HS-GEN-REV: 2026-10-02.4   ← 模板版本号（改模板必须 +1，见脚本里的 `_GEN_REV`）
  *
  * upstream 模板只调 enableEdgeToEdge() 就完事，但 HiFiShifter 是桌面 UI 搬过来的，
  * 菜单栏/工具栏/底部状态条都贴着窗口边缘 —— 不处理 inset 就会被系统栏压住。
@@ -389,6 +399,13 @@ import androidx.core.view.WindowInsetsCompat
  *   · `attach(this)` 让 HifishifterFs 能 startActivityForResult；
  *   · 转发 onActivityResult 给 HifishifterFs。
  * 设计见 docs/11。
+ *
+ * HS-LANDSCAPE-PATCH（2026-10-02，见 TASKS.md §E28）—— 横屏优化三件套：
+ *   ① 横屏进入沉浸（收起状态栏 + 导航栏），竖屏恢复；上滑可临时唤出（系统强制保留的退路）。
+ *   ② 横屏**不再为刘海/系统栏垫 padding** —— 横屏的刘海在左/右长边中段，只挡那一小块，
+ *      整边垫掉等于白送 45 dp 的空白；系统栏本来就被收起来了。
+ *   ③ 系统分屏在 Manifest 里用 `resizeableActivity=false` 挡住（见 setup 脚本 §16）。
+ * 判据：scripts/_probe-e28-landscape.mjs（视口必须等于「屏幕 − 刘海」；系统栏不许留白）。
  */
 class MainActivity : TauriActivity() {
   override fun onCreate(savedInstanceState: Bundle?) {
@@ -408,6 +425,8 @@ class MainActivity : TauriActivity() {
 
     window.setBackgroundDrawable(ColorDrawable(ContextCompat.getColor(this, R.color.hs_chrome)))
     applySafeAreaInsets()
+    // HS-LANDSCAPE-PATCH：冷启动就可能已经是横屏（用户上次就是横着退出的）。
+    applyLandscapeImmersive()
 
     // HS-RECORD-AUDIO-PATCH —— 录制需要 RECORD_AUDIO，而它是**危险权限**：
     // 光在 Manifest 里声明不够，Android 6+ 必须运行时申请，否则后端一开麦就被拒
@@ -457,27 +476,115 @@ class MainActivity : TauriActivity() {
     HifishifterFs.onActivityResult(requestCode, resultCode, data)
   }
 
+  /**
+   * HS-LANDSCAPE-PATCH —— 系统分屏已被 `resizeableActivity=false` 挡在门外（见 setup
+   * 脚本 §16），但旋转、手势导航切换、深浅色切换仍会改变 inset ⇒ 重新按方向收一次栏。
+   *
+   * ⚠️ Manifest 里声明了 `configChanges="orientation|screenSize|…"`，所以旋转**不会**
+   * 重建 Activity（也就不会走 onResume）—— 必须在这里自己重算，否则横屏下拿到的还是
+   * 竖屏那份 padding（表现为"转过去之后界面被顶掉一截"）。
+   */
+  override fun onConfigurationChanged(newConfig: Configuration) {
+    super.onConfigurationChanged(newConfig)
+    applyLandscapeImmersive()
+  }
+
+  /**
+   * HS-LANDSCAPE-PATCH —— 从系统对话框 / 多任务 / 通知抽屉回来时，系统会把系统栏放出来，
+   * 而 `hide()` 在窗口失焦期间是**会被丢弃**的 ⇒ 拿到焦点后补收一次。
+   */
+  override fun onWindowFocusChanged(hasFocus: Boolean) {
+    super.onWindowFocusChanged(hasFocus)
+    if (hasFocus) applyLandscapeImmersive()
+  }
+
   override fun onResume() {
     super.onResume()
     // 旋转 / 分屏 / 手势导航切换 / 深浅色切换都会改变 inset，重新请求一次。
+    applyLandscapeImmersive()
     contentView()?.let { ViewCompat.requestApplyInsets(it) }
   }
 
   private fun contentView(): View? = findViewById(android.R.id.content)
 
+  /** HS-LANDSCAPE-PATCH：当前是否横屏（`configChanges` 里已含 orientation，值总是最新的）。 */
+  private fun isLandscape(): Boolean =
+      resources.configuration.orientation == Configuration.ORIENTATION_LANDSCAPE
+
+  /**
+   * HS-LANDSCAPE-PATCH —— 横屏沉浸：收起状态栏 + 导航栏；竖屏恢复。
+   *
+   * 🕳️ `BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE` 是**必须**的：不设它的话，用户从边缘
+   * 划出来一次系统栏就**永久留着**（没有"用完自动淡出"）；设了才是标准的沉浸行为 ——
+   * 划出来临时看，几秒后自己收回。系统强制保留这条退路，无法彻底禁止。
+   * 🕳️ 手势导航那根"home 指示条"无法做到像素级消失：`hide(navigationBars())` 会把它
+   * 一起收掉、只在上滑时出现，但它占的**那段区域**在划出瞬间仍会盖住画面底部。
+   */
+  private fun applyLandscapeImmersive() {
+    val controller = WindowInsetsControllerCompat(window, window.decorView)
+    if (isLandscape()) {
+      controller.systemBarsBehavior =
+          WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+      controller.hide(WindowInsetsCompat.Type.systemBars())
+    } else {
+      controller.show(WindowInsetsCompat.Type.systemBars())
+    }
+    contentView()?.let { ViewCompat.requestApplyInsets(it) }
+  }
+
+  /** 按**可见性**取 inset：隐藏的窗口在部分 ROM 上仍会报高度（见 applySafeAreaInsets 注释）。 */
+  private fun visibleInsets(insets: WindowInsetsCompat, type: Int): Insets =
+      if (insets.isVisible(type)) insets.getInsets(type) else Insets.NONE
+
+  /**
+   * HS-SAFE-AREA-PATCH + HS-LANDSCAPE-PATCH —— 把系统栏 / 刘海 / 软键盘的 inset 变成 padding。
+   *
+   * 🔴 横竖屏口径**故意不同**（2026-10-02 实测数据见 TASKS.md §E28）：
+   *
+   * · **竖屏**：与改造前逐像素一致（系统栏 + 刘海 + 软键盘各边取最大值）。
+   *   本机 AVD 实测 `800 - 731 = 69 dp`（刘海 45.3 + 手势条 23.7）。
+   *   另外显式判 `isVisible`：部分 ROM 在系统栏隐藏后仍报原高度，不判就会留一圈等高空白。
+   *
+   * · **横屏**：**系统栏一律 0，刘海照旧留位**（各边取 cutout 与 ime 的最大值）。
+   *   - 系统栏：已被 `applyLandscapeImmersive()` 收起来，不再为它垫空白 —— 这正是用户
+   *     要的「隐藏软件本身因躲避状态栏/导航栏而做的空白部分」。
+   *   - 刘海：**不能一起抹掉**。它是**物理遮挡**，横屏时落在**左/右长边的中段**
+   *     （本机 AVD 实测 `insets=Rect(136,0,0,0)`）⇒ 抹掉就等于把顶栏左端、文件面板
+   *     左缘、底栏前几个按钮画到挖孔底下，按不到也看不见（探针 E28-L5 就是抓这个）。
+   *     ⚠️ 但 padding **会**让 WebView 视口跟着变小（content view 就是 WebView 的容器）：
+   *     实测垫刘海后 2400×1080 → 2265×1080。所以判据 E28-L2 的期望值是**「屏幕 − 刘海」**，
+   *     不是"屏幕尺寸"（第一版就是按"不改视口"写的，判据自相矛盾）。
+   *   - 真机 221deeb **没有刘海** ⇒ cutout 恒为 0，四个值全 0，与"完全铺满"等价。
+   *
+   * 想改回"竖屏口径"只需删掉这里的 if 分支。（`env(safe-area-inset-*)` 那条路不用管：
+   * Android WebView 实测恒为 0px，前端那两处 safe-area padding 是 no-op。）
+   */
   private fun applySafeAreaInsets() {
     val content = contentView() ?: return
     ViewCompat.setOnApplyWindowInsetsListener(content) { view, insets ->
-      // systemBars + displayCutout + ime 各边取最大值：刘海区、状态栏、导航栏、
-      // 软键盘一次垫完（ime 是必需的，见文件头注释）。
-      val bars = insets.getInsets(
-          WindowInsetsCompat.Type.systemBars()
-              or WindowInsetsCompat.Type.displayCutout()
-              or WindowInsetsCompat.Type.ime()
-      )
-      if (view.paddingLeft != bars.left || view.paddingTop != bars.top ||
-          view.paddingRight != bars.right || view.paddingBottom != bars.bottom) {
-        view.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+      val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+      val left: Int
+      val top: Int
+      val right: Int
+      val bottom: Int
+      if (isLandscape()) {
+        val cutL = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+        left = maxOf(cutL.left, ime.left)
+        top = maxOf(cutL.top, ime.top)
+        right = maxOf(cutL.right, ime.right)
+        bottom = maxOf(cutL.bottom, ime.bottom)
+      } else {
+        val sb = visibleInsets(insets, WindowInsetsCompat.Type.statusBars())
+        val nb = visibleInsets(insets, WindowInsetsCompat.Type.navigationBars())
+        val cut = insets.getInsets(WindowInsetsCompat.Type.displayCutout())
+        left = maxOf(sb.left, nb.left, cut.left, ime.left)
+        top = maxOf(sb.top, nb.top, cut.top, ime.top)
+        right = maxOf(sb.right, nb.right, cut.right, ime.right)
+        bottom = maxOf(sb.bottom, nb.bottom, cut.bottom, ime.bottom)
+      }
+      if (view.paddingLeft != left || view.paddingTop != top ||
+          view.paddingRight != right || view.paddingBottom != bottom) {
+        view.setPadding(left, top, right, bottom)
       }
       insets
     }
@@ -552,7 +659,8 @@ if ! grep -q 'HS-NATIVE-LIB-FIX' "$GRADLE"; then
 //
 // 本机 `symlink` 静默退化成 0 字节文件 ⇒ tauri 放进 jniLibs 的 native 库是空文件，
 // 而 APK 照常生成、崩溃只在装机时暴露（bad ELF magic: 504b0304）。
-// 这里在**合并 jniLibs 之前**把真文件补回去；只补"不存在或 0 字节"的。
+// 这里在**合并 jniLibs 之前**把真文件补回去：symlink（无论能否解析）或空文件**一律换成真副本**；
+// 已经是真文件且非空的**不动**（避免把旧构建的 .so 写进新包）。
 val hsFixNativeLibs = tasks.register("hsFixNativeLibs") {
     doLast {
         val triples = mapOf(
@@ -569,10 +677,27 @@ val hsFixNativeLibs = tasks.register("hsFixNativeLibs") {
                 File("$ndkDir/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/$triple/libc++_shared.so")
                     to File(dir, "libc++_shared.so"),
             )
-            pairs.forEach { (src, dst) ->
-                if (src.isFile && (!dst.exists() || dst.length() == 0L)) {
+            pairs.forEach pairLoop@{ (src, dst) ->
+                if (!src.isFile) return@pairLoop
+                /* 🔴 2026-10-02：tauri-cli 打包前会把这两个库 **symlink** 进 jniLibs，
+                   本机 symlink 不但会退化成 0 字节文件，**即使能解析**，gradle 守护进程
+                   读它也会报 `FileNotFoundException: … (拒绝访问。)`（同一文件用 Java 直接读
+                   76 MB 正常，构建过程中读就 Access Denied）⇒ **一律删掉再拷真文件**，
+                   从此 jniLibs 里不出现 symlink。dst 本来就该等于该 ABI 的 cargo 产物，
+                   所以"无条件覆盖"比"只补空文件"更正确。
+                   注：不能用 `java.nio.file.Files` —— Gradle Kotlin DSL 里 `java` 是扩展、
+                   会遮蔽同名包（`Unresolved reference: nio`），所以走 `java.io.File.delete()`。 */
+                try {
+                    if (!dst.delete() && dst.exists()) {
+                        println("[hs-fix] ⚠️ 删不掉旧占位：$abi/${dst.name}")
+                    }
                     src.copyTo(dst, overwrite = true)
                     println("[hs-fix] 补回 $abi/${dst.name}（${src.length()} bytes）")
+                } catch (e: Exception) {
+                    /* ⚠️ 这个任务只是"打包前的兜底"，**不该让整个构建失败**：
+                       权威校验是 build-apk.sh §8（逐个验 APK 里的 .so 非空 + ELF 魔数，
+                       不合格会自动调 fix-apk-native-libs.sh 修补并复验）⇒ 这里交棒给它。 */
+                    println("[hs-fix] ⚠️ 跳过 $abi/${dst.name}：${e.javaClass.simpleName}: ${e.message}")
                 }
             }
         }
@@ -809,7 +934,14 @@ AIDL_DST="$GEN_DIR/app/src/main/aidl/$PKG_PATH_SVC"
 JAVA_DST_SVC="$GEN_DIR/app/src/main/java/$PKG_PATH_SVC"
 if [ -f "$KOTLIN_SRC_SVC/HsShellService.kt" ]; then
   mkdir -p "$AIDL_DST"
-  cp "$KOTLIN_SRC_SVC/IHsShellService.aidl" "$AIDL_DST/IHsShellService.aidl"
+  # 🕳️ 2026-10-02 修：`android/kotlin/IHsShellService.aidl` **仓库里并不存在**
+  # （服务是**手工 Binder 协议**，注释里早写了"不用 AIDL"），而这一句是无条件 `cp`
+  # ⇒ 脚本从那天起**每次都在这里 exit 1**，后面的 §15/§16 一行都执行不到。
+  # 表现极具迷惑性：MainActivity.kt 明明有补丁（§7 在它之前），但 Manifest 的
+  # 新注入（§13/§14/§16）永远是旧的 —— 也就是说"改了脚本却不生效"的根因在这里。
+  if [ -f "$KOTLIN_SRC_SVC/IHsShellService.aidl" ]; then
+    cp "$KOTLIN_SRC_SVC/IHsShellService.aidl" "$AIDL_DST/IHsShellService.aidl"
+  fi
   cp "$KOTLIN_SRC_SVC/HsShellService.kt" "$JAVA_DST_SVC/HsShellService.kt"
   echo "✓ 已部署 HsShellService.kt（手工 Binder 协议，不用 AIDL）"
 else
@@ -834,16 +966,58 @@ if [ -n "${MANIFEST:-}" ] && [ -f "$MANIFEST" ]; then
   fi
 fi
 
+# ── 16. 屏蔽系统分屏（HS-MULTIWINDOW-PATCH，2026-10-02）──────────────────────
+# 用户口径：「**始终**屏蔽系统分屏」。
+#
+# 为什么必须写进 Manifest 而不是运行时：`android:resizeableActivity` 是**声明式**能力位，
+# Activity 起来之后再改没有对应 API（`setResizeable` 不存在）。系统在决定"能不能把这个
+# Activity 放进分屏"时读的就是它。
+#
+# ⚠️ 生效边界（2026-10-02 查官方文档确认，别把它当成万能的）：
+#   · Android 12(API 31)+：**小屏（sw < 600dp，绝大多数手机）**仍然按本属性判定
+#     ⇒ `false` = 不支持多窗口，用户拖进分屏时系统会让它**接管全屏**，即"屏蔽"生效。
+#   · **大屏（sw >= 600dp，平板/折叠屏展开态）**：系统**无视**该属性，一切应用都可多窗口
+#     ⇒ 平板上**做不到**用软件屏蔽分屏。本项目 targetSdk=36，Android 16 进一步明确
+#     "sw>=600dp 忽略裁切/方向/可调整性"，唯一豁免是 sw<600dp（正好是我们的手机）。
+#   · 系统"设置 → 分屏"这类**全局开关**属于 OEM 层，应用无权改。
+#   · 🕳️ 副作用：`false` 会让系统在窗口尺寸不兼容时启用**兼容模式（letterbox/缩放）**；
+#     手机全屏下没有不兼容窗口，实测无影响；但若以后上平板，可能被加黑边。
+#   · 🕳️ 逃生舱：真正需要分屏时删掉这一行即可（注释里留了标记，`grep HS-MULTIWINDOW` 可定位）。
 echo
-echo "── 自检 ──"if [ -n "$MA" ]; then
+echo "── 屏蔽系统分屏（HS-MULTIWINDOW-PATCH）──"
+if [ -z "${MANIFEST:-}" ] || [ ! -f "$MANIFEST" ]; then
+  echo "· 找不到 Manifest，跳过"
+elif grep -q 'HS-MULTIWINDOW' "$MANIFEST"; then
+  echo "· Manifest 已有 resizeableActivity=false，跳过"
+else
+  # 锚在 `    <application`（4 空格缩进）：注释放到 `<application` **之前**、属性放到它**之后**。
+  # 🔴 别把注释塞进 start-tag 里！XML **不允许**在 `<application` 与属性之间出现注释
+  #    —— 第一版就是那么写的（`<application\n<!-- … -->\nandroid:resizeableActivity=…`），
+  #    aapt 直接报 `ManifestMerger2$MergeFailureException: Error parsing …AndroidManifest.xml`，
+  #    而 Gradle 只淡淡说一句 "Execution failed for task ':app:processUniversalDebugMainManifest'"
+  #    （真正的解析原因要往上翻，很容易被 tauri 那段巨长的 `Io(Env(...))` 刷掉）。
+  # ⚠️ 注释必须是 **ASCII**：本脚本用 sed 重写 Manifest，非 ASCII 会被弄乱（同 §6 的教训）。
+  sed -i 's|\(    <application\)|    <!-- HS-MULTIWINDOW: always block system split-screen (user request). Honored on Android 12+ for displays with smallest width < 600dp; the system ignores it on sw>=600dp (tablets/foldables). ASCII only - rewritten via sed by setup-gen-android.sh. -->\n\1\n        android:resizeableActivity="false"|' "$MANIFEST"
+  if grep -q 'HS-MULTIWINDOW' "$MANIFEST"; then
+    echo "✓ 已加 android:resizeableActivity=false → $(basename "$MANIFEST")"
+  else
+    echo "❌ 注入失败，请手工检查 $MANIFEST" >&2
+  fi
+fi
+
+echo
+echo "── 自检 ──"
+if [ -n "$MA" ]; then
   grep -c 'HS-SAFE-AREA-PATCH' "$MA" | sed 's/^/  MainActivity inset 补丁: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'
   grep -c 'HS-SAF-PATCH' "$MA" | sed 's/^/  MainActivity SAF 补丁: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'
   grep -c 'HS-RECORD-AUDIO-PATCH' "$MA" | sed 's/^/  MainActivity 录音权限补丁: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'
+  grep -c 'HS-LANDSCAPE-PATCH' "$MA" | sed 's/^/  MainActivity 横屏沉浸补丁: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'
 fi
 if [ -n "${MANIFEST:-}" ] && [ -f "$MANIFEST" ]; then
   grep -c 'RECORD_AUDIO' "$MANIFEST" | sed 's/^/  Manifest RECORD_AUDIO: /' | sed 's/1$/已声明/; s/0$/❌ 未声明/'
   grep -c 'MANAGE_EXTERNAL_STORAGE' "$MANIFEST" | sed 's/^/  Manifest MANAGE_EXTERNAL_STORAGE（设置页开关才会可点）: /' | sed 's/1$/已声明/; s/0$/❌ 未声明/'
   grep -c 'HsShellService' "$MANIFEST" | sed 's/^/  Manifest Shizuku shell service: /' | sed 's/1$/已注册/; s/0$/❌ 未注册/'
+  grep -c 'HS-MULTIWINDOW' "$MANIFEST" | sed 's/^/  Manifest 屏蔽系统分屏: /' | sed 's/1$/已应用/; s/0$/❌ 未应用/'
 fi
 if [ -n "${FS_DST:-}" ]; then
   if [ -f "$FS_DST" ]; then

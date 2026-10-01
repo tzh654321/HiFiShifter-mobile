@@ -134,6 +134,30 @@ fi
 command -v tauri >/dev/null 2>&1 || { echo "❌ 找不到 tauri CLI（探针的 node_modules 里应该有）" >&2; exit 1; }
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-D:/hfshifter-target-upstream}"
 
+# ── ④.4 gradle daemon 卫生：构建前**一律**停掉并禁用复用（2026-10-02）──────
+# 🔴 代价与症状：`tauri android build` 的 Rust 编译是 gradle task `rustBuild<Abi>Debug`
+#    里跑的 ⇒ **cargo 是 gradle 守护进程的子进程**。守护进程是**长期存活**的；它一旦带着
+#    "坏令牌 / 残留句柄"（沙箱、被提权的父进程、上次构建留下的句柄都算），cargo 就会在
+#    收尾那一步
+#        failed to link or copy `…\debug\deps\libbackend_lib.so` to `…\debug\libbackend_lib.so`
+#        Caused by: 拒绝访问。 (os error 5)
+#    上失败；而**同一个操作在守护进程之外手工执行完全正常**（实测：Python `os.remove` +
+#    `os.link` + 读回 ELF 魔数全通）⇒ 错误信息完全不指向真凶，为此白查了一整轮。
+#    ⇒ 两道保险：
+#      ① 先 `--stop`。⚠️ 必须用**Windows 形式**的 GRADLE_USER_HOME（`D://gradle-home`），
+#         否则 stop 的是 `~/.gradle` 里那份，而构建用的是 D: 那份 —— 白停。
+#      ② 再 `-Dorg.gradle.daemon=false`：不复用任何既有 daemon，每次构建都在**自己新起的
+#         JVM** 里跑，坏令牌无法跨构建传染（代价是每次多 ~20 s 的 JVM 启动）。
+#    回退：`HS_SKIP_DAEMON_STOP=1` 跳过 ①；删掉 `GRADLE_OPTS` 那行跳过 ②。
+if ! printf '%s' "${GRADLE_USER_HOME:-}" | grep -qE '^[A-Za-z]:'; then
+  export GRADLE_USER_HOME='D:\gradle-home'
+fi
+if [ "${HS_SKIP_DAEMON_STOP:-0}" != "1" ]; then
+  (cd "$SRC/gen/android" && ./gradlew.bat --stop >/dev/null 2>&1) || true
+fi
+export GRADLE_OPTS="${GRADLE_OPTS:-} -Dorg.gradle.daemon=false"
+echo "▸ HS-DAEMON-HYGIENE：已停既有 gradle daemon 并禁用复用（GRADLE_USER_HOME=$GRADLE_USER_HOME）"
+
 # ── ④.5 gradle daemon 与 TEMP 的一致性（2026-09-22）───────────────────────
 # 🔴 daemon 的环境块是**启动时定型**的：改了 TEMP（或换了 android-env.sh 的默认值）
 #    之后不先停 daemon，新 TEMP 根本传不进去 —— 表现是"明明换了临时目录，
@@ -269,7 +293,15 @@ if [ -d "$MERGED_NATIVE" ]; then
   # 只清与原生库/资源合并相关的中间产物，保留 dex/kotlin 等昂贵产物
   # ⚠️ 用 if 而不是 `[ -e "$d" ] && rm ...`：后者在**所有 glob 都不匹配**时
   # （循环体拿到的是字面 pattern）返回非零，`set -e` 会让整个构建在这里静默退出。
+  #
+  # 🔴 `merged_jni_libs*` 必须一起清（2026-10-01 实测补）：只清 `merged_native_libs*` 不够 ——
+  # AGP 的原生库合并链是
+  #   jniLibs(源) → mergeJniLibFolders → **merged_jni_libs** → mergeNativeLibs → merged_native_libs → strip
+  # 前一环是**增量**目录：源里已经删掉的 ABI，它会**原样留着**并被下一环 merge 回去。
+  # 于是 `sync-native-libs.sh` 明明成功删掉了 `jniLibs/x86_64/`（那行 "✗" 是"**已删除**"的标记，
+  # 不是失败），包里却仍白背 **76.7 MB** 死库（实测：APK 377 MB ↔ 干净 300 MB）。
   for d in "$MERGED_NATIVE"/merged_native_libs* "$MERGED_NATIVE"/stripped_native_libs* \
+           "$MERGED_NATIVE"/merged_jni_libs* \
            "$MERGED_NATIVE"/merged_res* "$MERGED_NATIVE"/packaged_res*; do
     if [ -e "$d" ]; then /usr/bin/rm -rf "$d" 2>/dev/null || true; fi
   done
