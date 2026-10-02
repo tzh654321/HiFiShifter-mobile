@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..9a460efe 100644
+index 3802022a..aa40f6ff 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4960 @@
+@@ -1,4006 +1,4971 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -8690,7 +8690,13 @@ index 3802022a..9a460efe 100644
 +                                {/* 规格 docs/15「音频块·单击 = 选中并显示常用操作与左右控制点」：
 +                                    块上方那条图标化浮动操作条（flm1 形制）。只在手机出现，
 +                                    且只在时间线面板可见时挂载。 */}
-+                    <SettingsOverlays />
++                                {/* 🔴 2026-10-03 用户报「存储设置 / 工程设置的层级依旧在分屏界面之后」：
++                                    `SettingsOverlays` 原先挂在这里 —— **在时间线面板块内部**。
++                                    `[data-hs-pane]` 带 `animation: hs-fade-in … both` ⇒ 每个面板
++                                    自己就是一个**层叠上下文**，于是弹窗的 `z-index: 1000` 只在这个
++                                    上下文内生效，压不过后面的兄弟面板 ⇒ 弹窗被分屏块盖住。
++                                    ⇒ 移到 App 根层（与 `MobileBottomBar` 同级，见下方），
++                                    与任何面板的层叠上下文都无关。 */}
 +                                <ClipQuickActions />
 +                                {/* 规格 docs/15「音频块·单击 = 选中并显示常用操作**与左右控制点**」：
 +                                    左右边缘的两个抓手（TASKS.md B1）。纯 `pointer-events:none`
@@ -8835,6 +8841,11 @@ index 3802022a..9a460efe 100644
 +                平板两块面板同屏，没有"切换"这回事。
 +                `showEye`：平板补 👁 入口 —— 平板上参数行常显，选择/绘制/参数切换都够得着，
 +                但 👁 面板独有的「覆盖层总开关 / 单项曲线显隐 / 气声开关」原本**完全没有入口**。 */}
++            {/* 自绘设置弹窗（工程设置 / 存储设置 / 吸附网格 / 分割过渡 / 节拍器）：
++                🔴 **必须挂在根层**，不能塞进任一面板块 —— 面板自带 `hs-fade-in` 动画
++                会成为层叠上下文，弹窗的 z-index 就压不出该面板（用户报的
++                「弹窗在分屏界面之后」）。仍按原口径只在手机挂载（平板走 MenuBar 那份）。 */}
++            {isPhone ? <SettingsOverlays /> : null}
 +            {isTouchShell ? <MobileBottomBar showEye={!isPhone} /> : null}
 +            {/* C（#17）：底栏页签已删除 —— 面板显隐改到「视图」菜单。 */}
 +
@@ -19971,10 +19982,10 @@ index de6d05a3..af40d929 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/PianoRollPanel.tsx b/frontend/src/components/layout/PianoRollPanel.tsx
-index 613ea89d..9933a90d 100644
+index 613ea89d..b5df6300 100644
 --- a/frontend/src/components/layout/PianoRollPanel.tsx
 +++ b/frontend/src/components/layout/PianoRollPanel.tsx
-@@ -1,7214 +1,7919 @@
+@@ -1,7214 +1,7929 @@
 -import { PitchSnapSettingsDialog } from "./PitchSnapSettingsDialog";
 -import React, {
 -    type CSSProperties,
@@ -31896,6 +31907,16 @@ index 613ea89d..9933a90d 100644
 +            const el = ev.target as HTMLElement | null;
 +            if (!el || typeof el.closest !== "function") return;
 +            if (el.closest(KEEP_SELECTORS)) return;
++            /* 🔴 2026-10-03 用户口径：「颤音工具画完一笔之后，点击参数界面其它地方
++               应该**关闭浮窗滑条**，而不是再画一笔」。
++               原实现只 `closeVibratoAdjust()`：本监听在**捕获阶段**先关掉浮层，但这一下
++               `pointerdown` 照样继续传到画布 ⇒ 同一根手指既关了浮层、又起了一笔新笔画。
++               ⇒ 这一下必须被**消费**掉：`stopPropagation()` 之后 React 的根部监听
++               （`onCanvasPointerDown` 挂在那儿）收不到事件 ⇒ 只剩"关闭"这一个效果。
++               ⚠️ 只消费"该关的那一下"；命中 KEEP_SELECTORS（按钮/拍数栏/钢琴栏/
++               工具栏/菜单）的仍然原样放行，seek / 切工具照旧。 */
++            ev.preventDefault();
++            ev.stopPropagation();
 +            closeVibratoAdjust();
 +        };
 +        document.addEventListener("pointerdown", onDown, true);
@@ -49446,10 +49467,10 @@ index 00000000..0bd9ab3b
 +}
 diff --git a/frontend/src/components/layout/pianoRoll/VibratoAdjustOverlay.tsx b/frontend/src/components/layout/pianoRoll/VibratoAdjustOverlay.tsx
 new file mode 100644
-index 00000000..f1d868ea
+index 00000000..16f29ae7
 --- /dev/null
 +++ b/frontend/src/components/layout/pianoRoll/VibratoAdjustOverlay.tsx
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,262 @@
 +/**
 + * 直线/颤音：画完一条线后弹出的「波长 / 振幅」双滑条浮层（TASKS.md #7）。
 + *
@@ -49466,8 +49487,10 @@ index 00000000..f1d868ea
 + */
 +import React from "react";
 +
-+/* #53：波长要换算成「秒」，需要采样率。用项目既有常量，别自己写 48000。 */
-+import { DEFAULT_PROJECT_SAMPLE_RATE as DEFAULT_SAMPLE_RATE } from "../../../utils/timelineSnapping";
++/* #53/#54：波长要换算成「秒」。换算基准是**参数曲线的帧周期**（5 ms/帧），
++   **不是采样率** —— 拿 48000 去除会小 240 倍（用户报的「显示 0.0649 s、
++   肉眼却十几秒」就是它）。常量出处见 `utils/timelineSnapping.ts`。 */
++import { DEFAULT_PARAM_FRAME_PERIOD_MS } from "../../../utils/timelineSnapping";
 +
 +export interface VibratoAdjustInfo {
 +    /** 线覆盖的帧区间（含端点）。 */
@@ -49476,6 +49499,11 @@ index 00000000..f1d868ea
 +    /** 当前振幅 / 波长（频率）。 */
 +    amplitude: number;
 +    frequency: number;
++    /**
++     * 曲线帧周期（毫秒）。缺省 = `DEFAULT_PARAM_FRAME_PERIOD_MS`（5 ms/帧）。
++     * 只在多轨帧率不一致时才需要显式传（当前前端到处都按 5 处理）。
++     */
++    framePeriodMs?: number;
 +    /** 浮层锚点：画完那一刻的指针位置（屏幕坐标）。 */
 +    clientX: number;
 +    clientY: number;
@@ -49662,21 +49690,26 @@ index 00000000..f1d868ea
 +                 * 🔴 **线长秒数必须按 `len` 算，不能用 `endFrame - startFrame`** ——
 +                 * `buildVibratoDense` 里采样点是 `for (f = minF; f <= maxF; f++)`
 +                 * ⇒ **实际有 `endFrame - startFrame + 1` 个帧**（闭区间含两端）。
-+                 * 少算这一帧在 48k 下是 0.021ms（肉眼不可见），
-+                 * 但**算错就是算错**，而且周期小的时候相对误差会放大。
 +                 *
-+                 * ⚠️ 采样率：`projectSampleRate` 在全项目**没有任何调用方传值**
-+                 * （`timelineSnapping.ts` 里它只在 `?? DEFAULT_PROJECT_SAMPLE_RATE` 出现）
-+                 * ⇒ 实际恒为 48000，用默认常量是对的。
++                 * 🔴🔴 **帧 → 秒是 `帧 × framePeriodMs / 1000`（一帧 5 ms），
++                 * 不是 `帧 / 采样率`**。原先按 48000 除 ⇒ 比真值小 **240 倍**，
++                 * 用户报「曲线肉眼约 16 秒、读数却是 0.0649 s」就是它
++                 * （0.0649 × 240 ≈ 15.6 s）。别再用采样率，采样率在这里毫无关系。
 +                 *
-+                 * ⚠️ 显示成「秒」时周期常常只有几百毫秒甚至几十毫秒。
-+                 * 数值栏只有 40px，格式必须短 ⇒ 只给 `s`（保留 `title` 提示周期数）。
++                 * ⚠️ 显示成「秒」时跨度很大（几十毫秒 ~ 几十秒）⇒ 按量级切换小数位，
++                 * 数值栏只有 40px，`toFixed(4)` 在十几秒时会撑出去。
 +                 */
 +                (v) => {
 +                    const len = Math.abs(info.endFrame - info.startFrame) + 1;
-+                    const secs = len / DEFAULT_SAMPLE_RATE;
++                    const fp =
++                        info.framePeriodMs && info.framePeriodMs > 0
++                            ? info.framePeriodMs
++                            : DEFAULT_PARAM_FRAME_PERIOD_MS;
++                    const secs = (len * fp) / 1000;
 +                    const period = v > 1e-6 ? secs / v : 0;
-+                    return `${period.toFixed(4)} s`;
++                    if (period >= 10) return `${period.toFixed(1)} s`;
++                    if (period >= 1) return `${period.toFixed(2)} s`;
++                    return `${period.toFixed(3)} s`;
 +                },
 +            )}
 +            {slider(
@@ -61630,10 +61663,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..fa7aaf38 100644
+index c0db2221..6fce1847 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,3143 @@
+@@ -1,2297 +1,3176 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -64432,6 +64465,17 @@ index c0db2221..fa7aaf38 100644
 +    const { mode, fontFamily } = useAppTheme();
 +    const darkMode = mode === "dark";
 +    const rowHeightRef = useRef(rowHeight);
++    /* 🔴 2026-10-03：给"原生 touch 轨道排序"那个 effect 用的**最新值载体**。
++       为什么要它：那个 effect 原先依赖 `[tracks, rowHeight, onMoveTrack]`，而"按住一条
++       **未选中**的轨道"会在 `onPointerDownCapture` 里立刻 dispatch 选中 ⇒ 列表重渲 ⇒
++       `tracks` 换引用 ⇒ effect **重订阅**（cleanup 里的 `reset()` 把长按候选 `touchHold`
++       清成 null、`armed` 归 false）⇒ 这次手势再也拦不住原生 `contextmenu`，
++       按住 ~500ms 菜单就自己弹出来了 —— 用户报的「长按未选中的轨道会立刻弹菜单、
++       于是拖动不了顺序」就是这条。改成**只订阅一次** + 读 ref。 */
++    const tracksRef = useRef(tracks);
++    const onMoveTrackRef = useRef(onMoveTrack);
++    tracksRef.current = tracks;
++    onMoveTrackRef.current = onMoveTrack;
 +    const pendingVerticalZoomRef = useRef<{
 +        nextRowHeight: number;
 +        nextScrollTop: number;
@@ -64675,6 +64719,11 @@ index c0db2221..fa7aaf38 100644
 +        if (!el) return;
 +        const ARM_MS = 450;
 +        const CANCEL_PX = 12;
++        /* 长按期间允许的**抖动余量**：手指按住不动时，真机 / WebView 仍会持续产生
++           `touchmove`（位移常在 1~3px）。小于它就不算"移动过" —— 否则
++           「长按不动 → 松手开菜单」这条永远不成立（用户报的
++           「长按已选中轨道的轨道头打不开菜单」）。 */
++        const MOVE_SLOP_PX = 6;
 +        let timer: number | null = null;
 +        let armed = false;
 +        let dragId: string | null = null;
@@ -64807,9 +64856,14 @@ index c0db2221..fa7aaf38 100644
 +                if (Math.abs(tt.clientY - startY) > CANCEL_PX) reset();
 +                return;
 +            }
-+            if (touchHold.current !== null) touchHold.current.moved = true;
++            if (touchHold.current !== null) {
++                const hold = touchHold.current;
++                const dx = tt.clientX - hold.x;
++                const dy = tt.clientY - hold.y;
++                if (Math.hypot(dx, dy) > MOVE_SLOP_PX) hold.moved = true;
++            }
 +            e.preventDefault(); // 吃掉滚动（passive:false 下才有效）
-+            const drag = tracks.find((tr) => tr.id === dragId);
++            const drag = tracksRef.current.find((tr) => tr.id === dragId);
 +            if (!drag) return;
 +            /* E33：跟手位移（未吸附）—— 被拖行**始终贴在手指上**。 */
 +            const dragDy = tt.clientY - startY;
@@ -64848,14 +64902,14 @@ index c0db2221..fa7aaf38 100644
 +                scheduleReorderUi({ dragDy, overTrackId: null, shifts: null });
 +                return;
 +            }
-+            const over = tracks.find((tr) => tr.id === overId);
++            const over = tracksRef.current.find((tr) => tr.id === overId);
 +            if (!over || (over.parentId ?? null) !== (drag.parentId ?? null)) {
 +                targetIndex = null; // 跨层级不在这里做
 +                curShifts = {};
 +                scheduleReorderUi({ dragDy, overTrackId: null, shifts: null });
 +                return;
 +            }
-+            const sibs = tracks.filter((tr) => (tr.parentId ?? null) === (drag.parentId ?? null));
++            const sibs = tracksRef.current.filter((tr) => (tr.parentId ?? null) === (drag.parentId ?? null));
 +            const fromIndex = sibs.findIndex((tr) => tr.id === dragId);
 +            const toIndex = sibs.findIndex((tr) => tr.id === overId);
 +            targetIndex = toIndex;
@@ -64868,24 +64922,32 @@ index c0db2221..fa7aaf38 100644
 +            scheduleReorderUi({ dragDy, overTrackId: overId, shifts: curShifts });
 +        };
 +        const onEnd = () => {
-+            const drag = dragId !== null ? tracks.find((tr) => tr.id === dragId) : null;
++            const drag = dragId !== null ? tracksRef.current.find((tr) => tr.id === dragId) : null;
 +            const hold = touchHold.current;
 +            if (armed && drag && targetIndex !== null && targetIndex >= 0) {
 +                /* E33：把"拖动中的视觉位置"交给 FLIP 当起点（否则松手会跳一下）。 */
 +                seedFlipFromCurrentVisual();
-+                onMoveTrack({
++                onMoveTrackRef.current({
 +                    trackId: drag.id,
 +                    targetIndex,
 +                    parentTrackId: drag.parentId ?? null,
 +                });
 +            } else if (
-+                /* 「长按不动 → 松手开轨道菜单」：只有**没移动过**才补发（移动过 = 用户在做
-+                   长按并划动 = 排序，菜单出现会同时生效两条功能，正是 A2 要消掉的现象）。 */
++                /* 「长按不动 → **松手**开轨道菜单」：只有**没移动过**才补发（移动过 = 用户在做
++                   长按并划动 = 排序，菜单出现会同时生效两条功能，正是 A2 要消掉的现象）。
++                   🔴 2026-10-03 两处修正：
++                   ① **不再要求 `hold.menu !== null`**。原先只在"原生 contextmenu 到过"时
++                      才补发，而 Android WebView 派发 contextmenu 的时机并不稳定
++                      （实测选中态经常收不到）⇒ 菜单干脆打不开 —— 用户报的
++                      「长按已选中轨道的轨道头打不开菜单」。现在：**长按武装成功 + 没移动过
++                      ⇒ 松手就开**；锚点优先用被拦下的原生坐标，没有就用起手点。
++                   ② 配合 `MOVE_SLOP_PX`，`moved` 才是真的"用户划过了"。 */
 +                hold !== null &&
 +                !hold.moved &&
-+                hold.menu !== null
++                (hold.menu !== null || armed)
 +            ) {
-+                setTrackCtxMenu({ x: hold.menu.x, y: hold.menu.y, trackId: hold.trackId });
++                const at = hold.menu ?? { x: hold.x, y: hold.y };
++                setTrackCtxMenu({ x: at.x, y: at.y, trackId: hold.trackId });
 +            }
 +            reset();
 +        };
@@ -64900,7 +64962,11 @@ index c0db2221..fa7aaf38 100644
 +            el.removeEventListener("touchcancel", onEnd);
 +            reset();
 +        };
-+    }, [tracks, rowHeight, onMoveTrack]);
++        /* 🔴 **只订阅一次**：`tracks` / `onMoveTrack` 走 ref（见 `tracksRef` 声明处的注释）。
++           放进依赖会让"按住未选中的轨道"（按下即选中 ⇒ tracks 换引用）把本 effect
++           重订阅掉，长按候选当场清空 ⇒ 长按直接弹菜单、排序也做不了。 */
++        // eslint-disable-next-line react-hooks/exhaustive-deps -- tracks/onMoveTrack 走 ref；重订阅会清掉长按候选
++    }, []);
 +
 +    const parentById = useMemo(() => {
 +        const m = new Map<string, string | null>();
@@ -81475,10 +81541,10 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..7ad0bcda
+index 00000000..d3efb358
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,283 @@
 +/**
 + * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
@@ -81521,6 +81587,17 @@ index 00000000..7ad0bcda
 +const VERTICAL_SLACK_PX = 12;
 +/** 纵向移动超过这个距离才算"选了功能"（避免手抖就换图标）。 */
 +const MODE_THRESHOLD_PX = 18;
++/**
++ * 「那一竖」的宽度：还压在这个横向范围内才算"没离开竖轨"，此时才允许上下换档。
++ * 与下面的 `MODE_THRESHOLD_PX` 一起构成"王"字的连通规则（见 `onMove`）。
++ */
++const VERTICAL_CORRIDOR_PX = 14;
++/**
++ * 三条**横轨**之间的间距（≈ 一行轨道高）：中间那条是块的中线，
++ * 上/下两条分别落到上一行 / 下一行 —— 也就是"王"字的上横与下横。
++ * 与 `DOT_FOLLOW_MARGIN_PX` 取同一个值：那个余量本来就是"一行轨道"的尺度。
++ */
++const RAIL_DISTANCE_PX = 44;
 +/** 判定为"左右拖动"的横向位移。 */
 +const DRAG_THRESHOLD_PX = 6;
 +/** E24-④（用户 2026-10-01 口径：「**限制圆点的显示，让它在音频块附近**」）：
@@ -81554,6 +81631,9 @@ index 00000000..7ad0bcda
 +        side: "left" | "right";
 +        x: number;
 +        y: number;
++        /** **起手点** —— 判"上=fade / 下=rate"与"那一竖在哪"都必须与它比。 */
++        startX: number;
++        startY: number;
 +        mode: Mode;
 +        dragging: boolean;
 +    } | null>(null);
@@ -81588,18 +81668,46 @@ index 00000000..7ad0bcda
 +            if (baseX < geo.container.left + DOT_R || baseX > geo.container.left + geo.container.width - DOT_R) {
 +                return;
 +            }
-+            setGrab({ side, x: e.clientX, y: e.clientY, mode: "none", dragging: false });
++            setGrab({
++                side,
++                x: e.clientX,
++                y: e.clientY,
++                /* 🔴 位移基准 = **起手点**。原实现判 mode 用的是 `e.clientY - prev.y`，
++                   而 `prev.y` 每个 move 都被刷成当前值 ⇒ 那其实是"**每帧增量**"：
++                   真机每次 move 只有几像素，几乎永远够不到 18px 的门槛
++                   ⇒ **图标根本不换** —— 用户报的「之前版本做的控制点的图标变化没了」
++                   （之前偶尔能看到，是快速大跨度划动时单帧增量超了阈值）。
++                   现在与起手点比，慢速划动也能稳定进入上/下横轨。 */
++                startX: e.clientX,
++                startY: e.clientY,
++                mode: "none",
++                dragging: false,
++            });
 +            /* 「按下控制点后隐藏临时的常用功能菜单」：浮条自己监听这个事件把当前块收起。 */
 +            window.dispatchEvent(new CustomEvent("hs-hide-clip-actions"));
 +        };
 +        const onMove = (e: PointerEvent) => {
 +            setGrab((prev) => {
 +                if (!prev) return prev;
-+                const dy = e.clientY - prev.y;
-+                const mode: Mode =
-+                    Math.abs(dy) >= MODE_THRESHOLD_PX ? (dy < 0 ? "fade" : "rate") : prev.mode;
-+                const dragging = prev.dragging || Math.abs(e.clientX - prev.x) >= DRAG_THRESHOLD_PX;
-+                // 「圆点能跟手」：位置直接跟随当前指针。
++                /* ── 王字型轨道（用户口径：「控制在"王"字型轨道没做到……想象弹珠在
++                   王字型凹槽内滚动的样子，控制点上划进入上方一横，想回到中下轨
++                   只能从那一竖回来」）────────────────────────────────────────────
++                   三横：上一行 = fade、本行 = 中、下一行 = rate；
++                   一竖：**起手点那一列**。
++                   ⇒ 只有还压在那一竖上（|dx| ≤ `VERTICAL_CORRIDOR_PX`）才允许上下换档；
++                     已经在横轨上横向划开了，就**必须先回到那一竖**才能再回到中/下横轨。
++                   ⇒ 想从 fade 直接跳到 rate 也不行：`|dy| < MODE_THRESHOLD_PX` 时
++                     mode 必然回到 `none`（= 中轨），必须先"回到中轨"这一步。 */
++                const dx = e.clientX - prev.startX;
++                const dy = e.clientY - prev.startY;
++                const onVertical = Math.abs(dx) <= VERTICAL_CORRIDOR_PX;
++                let mode: Mode = prev.mode;
++                if (onVertical) {
++                    mode =
++                        Math.abs(dy) >= MODE_THRESHOLD_PX ? (dy < 0 ? "fade" : "rate") : "none";
++                }
++                const dragging = prev.dragging || Math.abs(dx) >= DRAG_THRESHOLD_PX;
++                // 「圆点能跟手」：位置跟随当前指针；纵向的"吸附到哪条横轨"在渲染侧按 mode 决定。
 +                return { ...prev, x: e.clientX, y: e.clientY, mode, dragging };
 +            });
 +        };
@@ -81646,24 +81754,33 @@ index 00000000..7ad0bcda
 +            g.container.left + g.container.width - DOT_R,
 +            g.left + g.width + DOT_FOLLOW_MARGIN_PX,
 +        );
-+        /* 🔴 E24-⑤（2026-10-02 用户口径：「**控制点的位置限制在"王"字型轨道上** ——
-+           目前的控制点样式与实际操作很容易无关」）：
-+           跟手时**纵向不再允许跑出这一行轨道**。原先上下各留 44px，手指往上一划圆点就
-+           飞到上一行轨道去了，看的人根本分不清它在调哪条边。
-+           ⇒ 纵向夹在**本行轨道**（`top … top + clipHeight`），横向照旧跟手 ±44px
-+             （横向才是"拖边界"的方向）。
-+           ⇒ "上划=fade / 下划=rate" 的反馈改由**圆点里的图标**承担（本来就已实现），
-+             不再依赖"圆点位移"这种和轨道无关的表达。 */
-+        const minY = Math.max(g.container.top + DOT_R, g.top + DOT_R);
++        /* 🔴 2026-10-03 **王字型轨道**（取代 E24-⑤ 的"纵向一律夹在本行内"）：
++           用户口径「控制在"王"字型轨道没做到……控制点上划**进入上方一横**……
++           想回到中下轨只能从那一竖回来」。
++           纵向**只有三条横轨**（彼此相距 `RAIL_DISTANCE_PX`）：
++             上 = fade（落进上一行）/ 中 = 本行 / 下 = rate（落进下一行）；
++           停哪条由 `mode` 决定，而 `mode` **只在起手那一竖上才会变**（见 `onMove`）
++           ⇒ "已在横轨上就必须先回那一竖"这个约束自然成立。
++           横向仍跟手（横向才是"拖边界"的方向），只受"块附近 ±`DOT_FOLLOW_MARGIN_PX`"
++           与容器求交的约束。
++           ⚠️ 原先把纵向夹在 `[g.top, g.top + g.clipHeight]` —— 那样圆点**永远进不了上一横**，
++              用户看到的"没有上下轨道"就是这个。 */
++        const minY = Math.max(g.container.top + DOT_R, centerY - DOT_FOLLOW_MARGIN_PX);
 +        const maxY = Math.min(
 +            g.container.top + g.container.height - DOT_R,
-+            g.top + g.clipHeight - DOT_R,
++            centerY + DOT_FOLLOW_MARGIN_PX,
 +        );
 +        const clamp = (v: number, lo: number, hi: number) =>
 +            Math.min(Math.max(v, Math.min(lo, hi)), Math.max(lo, hi));
 +        const x = grabbed ? clamp(grab.x, minX, maxX) : baseX;
-+        const y = grabbed ? clamp(grab.y, minY, maxY) : centerY;
 +        const mode: Mode = grabbed ? grab.mode : "none";
++        const railY =
++            mode === "fade"
++                ? centerY - RAIL_DISTANCE_PX
++                : mode === "rate"
++                  ? centerY + RAIL_DISTANCE_PX
++                  : centerY;
++        const y = grabbed ? clamp(railY, minY, maxY) : centerY;
 +        return (
 +            <div
 +                key={side}
@@ -81687,7 +81804,11 @@ index 00000000..7ad0bcda
 +                    border: "1px solid rgba(0,0,0,0.45)",
 +                    boxShadow: "0 1px 4px rgba(0,0,0,0.5)",
 +                    scale: grabbed ? "1.35" : "1",
-+                    transition: grabbed ? "none" : "left 120ms ease, top 120ms ease, scale 120ms ease",
++                    /* 横向必须**零延迟**跟手（那是"拖边界"）；纵向给一点缓动 ⇒
++                       吸附到上/下横轨时像"弹珠滚进凹槽"（用户口径的观感）。 */
++                    transition: grabbed
++                        ? "top 110ms ease-out, scale 120ms ease"
++                        : "left 120ms ease, top 120ms ease, scale 120ms ease",
 +                    pointerEvents: "none",
 +                }}
 +            >
@@ -81858,10 +81979,10 @@ index 00000000..c51ea7f9
 +}
 diff --git a/frontend/src/components/mobile/ClipQuickActions.tsx b/frontend/src/components/mobile/ClipQuickActions.tsx
 new file mode 100644
-index 00000000..bbe16b02
+index 00000000..af1e2392
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipQuickActions.tsx
-@@ -0,0 +1,350 @@
+@@ -0,0 +1,371 @@
 +/**
 + * 音频块「常用操作」浮动条 —— 规格 `docs/15` 音频块·单击：
 + * 「选中并显示常用操作与左右控制点（参考 flm1.png）」。
@@ -81899,6 +82020,13 @@ index 00000000..bbe16b02
 +function timelineEditOp(op: string): void {
 +    window.dispatchEvent(new CustomEvent("hifi:timelineEditOp", { detail: { op } }));
 +}
++
++/**
++ * 「刚抓过控制点」的判定窗口（毫秒）：这段时间内落在时间线内核上的 `pointerdown`
++ * 不再被当成"用户回到时间线"从而把浮条放回来。一次 pointerdown 的 window/document
++ * 两个捕获监听相隔不到 1ms，给 400ms 只为兼容慢速事件派发，绝不会误伤下一次真实点击。
++ */
++const HIDE_SETTLE_MS = 400;
 +
 +/* ── 图标（统一 16×16 viewBox + currentColor，与项目其它图标同规格）────────── */
 +const S = { width: 18, height: 18, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true } as const;
@@ -82007,7 +82135,10 @@ index 00000000..bbe16b02
 +             * 这里只负责"点浮条以外的地方才收"。 */
 +            if (t.closest("[data-hs-clip-actions]")) return;
 +            if (t.closest('[data-hs-timeline-kernel="1"]')) {
-+                // 回到时间线 = 用户又去操作块了 ⇒ 清掉"已收起"，让选中逻辑重新决定。
++                /* 回到时间线 = 用户又去操作块了 ⇒ 清掉"已收起"，让选中逻辑重新决定。
++                   ⚠️ 但"刚抓过控制点"这一下不算 —— 那次 pointerdown 的 target 也只能是内核
++                   （圆点 pointer-events:none），若在这里放回来就等于控制点永远收不起浮条。 */
++                if (performance.now() - lastHideAt < HIDE_SETTLE_MS) return;
 +                setHiddenForClipId(null);
 +                return;
 +            }
@@ -82017,10 +82148,21 @@ index 00000000..bbe16b02
 +        document.addEventListener("pointerdown", onDown, true);
 +
 +        /* E5（用户口径）：「按下控制点后**隐藏临时的常用功能菜单**」。
-+           控制点浮层自己是 pointer-events:none（不能吃掉内核命中区），所以它通过窗口事件通知这里。 */
++           控制点浮层自己是 pointer-events:none（不能吃掉内核命中区），所以它通过窗口事件通知这里。
++           🔴 2026-10-03 为什么还要 `lastHideAt`：两个监听都在**捕获阶段** ——
++           `ClipControlPoints` 挂在 `window`、本文件的 `onDown` 挂在 `document`，
++           而捕获是从外往内走（window → document）⇒ 顺序是"先 hide、后 onDown"。
++           偏偏圆点是 `pointer-events:none` ⇒ 这次 pointerdown 的 `target` 只能是**时间线内核**，
++           于是下面那个分支会走"回到时间线 ⇒ 重新显示浮条"，把刚放下的隐藏状态**当场撤销**
++           —— 用户报的「触摸到控制点后常用功能临时菜单就应该隐藏了」就是这么失效的。
++           记一个时间戳，让"同一次按下"里的那条分支不生效。 */
++        let lastHideAt = 0;
 +        const onHide = () => {
 +            const id = selectedClipIdRef.current;
-+            if (id !== null) setHiddenForClipId(id);
++            if (id !== null) {
++                setHiddenForClipId(id);
++                lastHideAt = performance.now();
++            }
 +        };
 +        window.addEventListener("hs-hide-clip-actions", onHide);
 +        return () => {
@@ -84206,10 +84348,10 @@ index 00000000..27456828
 +}
 diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
 new file mode 100644
-index 00000000..a9a8d77b
+index 00000000..e6c9182d
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileTopBar.tsx
-@@ -0,0 +1,981 @@
+@@ -0,0 +1,982 @@
 +/**
 + * MobileTopBar — 触摸形态顶部**横向菜单栏**（按 PS 设计稿 ps1.png）。
 + *
@@ -84495,7 +84637,8 @@ index 00000000..a9a8d77b
 +    const menus: Record<MenuName, ReadonlyArray<MenuEntry>> = {
 +        menu_file: [
 +            { label: t("menu_project_settings"), action: () => window.dispatchEvent(new CustomEvent("hs-open-settings", { detail: { which: "project" } })) },
-+            { sep: true, label: "" },
++            /* ⚠️ 这里曾经是**两条** `sep: true`（相邻）⇒ 渲染成"双横线"。
++               用户口径：「工程设置 / 存储设置 下方不需要双横线，单横线即可」。 */
 +            { sep: true, label: "" },
 +            { label: t("menu_new_project"), action: onNewProject },
 +            { label: t("menu_open_project"), action: onOpenProject },
@@ -84771,7 +84914,7 @@ index 00000000..a9a8d77b
 +        // 桌面 MenuBar 里这一项是硬编码中文（没有 i18n 键），保持一致。
 +        menu_options: [
 +            { label: t("menu_storage_settings"), action: () => window.dispatchEvent(new CustomEvent("hs-open-settings", { detail: { which: "storage" } })) },
-+            { sep: true, label: "" },
++            /* 同上：相邻两条 `sep` = 双横线，只保留一条。 */
 +            { sep: true, label: "" },
 +            {
 +                label: `${tAny("stretch_project_override")}`,
@@ -102418,6 +102561,32 @@ index 90012222..800b049e 100644
  export type ModifierEventLike = {
      ctrlKey: boolean;
      metaKey?: boolean;
+diff --git a/frontend/src/utils/timelineSnapping.ts b/frontend/src/utils/timelineSnapping.ts
+index eeecef69..6ba4f603 100644
+--- a/frontend/src/utils/timelineSnapping.ts
++++ b/frontend/src/utils/timelineSnapping.ts
+@@ -147,6 +147,21 @@ export function snapTimelineClipMove(
+ 
+ export const DEFAULT_PROJECT_SAMPLE_RATE = 48000;
+ 
++/**
++ * 参数曲线「帧周期」（毫秒）—— 全前端唯一出处。
++ *
++ * 🔴 参数曲线的**一帧 = 5 ms**，**不是** `1/48000 s`。前端一直是这个口径：
++ *   · `App.tsx` 选区 → 帧：`const fp = 5; startFrame = sec * 1000 / fp`；
++ *   · `paramClipboardMapping.ts`：`Number(data.framePeriodMs) || 5`；
++ *   · `gestureHitTest.ts`：`frame = sec * 1000 / framePeriodMs`。
++ * ⇒ **帧 → 秒只有一条公式**：`秒 = 帧 × framePeriodMs / 1000`。
++ *
++ * 🕳️ 2026-10-03 用户报「波长显示 0.0649 s，肉眼看着差不多 16 秒」：`VibratoAdjustOverlay`
++ * 当初按采样率除（`帧 / 48000`）⇒ 比真值小了 **240 倍**（5 ms ÷ 1/48000 s = 240）。
++ * 乘回去：0.0649 × 240 ≈ 15.6 s —— 与用户肉眼估计一致。
++ */
++export const DEFAULT_PARAM_FRAME_PERIOD_MS = 5;
++
+ function clampSec(sec: number): number {
+     return Number.isFinite(sec) ? Math.max(0, sec) : 0;
+ }
 diff --git a/frontend/src/waveform/surfaceRenderer.ts b/frontend/src/waveform/surfaceRenderer.ts
 index 260aa737..50afae55 100644
 --- a/frontend/src/waveform/surfaceRenderer.ts

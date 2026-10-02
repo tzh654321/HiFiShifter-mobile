@@ -4721,3 +4721,66 @@ P1-5 字号（令牌已备，建议与"菜单族统一"一起做）· P2-7 宽�
 
 `docs/19` §4.5 剩下的：P1-4 的 key 收敛（8 个「关闭」/6 个「确认·应用」，改名牵动各语言与探针断言）·
 P2-7 宽度上限 · 浮条族 z 裸数字。另 `docs/18 §A` 那 39 条"看着做了但没判据"待按主题批量补。
+
+---
+
+## 🧩 E37（2026-10-03）：用户复测 11 条 —— **7 条已修（都定位到根因）** + 4 条待办
+
+用户在真机上按 E36 包复测后一次给出 11 条。**本章 = 这 11 条的权威状态表**（改了什么 / 根因 / 状态）。
+
+| # | 用户口径（原话摘要） | 根因 | 状态 |
+| :--- | :--- | :--- | :--- |
+| 1 | 轨道+参数+文件分屏，关掉文件后**参数没铺满** | 未定论 —— 需设备侧量 DOM（见下） | ⏳ 待查 |
+| 2 | **长按已选中**轨道的轨道头**打不开菜单** | `moved` 被任意 touchmove 置真（抖动 1~3px 也算）+ 菜单只在"原生 contextmenu 到过"时才补发 | ✅ 已修 |
+| 3 | 存储设置/工程设置的**层级在分屏界面之后** | `SettingsOverlays` 挂在**时间线面板块内部**，`[data-hs-pane]` 带 `animation` ⇒ 自成层叠上下文，弹窗 z-index 压不出该面板 | ✅ 已修 |
+| 4 | 颤音画完一笔后点别处应**关闭浮条**而不是**再画一笔** | 捕获阶段只 `closeVibratoAdjust()`，没消费这次 `pointerdown` ⇒ 同一根手指又起了新笔画 | ✅ 已修 |
+| 5 | 波长时间算错：**120bpm 下肉眼约 16s，显示 0.0649s** | 按**采样率**除（`帧/48000`），而参数曲线**一帧 = 5ms** ⇒ 小 **240 倍**（0.0649×240≈15.6s，与肉眼一致） | ✅ 已修 |
+| 6 | 控制点：**图标变化没了** / 触摸后**应隐藏常用功能浮条** / **王字型轨道**没做到 | 三个独立根因，见 §E37-② | ✅ 已修 |
+| 7 | **选项与绘制之间切换**还是会弹弹窗 | 语义待指认（哪个"选项"？） | ❓ 待确认 |
+| 8 | 存储设置/工程设置下方**双横线** ⇒ 要单横线 | `MobileTopBar` 里**相邻两条 `sep: true`**（文件菜单 286/287、选项菜单 562/563） | ✅ 已修 |
+| 9 | 菜单栏离系统状态栏**偏远**，可看截图定值 | 顶栏 = `minHeight 40` + `paddingTop: env(safe-area-inset-top)` + 44px 命中区；需截图量实际空隙 | ⏳ 待量化 |
+| 10 | 拖轨道到特殊位置**下方轨道来回弹**；松手归位**从原位置**开始弹 | 疑：行上 `transition: transform` 在 `dragging` 转 0 的**同一帧**恢复，而内联 `translateY` 被移除 ⇒ 先按 180ms 滑回旧槽，同时 FLIP 又在动 | ⏳ 待探针 |
+| 11 | **长按未选中**轨道应**松手才弹**菜单，否则拖不动顺序 | 按下未选中轨道 ⇒ `onPointerDownCapture` 里 dispatch 选中 ⇒ `tracks` 换引用 ⇒ 原生 touch 的 effect **重订阅**（cleanup `reset()` 清掉长按候选）⇒ 原生 `contextmenu` 拦不住 ⇒ ~500ms 就弹 | ✅ 已修 |
+
+### ① 波长 240 倍（#5）—— 数值自证
+
+`帧 → 秒` 在**整个前端**只有一条公式：`秒 = 帧 × framePeriodMs / 1000`，`framePeriodMs = 5`
+（`App.tsx` 选区换算写死 `const fp = 5`、`paramClipboardMapping` 是 `|| 5`、`gestureHitTest` 收它作参）。
+`VibratoAdjustOverlay` 当初却写 `len / DEFAULT_PROJECT_SAMPLE_RATE` ⇒ **采样率在这里毫无关系**。
+新增唯一常量 **`DEFAULT_PARAM_FRAME_PERIOD_MS`**（`utils/timelineSnapping.ts`），显示格式按量级切小数位
+（≥10s 一位小数），`VibratoAdjustInfo` 预留 `framePeriodMs?` 供将来多帧率工程使用。
+
+### ② 控制点三条（#6）
+
+- **图标变化没了**：`onMove` 里判 mode 用的是 `e.clientY - prev.y`，而 `prev.y` 每个 move 都被刷成当前值
+  ⇒ 那是"**每帧增量**"。真机每次 move 只有几像素 ⇒ 18px 门槛几乎永远够不到 ⇒ 图标不换。
+  修：grab 里存 **`startX/startY`**，一律与**起手点**比。
+- **触摸后浮条不隐藏**：`ClipControlPoints` 的 hidden 广播挂在 **window** 捕获，`ClipQuickActions` 的
+  "回到时间线就重新显示"挂在 **document** 捕获 —— 捕获是**从外往内**（window 先），所以顺序是
+  "先隐藏、后又被同一次按下的 onDown 撤销"（圆点 `pointer-events:none` ⇒ target 必是内核）。
+  修：`HIDE_SETTLE_MS = 400` 窗口内的那次"回时间线"不再放回浮条。
+- **王字型轨道**：E24-⑤ 把圆点纵向**夹在本行内** ⇒ 圆点**永远进不了"上方一横"** ⇒ 上划=fade / 下划=rate
+  的反馈整体失效。改回"三条横轨 + 一条竖轨"：横轨间距 `RAIL_DISTANCE_PX=44`（≈ 一行轨道高，
+  正好落在上一行 / 下一行），竖轨 = **起手那一列**（`VERTICAL_CORRIDOR_PX=14`）——
+  只有还压在竖轨上才允许上下换档，横向划开后必须先回到竖轨才能换档；`|dy| < 18` 时 mode 归 `none`
+  ⇒ 想从 fade 直跳 rate 也不行，必须先回中轨。纵向另给 110ms 缓动 → "弹珠滚进凹槽"的观感。
+
+### ③ 两条轨道长按（#2 / #11）—— 同一段代码
+
+`TrackList` 的原生 touch 排序 effect 原先依赖 `[tracks, rowHeight, onMoveTrack]`。按下未选中轨道
+会在 `onPointerDownCapture` 里立刻 dispatch 选中 ⇒ 列表重渲 ⇒ effect 重订阅 ⇒ `reset()` 把长按候选
+清空 ⇒ **这次手势再也拦不住原生 contextmenu**（Android 约 500ms 自己派发）⇒ 菜单当场弹出、排序也做不了。
+改：effect **只订阅一次**，`tracks`/`onMoveTrack` 走 ref；另给 `MOVE_SLOP_PX = 6` 抖动余量
+（长按不动时真机仍持续产生 touchmove），并把"松手补发菜单"的条件从"原生 contextmenu 到过"
+放宽为 **`armed && !moved`**（锚点优先用原生坐标，否则用起手点）。
+
+### ⏳ E37 仍未做（4 条）
+
+1. **#1 分屏铺满**：需要设备侧 DOM 实测（关文件后再量 `[data-hs-pane="params"]` 与父块的高度差），
+   已列入下一轮第一件事。候选假设：正在淡出的面板块仍占着 flex 份额 / 残留内联 `flex-grow`。
+2. **#9 菜单栏上移**：等用户截图（或探针量 `header.getBoundingClientRect().top` vs 系统栏高度）后定值。
+3. **#10 拖动弹跳**：按上面写的假设改（拖动收尾那一帧**关掉行的 transform 过渡**），要有 `_probe-e33-*` 复测。
+4. **#7 选项/绘制切换弹窗**：需用户指认具体按钮（"选项"指哪一个）。
+
+> 本轮交付包：`D:/hifishifter-out/hifishifter-arm64-v8a-debug.apk`（**真机 221deeb 在构建期掉线，
+> 装机待用户重插**）。提交：见 `git log --oneline -1`。
