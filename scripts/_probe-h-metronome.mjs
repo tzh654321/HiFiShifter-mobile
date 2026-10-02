@@ -1,6 +1,7 @@
 ﻿import { execSync } from "node:child_process";
 import { Cdp } from "./lib/cdp.mjs";
-const serial = "221deeb";
+/* 串号从命令行取（原来写死 221deeb ⇒ 真机一掉线，这条探针连带整个回归都跑不了）。 */
+const serial = process.argv[2] ?? "221deeb";
 const adb = (c) => execSync(`adb -s ${serial} ${c}`, { stdio: "pipe" }).toString();
 const pid = adb("shell pidof com.arounder.hifishifter").trim();
 adb("forward tcp:9222 localabstract:webview_devtools_remote_" + pid);

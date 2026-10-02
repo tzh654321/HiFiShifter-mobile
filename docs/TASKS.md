@@ -4586,3 +4586,68 @@ body[data-hs-header-collapsed="1"] div:has(> [data-track-list-panel]) {  /* 外�
 ⚠️ **"拖动暂不落地"是应用侧的既有时序**（不是本轮引入）：拖动中途乐观值可能被**上一步提交的回包**覆盖
 （实测：起手 0.08，按下后跳回 0.32 = 更早的一次提交值）。探针对此的策略是**重试 + 如实标 `不可判`**，
 不写成红。⇒ **下一轮值得单独查**：面板的交互锁只在"第一次预览"上，是否该提前到 pointerdown。
+
+---
+
+## 🎨 E35「设计统一化」（用户清单 ⑤ / E23）：令牌化 + 弹窗族统一（2026-10-02）
+
+**用户口径**（原话）：「设计统一化：如同类菜单/窗口用相同的打开动画、背景处理、控件样式、字号、描述词
+（确认还是确定，关闭还是完成）（就比如**储存设置的窗口位置、背景模糊、层级顺序** 都有问题，
+**不要只做这一例，多找找类似的**）」。
+
+### 先盘点，再动手
+
+新文档 **`docs/19-设计一致性盘点.md`**：把 `upstream-src/frontend/src` 下 **48 个浮层**
+（弹窗 44 / 菜单 19 / 浮条 9，同类合并行）逐行列出**实现方式 · 定位 · 背板 · z-index · 圆角 · 字号 ·
+关闭文案 key · 有无入场动画**，每条带 `文件:行号` 证据 ⇒ 得出 **8 条不一致**（P0×3 / P1×3 / P2×2）。
+用户点名的三处都在 P0：**z-index 阶梯形同虚设**（同类差 10×、同文件两个值、自绘弹窗只有 60/61）、
+**背板三种做法**（`0.35+blur` / `0.45 无模糊` / 全透明）、**自绘弹窗定位硬编码** `top:60` vs `64`。
+
+### 落地了什么
+
+| 件 | 内容 |
+| :--- | :--- |
+| **① 令牌层**（`index.css`） | `--hs-z-*`（search 99999 / ghost 9999 / modal 1000 / menu 999 / panel 500 / transient 60 / menubar 41 / scrim 40）、`--hs-backdrop`（`var(--qt-overlay)`）、`--hs-backdrop-blur`（`blur(2px)`）、`--hs-radius-modal/menu/pill`、`--hs-font-menu-item/title`、`--hs-modal-top`（56px）、`--hs-modal-max-h`（`calc(100dvh - top - 16px)`） |
+| **② 统一浮层规则** | `[data-hs-modal]` / `[data-hs-modal-backdrop]` / `[data-hs-modal-scrim]` / `[data-hs-modal-card]` / `[data-hs-modal][data-hs-leaving]`；四个标记全部接进 E22 的 `body[data-hs-no-anim]` 与 `prefers-reduced-motion` 两条开关 |
+| **③ z-index 收口**（11 处） | `ActionBar`×3（`600/600/50` → menu）、`EditContextMenu`（9999→menu）、`TrackList`（50→menu）、`GlueContextMenu`（50→menu + 圆角）、`KeybindingsDialog`（9999→modal）、`UndoHistoryPanel`（→panel）、`ClipFormantToolWindow`（260→panel）、`FileBrowserPanel` ghost（99999→ghost，原来与快速搜索**撞值**）、`QuickSearchPopup`（99998/99999→search 与 search−1）、`MobileBottomBar` 遮罩（29→scrim）、`TimelinePanel`×2（9999→menu）、`MenuBar`×2 全屏模态（→`data-hs-modal-scrim` + `data-hs-modal-card`） |
+| **④ 三个自绘弹窗**（存储/工程/节拍器） | 背板 `rgba(0,0,0,0.45)` 无模糊 → `data-hs-modal-backdrop`；定位 `top:60/64/64` → `var(--hs-modal-top)`；`maxHeight −150/−140` → `var(--hs-modal-max-h)`；z `60/61` → modal / modal−1；**接入 `useExitPresence`**（拆掉 `if (!open) return null`）⇒ 有入场 `hs-fade-in` + 出场 `hs-fade-out` |
+| **⑤ 文案** | `AboutDialog` 用「取消」当关闭 → 改「关闭」（同类里语义最偏的一处） |
+
+🔴 **顺手修掉的真 bug（"窗口位置有问题"的机理）**：自绘弹窗的 `role="dialog"` 会被
+`@media (max-width:1279px) [role="dialog"] { max-height: calc(100dvh - 16px) !important }`
+**接管**（`!important` 压过内联 `maxHeight`），但它又从 `top: 60` 起算 ⇒ 允许长到 `dvh−16`
+⇒ **底边跑到视口外**（内容/按钮被切）。现在 `top` 与 `max-height` 由**同一条**规则给、且放在文件更靠后
+（同特异度 ⇒ 顺序决胜）。
+
+### 判据 `scripts/_probe-e35-modal-consistency.mjs`（模拟器 `emulator-5554`）—— **9 / 9**
+
+```
+✅ D1 三个弹窗 top 一致且 == 令牌            top=["56px"]（令牌 56px）—— 改造前 60/64/64
+✅ D2 max-height 一致且**底边不越视口**      ["659px"]；底边/视口 484/731 , 555/731 , 408/731
+✅ D3 层级一致                              面板 z=["1000"]、背板 z=["999"]
+✅ D4 背板统一                              底色=["rgba(0,0,0,0.35)"]、blur=["blur(2px)"]
+✅ D5 入场动画统一                          动画=["hs-fade-in"]
+✅ D6 关闭文案统一                          三个都是「关闭」
+✅ D7 出场共规                              16 帧采样 / leaving 2 帧；["hs-fade-in","hs-fade-out"]；随后消失
+✅ D8 no-anim 对照                          无动画、leaving 0 帧、立即消失
+✅ D9 层级阶梯单调                          search>ghost>modal>menu>panel>transient、menubar>scrim
+```
+
+**回归**：E1/E21 **6/6** · 节拍器面板全绿 · E24 工具菜单 **6/6** · E22 出场 **7/7** · E22 入场 **3/3** ·
+`tsc -b` 0 错 · 补丁 regen+verify **109 文件逐字节一致** · vitest（见下）。
+
+### 🔴 顺带修掉两条**过时的旧探针**（它们会伪装成"回归"）
+
+1. **`_probe-e1-e21-clean.mjs` 的 E1-c** 原来断言「点工程设置面板里的 `1/N` 按钮 ⇒ 后端 `grid_size` 变化」。
+   但面板在 **G-3** 之后已改成「**只给入口，不自己造第二套**」：网格值成了**只读文本**
+   （`[data-hs-project-grid-value]`）+ 一个打开「吸附/网格设置」的按钮 ⇒ `^1/\d+$` 按钮**按设计不存在**，
+   旧断言恒为 null 并打印 `点了 undefined`，看起来像红。已改成对**现行设计**断言（只读值 == 后端值）。
+   （随后那次 `Runtime.evaluate 30s 超时` 是它的连带，重跑即无。）
+2. **`_probe-h-metronome.mjs` 把串号写死成 `221deeb`** ⇒ 真机一掉线这条探针直接 `device not found`。
+   改成 `process.argv[2] ?? '221deeb'`。
+
+### ⏳ 本轮未做（`docs/19` §4.5 有逐条原因）
+
+`ModelManagerDialog` 硬编码中文（要 4 key × 5 locale）· P1-4 的 key 收敛（改名牵动各语言与探针文案）·
+P1-5 字号（令牌已备，建议与"菜单族统一"一起做）· P2-7 宽度上限散乱（属内容决定宽度）·
+浮条族 z 仍是裸数字（值恰好与瞬态档一致，收益低）。

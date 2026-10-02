@@ -135,34 +135,24 @@ const main = async () => {
         proj.open && proj.hasName && proj.hasPath && proj.hasGrid && proj.hasUndo,
         proj.head,
     );
-    // E1-c 网格改动落到后端
-    const gridBefore = String((await inv('get_timeline_state', {})).project?.grid_size ?? '');
-    const gridBtn = await cdp.call(() => {
-        const el = document.querySelector('[data-hs-project-settings]');
-        if (!el) return null;
-        const btns = [...el.querySelectorAll('button')].filter((b) => /^1\/\d+$/.test((b.textContent || '').trim()));
-        const target = btns.find((b) => (b.textContent || '').trim() !== '1/4') ?? btns[1];
-        if (!target) return null;
-        const r = target.getBoundingClientRect();
-        return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), value: (target.textContent || '').trim() };
+    /* E1-c 网格 —— **2026-10-02 重写**：旧断言（"点面板里的 `1/N` 按钮 ⇒ 后端 grid_size 变化"）
+       已经**过时**：面板在 G-3 之后改成「**只给入口，不自己造第二套**」——
+       网格值变成**只读文本**（`[data-hs-project-grid-value]`）+ 一个打开「吸附/网格设置」弹窗的按钮
+       （源码注释原话见 `ProjectSettingsDialog.tsx`，`data-hs-project-settings` 里已无 `^1/\d+$` 按钮）。
+       旧断言于是恒为 null 并报 `点了 undefined` —— 看上去像回归，其实是探针没跟上设计。
+       现在对着**现行设计**断言：只读值与后端 `grid_size` 一致。 */
+    const gridValue = await cdp.call(() => {
+        const el = document.querySelector(
+            '[data-hs-project-settings] [data-hs-project-grid-value]',
+        );
+        return el ? (el.textContent ?? '').trim() : null;
     });
-    if (gridBtn) {
-        await tap(gridBtn.x, gridBtn.y);
-        await sleep(1200);
-    }
-    const gridAfter = String((await inv('get_timeline_state', {})).project?.grid_size ?? '');
+    const gridBackend = String((await inv('get_timeline_state', {})).project?.grid_size ?? '');
     check(
-        'E1-c 网格按钮点击后后端 grid_size 变化',
-        Boolean(gridBtn) && gridAfter === gridBtn.value,
-        `${gridBefore} → ${gridAfter}（点了 ${gridBtn?.value}）`,
+        'E1-c 网格：面板显示**只读**网格值且与后端 `grid_size` 一致（G-3：不再内嵌 `1/N` 按钮）',
+        Boolean(gridValue) && gridValue === gridBackend,
+        `面板="${gridValue}" 后端="${gridBackend}"`,
     );
-    if (gridBefore) {
-        await inv('set_project_timeline_settings', {
-            beatsPerBar: 4,
-            timeSignatureDenominator: 4,
-            gridSize: gridBefore,
-        });
-    }
     await closeOverlay();
     await sleep(600);
 

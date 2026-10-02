@@ -9115,7 +9115,7 @@ index 00000000..7f8c8ae5
 +    );
 +}
 diff --git a/frontend/src/components/editDialogs/EditContextMenu.tsx b/frontend/src/components/editDialogs/EditContextMenu.tsx
-index 94ee6594..71a8a27f 100644
+index 94ee6594..a13b8663 100644
 --- a/frontend/src/components/editDialogs/EditContextMenu.tsx
 +++ b/frontend/src/components/editDialogs/EditContextMenu.tsx
 @@ -121,7 +121,8 @@ export function EditContextMenu({
@@ -9128,8 +9128,34 @@ index 94ee6594..71a8a27f 100644
      const sepClass = "my-1 border-t border-qt-border";
  
      const item = (label: string, shortcut: string | undefined, onClick: () => void) => (
+@@ -139,7 +140,7 @@ export function EditContextMenu({
+         <div
+             ref={menuRef}
+             data-hs-context-menu="1"
+-            className="fixed z-[9999] min-w-[180px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
++            className="fixed z-[var(--hs-z-menu)] min-w-[180px] rounded-[var(--hs-radius-menu)] border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
+             style={{ left: x, top: y }}
+             onPointerDown={(e) => e.stopPropagation()}
+         >
+diff --git a/frontend/src/components/layout/AboutDialog.tsx b/frontend/src/components/layout/AboutDialog.tsx
+index 945f6908..ebbd6284 100644
+--- a/frontend/src/components/layout/AboutDialog.tsx
++++ b/frontend/src/components/layout/AboutDialog.tsx
+@@ -120,9 +120,11 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
+                     >
+                         {tAny("about_open_repo")}
+                     </Button>
++                    {/* E35：这里只是「关掉一个只读信息窗」，不是"取消某个编辑"
++                        ⇒ 用通用 `close`（关闭）。原来用 `cancel`（取消）是同类弹窗里语义最偏的一个。 */}
+                     <Dialog.Close>
+                         <Button size="2" variant="surface" color="gray">
+-                            {tAny("cancel")}
++                            {tAny("close")}
+                         </Button>
+                     </Dialog.Close>
+                 </Flex>
 diff --git a/frontend/src/components/layout/ActionBar.tsx b/frontend/src/components/layout/ActionBar.tsx
-index c5ce35d1..931bf799 100644
+index c5ce35d1..2a40c6cd 100644
 --- a/frontend/src/components/layout/ActionBar.tsx
 +++ b/frontend/src/components/layout/ActionBar.tsx
 @@ -573,7 +573,7 @@ export function ActionBar() {
@@ -9141,6 +9167,33 @@ index c5ce35d1..931bf799 100644
          >
              {/* BPM & Time */}
              <Flex align="center" gap="2" className="shrink-0">
+@@ -599,7 +599,7 @@ export function ActionBar() {
+                         <div
+                             ref={metronomeMenuRef}
+                             data-hs-context-menu
+-                            className="fixed z-[600] min-w-[200px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
++                            className="fixed z-[var(--hs-z-menu)] min-w-[200px] rounded-[var(--hs-radius-menu)] border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
+                             style={{ left: metronomeMenuPos.x, top: metronomeMenuPos.y }}
+                         >
+                             <div className="px-3 py-1 text-[11px] uppercase tracking-wide text-qt-text-muted">
+@@ -1168,7 +1168,7 @@ export function ActionBar() {
+                         <div
+                             ref={recordingMenuRef}
+                             data-hs-context-menu
+-                            className="fixed z-[600] min-w-[220px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
++                            className="fixed z-[var(--hs-z-menu)] min-w-[220px] rounded-[var(--hs-radius-menu)] border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
+                             style={{ left: recordingMenuPos.x, top: recordingMenuPos.y }}
+                         >
+                             <div className="px-3 py-1 text-[11px] uppercase tracking-wide text-qt-text-muted">
+@@ -1948,7 +1948,7 @@ function RippleModeMenu({
+         <div
+             ref={menuRef}
+             data-hs-context-menu="1"
+-            className="fixed z-50 min-w-[150px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
++            className="fixed z-[var(--hs-z-menu)] min-w-[150px] rounded-[var(--hs-radius-menu)] border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
+             style={{ left: x, top: y }}
+             onPointerDown={(e) => e.stopPropagation()}
+         >
 diff --git a/frontend/src/components/layout/AppearanceSettingsDialog.tsx b/frontend/src/components/layout/AppearanceSettingsDialog.tsx
 index 2e8fe8c4..a95d5c61 100644
 --- a/frontend/src/components/layout/AppearanceSettingsDialog.tsx
@@ -13429,10 +13482,10 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..19c896f1 100644
+index 3ebf39a9..d854d865 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1400 @@
+@@ -1,1026 +1,1402 @@
 -import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
 -import {
@@ -15723,7 +15776,9 @@ index 3ebf39a9..19c896f1 100644
 +                        left: 0,
 +                        top: 0,
 +                        pointerEvents: "none",
-+                        zIndex: 99999,
++                        /* E35：从 99999 收到 ghost 档 —— 原来与「快速搜索」撞同一个值，
++                           两者同屏时层级靠 DOM 顺序决定，语义上说不清谁该在上面。 */
++                        zIndex: "var(--hs-z-ghost)",
 +                        background: "var(--qt-highlight)",
 +                        color: "var(--qt-text)",
 +                        padding: "2px 8px",
@@ -15859,11 +15914,25 @@ index 3ebf39a9..19c896f1 100644
 +);
 +
 +FileEntryRow.displayName = "FileEntryRow";
+diff --git a/frontend/src/components/layout/KeybindingsDialog.tsx b/frontend/src/components/layout/KeybindingsDialog.tsx
+index 640e395d..efd6aeae 100644
+--- a/frontend/src/components/layout/KeybindingsDialog.tsx
++++ b/frontend/src/components/layout/KeybindingsDialog.tsx
+@@ -319,7 +319,8 @@ export const KeybindingsDialog: React.FC<KeybindingsDialogProps> = ({ open, onOp
+                     width: "min(560px, 92vw)",
+                     maxWidth: 560,
+                     maxHeight: "80vh",
+-                    zIndex: 9999,
++                    /* E35：从 9999 收回模态档（9999 是「拖拽 ghost」档，弹窗不该占） */
++                    zIndex: "var(--hs-z-modal)",
+                     overflow: "hidden",
+                     display: "flex",
+                     flexDirection: "column",
 diff --git a/frontend/src/components/layout/MenuBar.tsx b/frontend/src/components/layout/MenuBar.tsx
-index 0b402382..05fc77b5 100644
+index 0b402382..f44178d1 100644
 --- a/frontend/src/components/layout/MenuBar.tsx
 +++ b/frontend/src/components/layout/MenuBar.tsx
-@@ -1,1612 +1,1844 @@
+@@ -1,1612 +1,1848 @@
 -import React, { useCallback, useEffect, useMemo, useState } from "react";
 -import { Flex, DropdownMenu } from "@radix-ui/themes";
 -import { useI18n } from "../../i18n/I18nProvider";
@@ -19037,11 +19106,13 @@ index 0b402382..05fc77b5 100644
 +            {/* 菜单导入模式选择（多文件） */}
 +            {menuImportMode && (
 +                <div
-+                    className="fixed inset-0 z-[9999] bg-qt-overlay flex items-center justify-center"
++                    data-hs-modal-scrim
++                    className="fixed inset-0 flex items-center justify-center"
 +                    onClick={() => setMenuImportMode(null)}
 +                >
 +                    <div
-+                        className="w-[380px] max-w-[92vw] bg-qt-panel border border-qt-border rounded-xl shadow-[0_20px_44px_rgba(0,0,0,0.28)]"
++                        data-hs-modal-card
++                        className="w-[380px] max-w-[92vw] bg-qt-panel border border-qt-border shadow-[0_20px_44px_rgba(0,0,0,0.28)]"
 +                        onClick={(e) => e.stopPropagation()}
 +                    >
 +                        <div className="px-4 py-3 border-b border-qt-border">
@@ -19125,11 +19196,13 @@ index 0b402382..05fc77b5 100644
 +            {/* 多音轨媒体：选择要导入的音轨 */}
 +            {mediaStreamImport && (
 +                <div
-+                    className="fixed inset-0 z-[9999] bg-qt-overlay flex items-center justify-center"
++                    data-hs-modal-scrim
++                    className="fixed inset-0 flex items-center justify-center"
 +                    onClick={() => setMediaStreamImport(null)}
 +                >
 +                    <div
-+                        className="w-[420px] max-w-[92vw] bg-qt-panel border border-qt-border rounded-xl shadow-[0_20px_44px_rgba(0,0,0,0.28)]"
++                        data-hs-modal-card
++                        className="w-[420px] max-w-[92vw] bg-qt-panel border border-qt-border shadow-[0_20px_44px_rgba(0,0,0,0.28)]"
 +                        onClick={(e) => e.stopPropagation()}
 +                    >
 +                        <div className="px-4 py-3 border-b border-qt-border">
@@ -19319,10 +19392,10 @@ index 0b402382..05fc77b5 100644
 +};
 diff --git a/frontend/src/components/layout/MetronomeSettingsOverlay.tsx b/frontend/src/components/layout/MetronomeSettingsOverlay.tsx
 new file mode 100644
-index 00000000..86f8d97a
+index 00000000..56595a00
 --- /dev/null
 +++ b/frontend/src/components/layout/MetronomeSettingsOverlay.tsx
-@@ -0,0 +1,210 @@
+@@ -0,0 +1,211 @@
 +/**
 + * MetronomeSettingsOverlay —— 节拍器长按菜单。
 + *
@@ -19344,6 +19417,7 @@ index 00000000..86f8d97a
 +import { shallowEqual } from "react-redux";
 +import { useAppDispatch, useAppSelector } from "../../app/hooks";
 +import { useI18n } from "../../i18n/I18nProvider";
++import { ExitPresence } from "../../hooks/useExitPresence";
 +import { updateMetronome } from "../../features/session/thunks/transportThunks";
 +
 +interface Props {
@@ -19376,8 +19450,6 @@ index 00000000..86f8d97a
 +        }),
 +        shallowEqual,
 +    );
-+    if (!open) return null;
-+
 +    /** 更新节拍器配置：只传要改的字段，其余沿用当前值（走 thunk ⇒ 同步引擎 + 持久化）。 */
 +    const patch = (p: {
 +        enabled?: boolean;
@@ -19408,29 +19480,30 @@ index 00000000..86f8d97a
 +        </Flex>
 +    );
 +
++    /* E35：与菜单/面板同规 —— 出场也要淡出，而不是「啪」地消失。
++       `anim="pane"` 与 `--hs-anim-dur-out-pane` 对齐（时长契约在 `useExitPresence`）。 */
 +    return (
-+        <>
++        <ExitPresence open={open} anim="pane">
++            <>
 +            <div
 +                data-hs-metronome-backdrop
++                data-hs-modal-backdrop
 +                className="fixed border-0 cursor-pointer"
-+                style={{ inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 60 }}
++                /* E35：背板统一走 `--hs-backdrop` + `--hs-backdrop-blur`（与 Radix 弹窗同源）。
++                   原来是 `rgba(0,0,0,0.45)` 无模糊 ⇒ 与 Radix 弹窗的 `0.35 + blur(2px)` 不同档。 */
++                style={{ inset: 0 }}
 +                onClick={() => onOpenChange(false)}
 +            />
 +            <div
 +                data-hs-metronome-settings
++                data-hs-modal
 +                role="dialog"
 +                aria-label={tAny("mobile_metronome")}
 +                className="fixed bg-qt-window border border-qt-border text-qt-text"
-+                style={{
-+                    left: 8,
-+                    right: 8,
-+                    top: 64,
-+                    maxHeight: "calc(100vh - 140px)",
-+                    zIndex: 61,
-+                    borderRadius: 12,
-+                    padding: 12,
-+                    overflowY: "auto",
-+                }}
++                /* E35：定位 / 高度上限 / 层级 / 圆角全部收进 `index.css` 的 `[data-hs-modal]`
++                   （原来三处各写一份：top 60 vs 64、maxHeight −150 vs −140、z 60/61，
++                   且与 `@media(max-width:1279px) [role="dialog"]` 的兜底上限打架 ⇒ 底部被切）。 */
++                style={{ left: 8, right: 8, padding: 12, overflowY: "auto" }}
 +            >
 +                <Text size="4" weight="bold" style={{ display: "block" }}>
 +                    {tAny("mobile_metronome")}
@@ -19530,7 +19603,8 @@ index 00000000..86f8d97a
 +                    </Button>
 +                </Flex>
 +            </div>
-+        </>
++            </>
++        </ExitPresence>
 +    );
 +}
 diff --git a/frontend/src/components/layout/ModelManagerDialog.tsx b/frontend/src/components/layout/ModelManagerDialog.tsx
@@ -35021,10 +35095,10 @@ index 613ea89d..9933a90d 100644
 +};
 diff --git a/frontend/src/components/layout/ProjectSettingsDialog.tsx b/frontend/src/components/layout/ProjectSettingsDialog.tsx
 new file mode 100644
-index 00000000..93dd5660
+index 00000000..a506558a
 --- /dev/null
 +++ b/frontend/src/components/layout/ProjectSettingsDialog.tsx
-@@ -0,0 +1,262 @@
+@@ -0,0 +1,263 @@
 +/**
 + * ProjectSettingsOverlay —— E1 + G-3：「菜单栏-文件 → 工程设置…」。
 + *
@@ -35044,6 +35118,7 @@ index 00000000..93dd5660
 +import { shallowEqual } from "react-redux";
 +import { useAppSelector } from "../../app/hooks";
 +import { useI18n } from "../../i18n/I18nProvider";
++import { ExitPresence } from "../../hooks/useExitPresence";
 +import { webApi } from "../../services/webviewApi";
 +
 +interface Props {
@@ -35095,8 +35170,6 @@ index 00000000..93dd5660
 +        );
 +    };
 +
-+    if (!open) return null;
-+
 +    const infoRow = (label: string, value: string, title?: string) => (
 +        <Flex align="center" justify="between" gap="3" style={{ minWidth: 0 }}>
 +            <Text size="2" color="gray" style={{ flexShrink: 0 }}>
@@ -35112,29 +35185,30 @@ index 00000000..93dd5660
 +        </Flex>
 +    );
 +
++    /* E35：与菜单/面板同规 —— 出场也要淡出，而不是「啪」地消失。
++       `anim="pane"` 与 `--hs-anim-dur-out-pane` 对齐（时长契约在 `useExitPresence`）。 */
 +    return (
-+        <>
++        <ExitPresence open={open} anim="pane">
++            <>
 +            <div
 +                data-hs-project-backdrop
++                data-hs-modal-backdrop
 +                className="fixed border-0 cursor-pointer"
-+                style={{ inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 60 }}
++                /* E35：背板统一走 `--hs-backdrop` + `--hs-backdrop-blur`（与 Radix 弹窗同源）。
++                   原来是 `rgba(0,0,0,0.45)` 无模糊 ⇒ 与 Radix 弹窗的 `0.35 + blur(2px)` 不同档。 */
++                style={{ inset: 0 }}
 +                onClick={() => onOpenChange(false)}
 +            />
 +            <div
 +                data-hs-project-settings
++                data-hs-modal
 +                role="dialog"
 +                aria-label={tAny("menu_project_settings")}
 +                className="fixed bg-qt-window border border-qt-border text-qt-text"
-+                style={{
-+                    left: 8,
-+                    right: 8,
-+                    top: 64,
-+                    maxHeight: "calc(100vh - 140px)",
-+                    zIndex: 61,
-+                    borderRadius: 12,
-+                    padding: 12,
-+                    overflowY: "auto",
-+                }}
++                /* E35：定位 / 高度上限 / 层级 / 圆角全部收进 `index.css` 的 `[data-hs-modal]`
++                   （原来三处各写一份：top 60 vs 64、maxHeight −150 vs −140、z 60/61，
++                   且与 `@media(max-width:1279px) [role="dialog"]` 的兜底上限打架 ⇒ 底部被切）。 */
++                style={{ left: 8, right: 8, padding: 12, overflowY: "auto" }}
 +            >
 +                <Text size="4" weight="bold" style={{ display: "block" }}>
 +                    {tAny("menu_project_settings")}
@@ -35284,12 +35358,35 @@ index 00000000..93dd5660
 +                    </Button>
 +                </Flex>
 +            </div>
-+        </>
++            </>
++        </ExitPresence>
 +    );
 +}
+diff --git a/frontend/src/components/layout/QuickSearchPopup.tsx b/frontend/src/components/layout/QuickSearchPopup.tsx
+index cabad979..52b6fc37 100644
+--- a/frontend/src/components/layout/QuickSearchPopup.tsx
++++ b/frontend/src/components/layout/QuickSearchPopup.tsx
+@@ -387,7 +387,7 @@ export const QuickSearchPopup: React.FC<QuickSearchPopupProps> = ({ open, onClos
+         <>
+             {/* 全屏透明遮罩层 —— 点击即关闭弹窗 */}
+             <div
+-                className="fixed inset-0 z-[99998]"
++                className="fixed inset-0 z-[calc(var(--hs-z-search)-1)]"
+                 style={{ background: "transparent" }}
+                 onMouseDown={(e) => {
+                     e.stopPropagation();
+@@ -398,7 +398,7 @@ export const QuickSearchPopup: React.FC<QuickSearchPopupProps> = ({ open, onClos
+             />
+             <div
+                 ref={popupRef}
+-                className="fixed z-[99999] flex flex-col"
++                className="fixed z-[var(--hs-z-search)] flex flex-col"
+                 style={{
+                     left: position.x,
+                     top: position.y,
 diff --git a/frontend/src/components/layout/StorageSettingsDialog.tsx b/frontend/src/components/layout/StorageSettingsDialog.tsx
 new file mode 100644
-index 00000000..ccf42cee
+index 00000000..8abd4e35
 --- /dev/null
 +++ b/frontend/src/components/layout/StorageSettingsDialog.tsx
 @@ -0,0 +1,222 @@
@@ -35314,6 +35411,7 @@ index 00000000..ccf42cee
 +import { useAppDispatch } from "../../app/hooks";
 +import { fileBrowserApi } from "../../services/api/fileBrowser";
 +import { loadDirectory } from "../../features/fileBrowser/fileBrowserSlice";
++import { ExitPresence } from "../../hooks/useExitPresence";
 +import { showMobilePanel } from "../../features/session/sessionSlice";
 +
 +interface StorageReport {
@@ -35358,8 +35456,6 @@ index 00000000..ccf42cee
 +        onOpenChange(false);
 +    };
 +
-+    if (!open) return null;
-+
 +    const row = (
 +        label: string,
 +        ok: boolean,
@@ -35380,31 +35476,31 @@ index 00000000..ccf42cee
 +        </Flex>
 +    );
 +
++    /* E35：与菜单/面板同规 —— 出场也要淡出，而不是「啪」地消失。
++       `anim="pane"` 与 `--hs-anim-dur-out-pane` 对齐（时长契约在 `useExitPresence`）。 */
 +    return (
-+        <>
++        <ExitPresence open={open} anim="pane">
++            <>
 +            {/* 背板：点它关闭（与项目里其它浮层一致） */}
 +            <div
 +                data-hs-storage-backdrop
++                data-hs-modal-backdrop
 +                className="fixed border-0 cursor-pointer"
-+                style={{ inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 60 }}
++                /* E35：背板统一走 `--hs-backdrop` + `--hs-backdrop-blur`（与 Radix 弹窗同源）。
++                   原来是 `rgba(0,0,0,0.45)` 无模糊 ⇒ 与 Radix 弹窗的 `0.35 + blur(2px)` 不同档。 */
++                style={{ inset: 0 }}
 +                onClick={() => onOpenChange(false)}
 +            />
 +            <div
 +                data-hs-storage-settings
++                data-hs-modal
 +                role="dialog"
 +                aria-label={tAny("menu_storage_settings")}
 +                className="fixed bg-qt-window border border-qt-border text-qt-text"
-+                style={{
-+                    left: 8,
-+                    right: 8,
-+                    top: 60,
-+                    /* F4：高度按内容自适应（原来 top/bottom 都是固定值，内容少时会撑出一大块空白）。 */
-+                    maxHeight: "calc(100vh - 150px)",
-+                    zIndex: 61,
-+                    borderRadius: 12,
-+                    padding: 12,
-+                    overflowY: "auto",
-+                }}
++                /* E35：定位 / 高度上限 / 层级 / 圆角全部收进 `index.css` 的 `[data-hs-modal]`
++                   （原来三处各写一份：top 60 vs 64、maxHeight −150 vs −140、z 60/61，
++                   且与 `@media(max-width:1279px) [role="dialog"]` 的兜底上限打架 ⇒ 底部被切）。 */
++                style={{ left: 8, right: 8, padding: 12, overflowY: "auto" }}
 +            >
 +                <Text size="4" weight="bold" style={{ display: "block" }}>
 +                    {tAny("menu_storage_settings")}
@@ -35512,11 +35608,12 @@ index 00000000..ccf42cee
 +                    </Button>
 +                </Flex>
 +            </div>
-+        </>
++            </>
++        </ExitPresence>
 +    );
 +}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..7122ddff 100644
+index 242997f5..bc8a3a69 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
 @@ -1,6438 +1,7236 @@
@@ -48535,7 +48632,7 @@ index 242997f5..7122ddff 100644
 +                    {/* 导入模式选择菜单 */}
 +                    {importModeMenu && (
 +                        <div
-+                            className="fixed inset-0 z-[9999]"
++                            className="fixed inset-0 z-[var(--hs-z-menu)]"
 +                            onClick={() => setImportModeMenu(null)}
 +                            onContextMenu={(e) => {
 +                                e.preventDefault();
@@ -48628,7 +48725,7 @@ index 242997f5..7122ddff 100644
 +                    {/* 工程文件（hshp/hsp）拖放操作菜单：打开工程 / 导入工程 */}
 +                    {projectActionMenu && (
 +                        <div
-+                            className="fixed inset-0 z-[9999]"
++                            className="fixed inset-0 z-[var(--hs-z-menu)]"
 +                            onClick={() => setProjectActionMenu(null)}
 +                            onContextMenu={(e) => {
 +                                e.preventDefault();
@@ -49195,6 +49292,19 @@ index 242997f5..7122ddff 100644
 +    );
 +};
 \ No newline at end of file
+diff --git a/frontend/src/components/layout/UndoHistoryPanel.tsx b/frontend/src/components/layout/UndoHistoryPanel.tsx
+index 7aee91e6..e8062b4a 100644
+--- a/frontend/src/components/layout/UndoHistoryPanel.tsx
++++ b/frontend/src/components/layout/UndoHistoryPanel.tsx
+@@ -145,7 +145,7 @@ export const UndoHistoryPanel: React.FC<{
+         <div
+             data-undo-history-panel="1"
+             data-hs-floating-menu="1"
+-            className="fixed z-[500] flex w-[380px] max-w-[calc(100vw-16px)] flex-col rounded border border-qt-border bg-qt-window text-qt-text shadow-xl select-none"
++            className="fixed z-[var(--hs-z-panel)] flex w-[380px] max-w-[calc(100vw-16px)] flex-col rounded border border-qt-border bg-qt-window text-qt-text shadow-xl select-none"
+             style={{ left: position.x, top: position.y, maxHeight: "min(60vh, 520px)" }}
+             onPointerDown={(event) => event.stopPropagation()}
+             onContextMenu={(event) => event.preventDefault()}
 diff --git a/frontend/src/components/layout/longPressArbiter.ts b/frontend/src/components/layout/longPressArbiter.ts
 new file mode 100644
 index 00000000..0bd9ab3b
@@ -59550,6 +59660,19 @@ index 4f078d3c..4ca75efd 100644
      );
  };
  
+diff --git a/frontend/src/components/layout/timeline/GlueContextMenu.tsx b/frontend/src/components/layout/timeline/GlueContextMenu.tsx
+index dc048d82..9afc3d9b 100644
+--- a/frontend/src/components/layout/timeline/GlueContextMenu.tsx
++++ b/frontend/src/components/layout/timeline/GlueContextMenu.tsx
+@@ -12,7 +12,7 @@ export const GlueContextMenu: React.FC<{
+     return (
+         <div
+             data-hs-context-menu="1"
+-            className="fixed z-50 rounded-sm border border-qt-border bg-qt-window text-qt-text shadow-sm"
++            className="fixed z-[var(--hs-z-menu)] rounded-[var(--hs-radius-menu)] border border-qt-border bg-qt-window text-qt-text shadow-sm"
+             style={{ left: x, top: y }}
+         >
+             <button
 diff --git a/frontend/src/components/layout/timeline/TimeRuler.tsx b/frontend/src/components/layout/timeline/TimeRuler.tsx
 index 147331ce..5a625f64 100644
 --- a/frontend/src/components/layout/timeline/TimeRuler.tsx
@@ -61441,7 +61564,7 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..09d45d76 100644
+index c0db2221..fa7aaf38 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
 @@ -1,2297 +1,3143 @@
@@ -66697,7 +66820,7 @@ index c0db2221..09d45d76 100644
 +                    ref={trackCtxMenuRef}
 +                    data-track-ctx-menu
 +                    data-hs-context-menu="1"
-+                    className="fixed z-50 min-w-[140px] rounded border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
++                    className="fixed z-[var(--hs-z-menu)] min-w-[140px] rounded-[var(--hs-radius-menu)] border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
 +                    style={{ left: trackCtxMenu.x, top: trackCtxMenu.y }}
 +                    onPointerDown={(e) => e.stopPropagation()}
 +                >
@@ -67491,7 +67614,7 @@ index 255f26a3..2b5d54c5 100644
 +    );
 +};
 diff --git a/frontend/src/components/layout/timeline/clip/ClipFormantToolWindow.tsx b/frontend/src/components/layout/timeline/clip/ClipFormantToolWindow.tsx
-index 86156915..e5221c1a 100644
+index 86156915..a629215b 100644
 --- a/frontend/src/components/layout/timeline/clip/ClipFormantToolWindow.tsx
 +++ b/frontend/src/components/layout/timeline/clip/ClipFormantToolWindow.tsx
 @@ -52,12 +52,33 @@ export const ClipFormantToolWindow: React.FC<{
@@ -67567,8 +67690,9 @@ index 86156915..e5221c1a 100644
  
      return (
          <div
+-            className="fixed z-[260] rounded-xl border border-qt-border bg-qt-window text-qt-text shadow-2xl"
 +            ref={winRef}
-             className="fixed z-[260] rounded-xl border border-qt-border bg-qt-window text-qt-text shadow-2xl"
++            className="fixed z-[var(--hs-z-panel)] rounded-[var(--hs-radius-modal)] border border-qt-border bg-qt-window text-qt-text shadow-2xl"
              style={{
                  left: position.x,
                  top: position.y,
@@ -82024,7 +82148,7 @@ index 00000000..bbe16b02
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..0611eec7
+index 00000000..ef8530d6
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
 @@ -0,0 +1,1985 @@
@@ -84009,7 +84133,7 @@ index 00000000..0611eec7
 +            aria-label={t("mobile_close_tool_menu")}
 +            onClick={onClose}
 +            className="fixed border-0 cursor-pointer"
-+            style={{ inset: 0, background: "transparent", zIndex: 29 }}
++            style={{ inset: 0, background: "transparent", zIndex: "var(--hs-z-menubar-scrim)" }}
 +        />
 +    );
 +}
@@ -99905,7 +100029,7 @@ index 176638e2..ee7f22c9 100644
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..5f38ae04 100644
+index d42792c8..e775c564 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
 @@ -128,6 +128,22 @@ body,
@@ -99931,10 +100055,66 @@ index d42792c8..5f38ae04 100644
  }
  
  /*
-@@ -268,6 +284,21 @@ textarea {
-     z-index: 1000 !important;
+@@ -243,29 +259,63 @@ textarea {
  }
  
+ /*
+- * 层级约定（高 → 低）：
+- *   快速搜索                99998 / 99999
+- *   导入模式等全屏选择菜单     9999
+- *   模态弹窗（Dialog）       1000  —— 打开时独占交互，盖过「操作记录」面板与菜单
+- *   右键 / 上下文菜单等       999
+- *   工具栏右键菜单            600
+- *   「操作记录」面板          500   —— 高于时间轴瞬态元素（选区框 z-40、握把 z-60 之外的内容）
+- *   时间轴瞬态元素            ≤ 60
++ * 层级约定（高 → 低）—— **令牌化（E35，2026-10-02）**。
++ *
++ * 原来这套只写在注释里，实际取值散在 `2…99999`：同类差 10×（右键菜单 999 vs 9999）、
++ * 同一个文件里两个值（`ActionBar` 600 vs 50）、自绘弹窗只有 60/61（比右键菜单还低 16×）。
++ * 现在**只准用令牌**，新浮层别再写裸数字；要调层级就改这里一处。
++ *
++ *   --hs-z-search       99999  快速搜索（独占最高）
++ *   --hs-z-ghost         9999  拖拽 ghost（语义独立，别再与搜索撞同一个值）
++ *   --hs-z-modal         1000  模态弹窗（Radix + 自绘统一）
++ *   --hs-z-menu           999  右键 / 上下文 / 工具栏下拉
++ *   --hs-z-panel          500  常驻可拖面板（操作记录、共振峰工具窗）
++ *   --hs-z-transient       60  时间轴瞬态（选区 / 握把 / 控制点 / 长按提示）
++ *   --hs-z-menubar         41  手机顶/底栏菜单（受 bar 的层叠上下文约束，不并入 999）
++ *   --hs-z-menubar-scrim   40  手机菜单的透明遮罩
+  *
+  * Radix 的 Dialog / 菜单 portal 本身不带 z-index（靠 DOM 顺序决定层级），
+- * 而「操作记录」是常驻浮层（z-500），不显式分层就会挡住后打开的弹窗与菜单。
+- * 弹层与弹窗同用 1000 时靠 DOM 顺序：后打开的（如弹窗内的下拉）在上。
++ * 而「操作记录」是常驻浮层（500），不显式分层就会挡住后打开的弹窗与菜单。
++ * ⚠️ **Radix 弹层刻意与弹窗同档（1000）**：弹窗内部的下拉/选择框也是 Radix 弹层，
++ * 同档才能靠 DOM 顺序（后 portal 的在上）压住母弹窗；若把它们降到 999 就会**被母弹窗盖住**。
++ * 自绘菜单（999）不参与这个局面 —— 它们不会开在 Radix 弹窗里面。
+  */
++:root {
++    --hs-z-search: 99999;
++    --hs-z-ghost: 9999;
++    --hs-z-modal: 1000;
++    --hs-z-menu: 999;
++    --hs-z-panel: 500;
++    --hs-z-transient: 60;
++    --hs-z-menubar: 41;
++    --hs-z-menubar-scrim: 40;
++}
++
+ .rt-DialogOverlay,
+ .rt-DialogContent {
+-    z-index: 1000 !important;
++    z-index: var(--hs-z-modal) !important;
+ }
+ 
+ .rt-DropdownMenuContent,
+ .rt-SelectContent,
+ .rt-ContextMenuContent,
+ .rt-PopoverContent {
+-    z-index: 1000 !important;
++    z-index: var(--hs-z-modal) !important;
++}
++
 +/* ── HS-MENU-ALIGN（2026-09-24）──────────────────────────────────────────────
 + * 用户口径「菜单别靠左，要靠在临近母菜单的地方」。
 + *
@@ -99948,12 +100128,10 @@ index d42792c8..5f38ae04 100644
 +     * `--hs-menu-anchor`（见该文件里的 openMenuAt）。这样菜单能左对齐母菜单、右边刚好贴屏幕边，
 +     * 而不必因为"放不下"被 Radix 整体左推（用户报的「菜单别靠左」就是这个）。 */
 +    max-width: calc(100vw - var(--hs-menu-anchor, 0px) - 8px) !important;
-+}
-+
+ }
+ 
  .rt-DialogContent,
- .rt-DropdownMenuContent,
- .rt-SelectContent,
-@@ -469,3 +500,971 @@ textarea {
+@@ -469,3 +519,1042 @@ textarea {
      max-width: 400px;
      tab-size: 4;
  }
@@ -100883,6 +101061,71 @@ index d42792c8..5f38ae04 100644
 +    }
 +}
 +
++/* ── E35 统一浮层的落地规则（2026-10-02）───────────────────────────────────
++ * 用户口径：「同类菜单/窗口用相同的打开动画、背景处理、控件样式、字号、描述词」，
++ * 并点名「**储存设置的窗口位置、背景模糊、层级顺序都有问题**，不要只做这一例」。
++ * 全量盘点见 `docs/19-设计一致性盘点.md`（48 个浮层 / 8 条不一致）。这里只落**令牌与规则**，
++ * 各处组件改成挂 `data-hs-*` 标记、不再各写一份内联。
++ *
++ * 外观令牌（背板 / 圆角 / 字号）：浮层只准用这些，别再写 `rgba(0,0,0,0.45)` 这类第三档。 */
++:root {
++    /* 背板：模态档（弹窗 + 全屏模态）统一用它 —— 与 Radix `.rt-DialogOverlay` 同源 */
++    --hs-backdrop: var(--qt-overlay);
++    --hs-backdrop-blur: blur(2px);
++    --hs-radius-modal: 12px;
++    --hs-radius-menu: 8px;
++    --hs-radius-pill: 999px;
++    --hs-font-menu-item: 13.5px;
++    --hs-font-menu-title: 12px;
++    /* 自绘弹窗（无 portal、无滚动锁 ⇒ 必须自己定位）的顶边基准与高度上限。
++       原来三处硬编码 `top:60` / `top:64` + `calc(100vh - 150px)` / `-140px`，互相不一致；
++       且横屏（视口 = 屏幕 − 刘海，见 docs/17 §E28）与竖屏（原生 padding 收窄视口）下
++       以像素为基准都不靠谱。改成令牌 + `dvh`，三处共用一套。 */
++    --hs-modal-top: 56px;
++    --hs-modal-max-h: calc(100dvh - var(--hs-modal-top) - 16px);
++}
++
++/*
++ * 自绘模态弹窗（`StorageSettingsDialog` / `ProjectSettingsDialog` / `MetronomeSettingsOverlay`）。
++ *
++ * ① 定位 / 层级 / 高度上限的**唯一**出处 —— 组件里只留 `left/right: 8` 与内边距。
++ * ② 🔴 选择器权重与 `@media (max-width: 1279px) [role="dialog"]`（上面的兜底）**相同**，
++ *    但本规则在文件里**更靠后** ⇒ 能压过它。不这么做就会出现"内层 `maxHeight` + 外层
++ *    `100dvh - 16px` **双上限打架**"：弹窗从 `top:60` 起、却允许长到 `dvh-16`
++ *    ⇒ **底部被切到屏幕外**（用户报的「窗口位置有问题」实测就是它）。
++ * ③ 入场**只做淡入**（不用 `hs-menu-in` 的 transform）：本弹窗内含 `position: fixed` 的背板，
++ *    容器一旦有 transform 就成了包含块 ⇒ 背板会缩到面板大小（E22 注释①的同一个坑）。 */
++[data-hs-modal] {
++    top: var(--hs-modal-top);
++    max-height: var(--hs-modal-max-h) !important;
++    z-index: var(--hs-z-modal) !important;
++    border-radius: var(--hs-radius-modal);
++    animation: hs-fade-in var(--hs-anim-dur-pane) var(--hs-anim-ease) both;
++}
++
++[data-hs-modal-backdrop] {
++    z-index: calc(var(--hs-z-modal) - 1);
++    background: var(--hs-backdrop);
++    backdrop-filter: var(--hs-backdrop-blur);
++}
++
++/* 全屏模态（`MenuBar` 的导入模式选择 / 多音轨媒体选择）：遮罩 + 卡片同款 */
++[data-hs-modal-scrim] {
++    z-index: var(--hs-z-modal);
++    background: var(--hs-backdrop);
++    backdrop-filter: var(--hs-backdrop-blur);
++}
++
++[data-hs-modal-card] {
++    border-radius: var(--hs-radius-modal);
++    animation: hs-fade-in var(--hs-anim-dur-pane) var(--hs-anim-ease) both;
++}
++
++/* 自绘弹窗的出场（`data-hs-leaving` 由 `hooks/useExitPresence.tsx` 打） */
++[data-hs-modal][data-hs-leaving] {
++    animation: hs-fade-out var(--hs-anim-dur-out-pane) var(--hs-anim-ease) both;
++}
++
 +/* 开关：探针对照 / 用户嫌晃眼 */
 +body[data-hs-no-anim] [role="menu"],
 +body[data-hs-no-anim] .rt-DropdownMenuContent,
@@ -100890,7 +101133,10 @@ index d42792c8..5f38ae04 100644
 +body[data-hs-no-anim] .rt-PopoverContent,
 +body[data-hs-no-anim] .rt-SelectContent,
 +body[data-hs-no-anim] [data-hs-pane],
-+body[data-hs-no-anim] [data-hs-clip-actions] {
++body[data-hs-no-anim] [data-hs-clip-actions],
++body[data-hs-no-anim] [data-hs-modal],
++body[data-hs-no-anim] [data-hs-modal-card],
++body[data-hs-no-anim] [data-hs-modal-scrim] {
 +    animation: none !important;
 +}
 +
@@ -100901,7 +101147,10 @@ index d42792c8..5f38ae04 100644
 +    .rt-PopoverContent,
 +    .rt-SelectContent,
 +    [data-hs-pane],
-+    [data-hs-clip-actions] {
++    [data-hs-clip-actions],
++    [data-hs-modal],
++    [data-hs-modal-card],
++    [data-hs-modal-scrim] {
 +        animation: none !important;
 +    }
 +}
