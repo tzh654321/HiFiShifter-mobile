@@ -19609,10 +19609,10 @@ index 00000000..56595a00
 +}
 diff --git a/frontend/src/components/layout/ModelManagerDialog.tsx b/frontend/src/components/layout/ModelManagerDialog.tsx
 new file mode 100644
-index 00000000..e932247d
+index 00000000..d1176ae8
 --- /dev/null
 +++ b/frontend/src/components/layout/ModelManagerDialog.tsx
-@@ -0,0 +1,174 @@
+@@ -0,0 +1,189 @@
 +/**
 + * 可选模型管理对话框（`docs/02` §3.3 / ADR-012）。
 + *
@@ -19626,14 +19626,14 @@ index 00000000..e932247d
 + * 合计 < 1 KB）继续随包，只有大权重需要用户提供 —— 这样就不依赖 SAF 的"选目录"
 + * （`pick_folder` 还没实现，见 `docs/11` §7.2）。
 + *
-+ * ⚠️ 文案暂时硬编码中文（与本移植的移动端外壳 `components/mobile/*` 一致）。
-+ * i18n（`src/i18n/*.ts` 共 5 个语种）留作后续统一补。
++ * 文案走 i18n（`src/i18n/*.ts` 共 5 个语种，E36 补齐）。
 + */
 +
 +import { useCallback, useEffect, useState } from "react";
 +import { Button, Dialog, Flex, Text } from "@radix-ui/themes";
 +import type { OptionalModelStatus } from "../../types/api";
 +import { coreApi } from "../../services/api/core";
++import { useI18n } from "../../i18n/I18nProvider";
 +
 +interface ModelManagerDialogProps {
 +    open: boolean;
@@ -19646,6 +19646,14 @@ index 00000000..e932247d
 +}
 +
 +export function ModelManagerDialog({ open, onOpenChange }: ModelManagerDialogProps) {
++    const { t } = useI18n();
++    const tAny = t as (key: string) => string;
++    /** 带占位符的文案：i18n 是扁平 key→string 映射（没有参数表），这里做一次 `{name}` 替换。 */
++    const tf = (key: string, vars: Record<string, string | number>): string => {
++        let out = tAny(key);
++        for (const [k, v] of Object.entries(vars)) out = out.replace(`{${k}}`, String(v));
++        return out;
++    };
 +    const [models, setModels] = useState<OptionalModelStatus[]>([]);
 +    const [loading, setLoading] = useState(false);
 +    const [busyId, setBusyId] = useState<string | null>(null);
@@ -19680,15 +19688,18 @@ index 00000000..e932247d
 +        try {
 +            const res = await coreApi.importOptionalModel(id);
 +            if (res.canceled) {
-+                setMessage({ kind: "warn", text: "已取消选择。" });
++                setMessage({ kind: "warn", text: tAny("model_manager_cancelled") });
 +            } else if (!res.ok) {
-+                setMessage({ kind: "err", text: res.error ?? "导入失败" });
++                setMessage({ kind: "err", text: res.error ?? tAny("model_manager_import_failed") });
 +            } else {
 +                setMessage({
 +                    kind: "ok",
-+                    text: `导入完成（${formatMb(res.sizeBytes)}）${
-+                        res.activated ? "，已即时生效" : "，可能需要重启应用"
-+                    }。`,
++                    text: tf(
++                        res.activated
++                            ? "model_manager_import_done_live"
++                            : "model_manager_import_done_restart",
++                        { size: formatMb(res.sizeBytes) },
++                    ),
 +                });
 +            }
 +            await reload();
@@ -19704,21 +19715,21 @@ index 00000000..e932247d
 +    return (
 +        <Dialog.Root open={open} onOpenChange={onOpenChange}>
 +            <Dialog.Content style={{ maxWidth: 560 }} onKeyDown={(e) => e.stopPropagation()}>
-+                <Dialog.Title>模型管理</Dialog.Title>
++                <Dialog.Title>{tAny("model_manager_title")}</Dialog.Title>
 +                <Dialog.Description size="2" color="gray">
-+                    内置的声码器不可更换；下面两个是可选模型，缺失时会相应降级。
++                    {tAny("model_manager_desc")}
 +                </Dialog.Description>
 +
 +                <Flex direction="column" gap="3" mt="4">
 +                    {loadError ? (
 +                        <Text size="2" color="red">
-+                            读取状态失败：{loadError}
++                            {tf("model_manager_load_failed", { err: loadError ?? "" })}
 +                        </Text>
 +                    ) : null}
 +
 +                    {!supported ? (
 +                        <Text size="2" color="gray">
-+                            当前平台不支持本地导入（桌面端请直接把模型放进资源目录的 models/ 下）。
++                            {tAny("model_manager_unsupported")}
 +                        </Text>
 +                    ) : null}
 +
@@ -19740,9 +19751,9 @@ index 00000000..e932247d
 +                                </Text>
 +                                <Text size="1" color={m.present ? "green" : "gray"}>
 +                                    {m.present
-+                                        ? `已安装 ${formatMb(m.sizeBytes)}`
-+                                        : `未安装（需要一个 ${m.fileName}，约 ${m.approxMb} MB）`}
-+                                    {m.present && !m.active ? "（重启后生效）" : ""}
++                                        ? tf("model_manager_installed", { size: formatMb(m.sizeBytes) })
++                                        : tf("model_manager_not_installed", { file: m.fileName, mb: m.approxMb })}
++                                    {m.present && !m.active ? tAny("model_manager_restart_needed") : ""}
 +                                </Text>
 +                            </Flex>
 +                            <Button
@@ -19751,7 +19762,11 @@ index 00000000..e932247d
 +                                disabled={!supported || busyId !== null || loading}
 +                                onClick={() => void handleImport(m.id)}
 +                            >
-+                                {busyId === m.id ? "等待选择…" : m.present ? "重新导入" : "从文件导入"}
++                                {busyId === m.id
++                                    ? tAny("model_manager_waiting_pick")
++                                    : m.present
++                                      ? tAny("model_manager_reimport")
++                                      : tAny("model_manager_import_from_file")}
 +                            </Button>
 +                        </Flex>
 +                    ))}
@@ -19772,14 +19787,14 @@ index 00000000..e932247d
 +                    ) : null}
 +
 +                    <Text size="1" color="gray">
-+                        导入的模型存放在应用私有目录，卸载应用即一并删除；导入后无需联网。
++                        {tAny("model_manager_hint")}
 +                    </Text>
 +                </Flex>
 +
 +                <Flex justify="end" gap="2" mt="4">
 +                    <Dialog.Close>
 +                        <Button variant="soft" color="gray">
-+                            关闭
++                            {tAny("close")}
 +                        </Button>
 +                    </Dialog.Close>
 +                </Flex>
@@ -35093,6 +35108,23 @@ index 613ea89d..9933a90d 100644
 +        </Flex>
 +    );
 +};
+diff --git a/frontend/src/components/layout/PitchSnapSettingsDialog.tsx b/frontend/src/components/layout/PitchSnapSettingsDialog.tsx
+index e9d70c04..f9bcf43d 100644
+--- a/frontend/src/components/layout/PitchSnapSettingsDialog.tsx
++++ b/frontend/src/components/layout/PitchSnapSettingsDialog.tsx
+@@ -104,9 +104,11 @@ export function PitchSnapSettingsDialog({ open, onOpenChange }: Props) {
+                 </Flex>
+ 
+                 <Flex justify="end" mt="4">
++                    {/* E36（用户 2026-10-01 口径）：**「关闭」= 调完就已经生效；「保存」= 还能取消**。
++                        本弹窗所有选项都是即时生效（数字框 `onBlur` 就提交）⇒ 收尾按钮是「关闭」而不是「确定」。 */}
+                     <Dialog.Close>
+                         <Button variant="soft" color="gray" onClick={commitTolerance}>
+-                            {tAny("ok")}
++                            {tAny("close")}
+                         </Button>
+                     </Dialog.Close>
+                 </Flex>
 diff --git a/frontend/src/components/layout/ProjectSettingsDialog.tsx b/frontend/src/components/layout/ProjectSettingsDialog.tsx
 new file mode 100644
 index 00000000..a506558a
@@ -35384,6 +35416,40 @@ index cabad979..52b6fc37 100644
                  style={{
                      left: position.x,
                      top: position.y,
+diff --git a/frontend/src/components/layout/SnapGridSettingsDialog.tsx b/frontend/src/components/layout/SnapGridSettingsDialog.tsx
+index 95be0584..2974c8ec 100644
+--- a/frontend/src/components/layout/SnapGridSettingsDialog.tsx
++++ b/frontend/src/components/layout/SnapGridSettingsDialog.tsx
+@@ -622,9 +622,11 @@ export function SnapGridSettingsDialog({ open, onOpenChange }: Props) {
+                     </Flex>
+                 </ScrollArea>
+                 <Flex justify="end" mt="4">
++                    {/* E36（用户 2026-10-01 口径）：**「关闭」= 调完就已经生效；「保存」= 还能取消**。
++                        本弹窗所有选项都是即时生效（数字框 `onBlur` 就提交）⇒ 收尾按钮是「关闭」而不是「确定」。 */}
+                     <Dialog.Close>
+                         <Button variant="soft" color="gray">
+-                            {tAny("ok")}
++                            {tAny("close")}
+                         </Button>
+                     </Dialog.Close>
+                 </Flex>
+diff --git a/frontend/src/components/layout/SplitTransitionSettingsDialog.tsx b/frontend/src/components/layout/SplitTransitionSettingsDialog.tsx
+index c6a3ff1b..5079b3b4 100644
+--- a/frontend/src/components/layout/SplitTransitionSettingsDialog.tsx
++++ b/frontend/src/components/layout/SplitTransitionSettingsDialog.tsx
+@@ -313,9 +313,11 @@ export function SplitTransitionSettingsDialog({ open, onOpenChange }: Props) {
+                 </Flex>
+ 
+                 <Flex justify="end" mt="4">
++                    {/* E36（用户 2026-10-01 口径）：**「关闭」= 调完就已经生效；「保存」= 还能取消**。
++                        本弹窗所有选项都是即时生效（数字框 `onBlur` 就提交）⇒ 收尾按钮是「关闭」而不是「确定」。 */}
+                     <Dialog.Close>
+                         <Button variant="soft" color="gray" onClick={commitDuration}>
+-                            {tAny("ok")}
++                            {tAny("close")}
+                         </Button>
+                     </Dialog.Close>
+                 </Flex>
 diff --git a/frontend/src/components/layout/StorageSettingsDialog.tsx b/frontend/src/components/layout/StorageSettingsDialog.tsx
 new file mode 100644
 index 00000000..8abd4e35
@@ -82148,10 +82214,10 @@ index 00000000..bbe16b02
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..ef8530d6
+index 00000000..27456828
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1985 @@
+@@ -0,0 +1,1986 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -83699,7 +83765,8 @@ index 00000000..ef8530d6
 +                            </span>
 +                            <span
 +                                style={{
-+                                    fontSize: 13,
++                                    /* E36（#8）：与工具菜单/顶栏菜单同字号（令牌 13.5px） */
++                                    fontSize: "var(--hs-font-menu-item)",
 +                                    fontWeight: s.editParam === row.id ? 600 : 400,
 +                                    color:
 +                                        s.editParam === row.id
@@ -84139,7 +84206,7 @@ index 00000000..ef8530d6
 +}
 diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
 new file mode 100644
-index 00000000..d8e72371
+index 00000000..a9a8d77b
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileTopBar.tsx
 @@ -0,0 +1,981 @@
@@ -85017,7 +85084,7 @@ index 00000000..d8e72371
 +                                        style={{
 +                                            minHeight: 34,
 +                                            padding: "0 12px",
-+                                            fontSize: 13.5,
++                                            fontSize: "var(--hs-font-menu-item)",
 +                                            textAlign: "left",
 +                                            fontWeight: opt.checked ? 600 : 400,
 +                                        }}
@@ -85035,7 +85102,7 @@ index 00000000..d8e72371
 +                                    style={{
 +                                        minHeight: 34,
 +                                        padding: "0 12px",
-+                                        fontSize: 13.5,
++                                        fontSize: "var(--hs-font-menu-item)",
 +                                        textAlign: "left",
 +                                        opacity: 0.6,
 +                                        borderTop: "1px solid var(--qt-border, rgba(255,255,255,0.14))",
@@ -85076,7 +85143,7 @@ index 00000000..d8e72371
 +                                        style={{
 +                                            minHeight: 34,
 +                                            padding: "0 12px",
-+                                            fontSize: 13.5,
++                                            fontSize: "var(--hs-font-menu-item)",
 +                                            textAlign: "left",
 +                                            opacity: item.sub || item.action ? 1 : 0.45,
 +                                        }}
@@ -99317,7 +99384,7 @@ index 00000000..b21518ca
 +    return flag ? true : lagged;
 +}
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..a7b17b2d 100644
+index 858bca55..0dcec9b9 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
 @@ -1,9 +1,57 @@
@@ -99386,7 +99453,7 @@ index 858bca55..a7b17b2d 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1528,76 @@ export const enUS = {
+@@ -1479,4 +1528,91 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -99462,9 +99529,24 @@ index 858bca55..a7b17b2d 100644
 +    fb_shizuku_copied_hint: "appops command copied. Paste it into Shizuku's rish shell, or use the Settings button above.",
 +    fb_shizuku_authorize: "Authorize Shizuku",
 +
++    model_manager_title: "Model manager",
++    model_manager_desc: "The built-in vocoder cannot be replaced. The two models below are optional; the app degrades gracefully when they are missing.",
++    model_manager_hint: "Imported models are stored in the app's private directory and are deleted together with the app. No network access is needed after importing.",
++    model_manager_load_failed: "Failed to read status: {err}",
++    model_manager_unsupported: "Local import is not supported on this platform (on desktop, put the model into the models/ folder of the resource directory).",
++    model_manager_installed: "Installed {size}",
++    model_manager_not_installed: "Not installed (needs a {file}, about {mb} MB)",
++    model_manager_restart_needed: "(takes effect after restart)",
++    model_manager_waiting_pick: "Waiting for selection…",
++    model_manager_reimport: "Re-import",
++    model_manager_import_from_file: "Import from file",
++    model_manager_cancelled: "Selection cancelled.",
++    model_manager_import_failed: "Import failed",
++    model_manager_import_done_live: "Imported ({size}); effective immediately",
++    model_manager_import_done_restart: "Imported ({size}); an app restart may be required",
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..3ffddb89 100644
+index ef08ef81..dab20e73 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
 @@ -1,9 +1,57 @@
@@ -99533,7 +99615,7 @@ index ef08ef81..3ffddb89 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1541,68 @@ export const jaJP = {
+@@ -1492,4 +1541,91 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -99601,9 +99683,32 @@ index ef08ef81..3ffddb89 100644
 +    fb_shizuku_copied_hint: "appops コマンドをコピーしました。Shizuku の rish 端末に貼り付けて実行するか、上の設定ボタンをお使いください。",
 +    fb_shizuku_authorize: "Shizuku を許可",
 +
++    model_manager_title: "モデル管理",
++    model_manager_desc: "内蔵のボコーダーは交換できません。以下の 2 つは任意のモデルで、無い場合はそれに応じて機能が低下します。",
++    model_manager_hint: "インポートしたモデルはアプリのプライベートディレクトリに保存され、アプリをアンインストールすると一緒に削除されます。インポート後にネット接続は不要です。",
++    model_manager_load_failed: "状態の読み取りに失敗：{err}",
++    model_manager_unsupported: "このプラットフォームではローカルインポートに対応していません（デスクトップではモデルをリソースディレクトリの models/ に直接置いてください）。",
++    model_manager_installed: "インストール済み {size}",
++    model_manager_not_installed: "未インストール（{file} が必要、約 {mb} MB）",
++    model_manager_restart_needed: "（再起動後に有効）",
++    model_manager_waiting_pick: "選択待ち…",
++    model_manager_reimport: "再インポート",
++    model_manager_import_from_file: "ファイルからインポート",
++    model_manager_cancelled: "選択をキャンセルしました。",
++    model_manager_import_failed: "インポートに失敗しました",
++    model_manager_import_done_live: "インポート完了（{size}）、すぐに有効です",
++    model_manager_import_done_restart: "インポート完了（{size}）、アプリの再起動が必要な場合があります",
++    mobile_tool_restore: "復元",
++    mobile_tool_select: "選択",
++    mobile_tool_drag: "ドラッグ",
++    ctx_paste: "貼り付け",
++    menu_view_panel_timeline: "タイムラインパネル",
++    menu_view_panel_params: "パラメーターパネル",
++    menu_view_panel_files: "ファイルブラウザー",
++    menu_view_panel_notes: "ノート",
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..2539f375 100644
+index 508fcb25..983ccee7 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
 @@ -1,9 +1,57 @@
@@ -99672,7 +99777,7 @@ index 508fcb25..2539f375 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1518,68 @@ export const koKR = {
+@@ -1469,4 +1518,91 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -99740,9 +99845,104 @@ index 508fcb25..2539f375 100644
 +    fb_shizuku_copied_hint: "appops 명령을 복사했습니다. Shizuku rish 터미널에 붙여 실행하거나 위 설정 버튼을 사용하세요.",
 +    fb_shizuku_authorize: "Shizuku 권한 부여",
 +
++    model_manager_title: "모델 관리",
++    model_manager_desc: "내장 보코더는 교체할 수 없습니다. 아래 두 개는 선택 모델이며, 없으면 그에 따라 기능이 저하됩니다.",
++    model_manager_hint: "가져온 모델은 앱 전용 디렉터리에 저장되고 앱을 삭제하면 함께 삭제됩니다. 가져온 뒤에는 네트워크가 필요하지 않습니다.",
++    model_manager_load_failed: "상태를 읽지 못했습니다: {err}",
++    model_manager_unsupported: "이 플랫폼에서는 로컬 가져오기를 지원하지 않습니다(데스크톱에서는 모델을 리소스 디렉터리의 models/ 에 직접 넣으세요).",
++    model_manager_installed: "설치됨 {size}",
++    model_manager_not_installed: "설치되지 않음({file} 필요, 약 {mb} MB)",
++    model_manager_restart_needed: "(재시작 후 적용)",
++    model_manager_waiting_pick: "선택 대기 중…",
++    model_manager_reimport: "다시 가져오기",
++    model_manager_import_from_file: "파일에서 가져오기",
++    model_manager_cancelled: "선택이 취소되었습니다.",
++    model_manager_import_failed: "가져오기 실패",
++    model_manager_import_done_live: "가져오기 완료({size}), 즉시 적용됨",
++    model_manager_import_done_restart: "가져오기 완료({size}), 앱 재시작이 필요할 수 있습니다",
++    mobile_tool_restore: "복원",
++    mobile_tool_select: "선택",
++    mobile_tool_drag: "드래그",
++    ctx_paste: "붙여넣기",
++    menu_view_panel_timeline: "트랙 패널",
++    menu_view_panel_params: "파라미터 패널",
++    menu_view_panel_files: "파일 브라우저",
++    menu_view_panel_notes: "노트",
  } as const;
+diff --git a/frontend/src/i18n/locales.test.ts b/frontend/src/i18n/locales.test.ts
+new file mode 100644
+index 00000000..08cfda7e
+--- /dev/null
++++ b/frontend/src/i18n/locales.test.ts
+@@ -0,0 +1,66 @@
++/**
++ * i18n 语种完整性不变量（E36 新增）。
++ *
++ * 【背景】`i18n/I18nProvider.tsx` 的取值是 `localeMessages[key] ?? messages["en-US"][key]`
++ * —— **缺 key 时静默回退英文**。这很方便，但也意味着"某语种少翻译了几条"**永远不会报错**，
++ * 只会在那几处 UI 上突然冒出英文。实测 2026-10-02：`zh-TW` / `ja-JP` / `ko-KR` 各比
++ * `en-US` 少 8 个 key（`mobile_tool_select`、`menu_view_panel_*`、`ctx_paste` …），
++ * 全是前几轮新加文案时只补了 `en-US` + `zh-CN` 留下的。
++ *
++ * ⇒ 这里把"五语种 key 集合完全一致"钉成**不变量**：以后任何一轮加了新文案，
++ * 忘了补某个语种就会在单测里红。
++ *
++ * ⚠️ `MessageKey` 的类型取自 **`en-US`**（见 `i18n/messages.ts`），所以 en-US 是基准。
++ */
++import { describe, expect, it } from "vitest";
++import { messages, type Locale } from "./messages";
++
++const BASE: Locale = "en-US";
++const LOCALES = Object.keys(messages) as Locale[];
++
++describe("i18n 语种完整性", () => {
++    it("每个语种与 en-US 的 key 集合完全一致（缺/多都不许）", () => {
++        const baseKeys = Object.keys(messages[BASE]);
++        const problems: string[] = [];
++        for (const loc of LOCALES) {
++            if (loc === BASE) continue;
++            const keys = new Set(Object.keys(messages[loc]));
++            const missing = baseKeys.filter((k) => !keys.has(k));
++            const extra = Object.keys(messages[loc]).filter((k) => !(k in messages[BASE]));
++            if (missing.length > 0 || extra.length > 0) {
++                problems.push(
++                    `${loc}: 缺 ${missing.length} 个${missing.length ? ` [${missing.slice(0, 8).join(", ")}]` : ""}` +
++                        ` / 多 ${extra.length} 个${extra.length ? ` [${extra.slice(0, 8).join(", ")}]` : ""}`,
++                );
++            }
++        }
++        expect(problems.join("\n")).toBe("");
++    });
++
++    it("没有空字符串（空值会让 UI 静默变成空白，比缺 key 更难查）", () => {
++        const empty: string[] = [];
++        for (const loc of LOCALES) {
++            for (const [key, value] of Object.entries(messages[loc])) {
++                if (typeof value === "string" && value.trim() === "") empty.push(`${loc}.${key}`);
++            }
++        }
++        expect(empty.join("\n")).toBe("");
++    });
++
++    it("带占位符的 key：五个语种用的是同一个占位符集合", () => {
++        /* `ModelManagerDialog` 那类用 `tf(key, vars)` 做 `{name}` 替换 ⇒ 若某语种把
++           `{size}` 写成了别的名字，运行时会**静默留着一个 {size} 字面量**。 */
++        const ph = (s: string) => [...s.matchAll(/\{([a-zA-Z0-9_]+)\}/g)].map((m) => m[1]).sort().join(",");
++        const problems: string[] = [];
++        for (const [key, baseVal] of Object.entries(messages[BASE])) {
++            if (typeof baseVal !== "string" || !baseVal.includes("{")) continue;
++            const want = ph(baseVal);
++            for (const loc of LOCALES) {
++                if (loc === BASE) continue;
++                const got = ph(String(messages[loc][key as keyof (typeof messages)[typeof BASE]] ?? ""));
++                if (got !== want) problems.push(`${loc}.${key}: 期望 {${want}} 实得 {${got}}`);
++            }
++        }
++        expect(problems.join("\n")).toBe("");
++    });
++});
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..7bd00d40 100644
+index 8bcc3071..7b7d9f74 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
 @@ -1,9 +1,57 @@
@@ -99811,7 +100011,7 @@ index 8bcc3071..7bd00d40 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1493,76 @@ export const zhCN = {
+@@ -1444,4 +1493,91 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -99887,9 +100087,24 @@ index 8bcc3071..7bd00d40 100644
 +    fb_shizuku_copied_hint: "已复制命令。注意：① 必须整条粘贴（别漏开头的 appops set 包名）；② 只能在有 shell 权限的地方执行——Shizuku 的 rish 终端或 adb shell；③ 若只是要访问共享存储，点上方「开启全盘访问（设置）」即可，无需终端（但那个权限读不到 Android/data）。",
 +    fb_shizuku_authorize: "授权 Shizuku",
 +
++    model_manager_title: "模型管理",
++    model_manager_desc: "内置的声码器不可更换；下面两个是可选模型，缺失时会相应降级。",
++    model_manager_hint: "导入的模型存放在应用私有目录，卸载应用即一并删除；导入后无需联网。",
++    model_manager_load_failed: "读取状态失败：{err}",
++    model_manager_unsupported: "当前平台不支持本地导入（桌面端请直接把模型放进资源目录的 models/ 下）。",
++    model_manager_installed: "已安装 {size}",
++    model_manager_not_installed: "未安装（需要一个 {file}，约 {mb} MB）",
++    model_manager_restart_needed: "（重启后生效）",
++    model_manager_waiting_pick: "等待选择…",
++    model_manager_reimport: "重新导入",
++    model_manager_import_from_file: "从文件导入",
++    model_manager_cancelled: "已取消选择。",
++    model_manager_import_failed: "导入失败",
++    model_manager_import_done_live: "导入完成（{size}），已即时生效",
++    model_manager_import_done_restart: "导入完成（{size}），可能需要重启应用",
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..ee7f22c9 100644
+index 176638e2..19486b79 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
 @@ -1,10 +1,58 @@
@@ -99959,7 +100174,7 @@ index 176638e2..ee7f22c9 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1495,68 @@ export const zhTW = {
+@@ -1446,4 +1495,91 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -100027,9 +100242,32 @@ index 176638e2..ee7f22c9 100644
 +    fb_shizuku_copied_hint: "已把 appops 命令複製到剪貼簿：可在 Shizuku 的 rish 終端貼上執行；或點上方「開啟全盤存取（設定）」。",
 +    fb_shizuku_authorize: "授權 Shizuku",
 +
++    model_manager_title: "模型管理",
++    model_manager_desc: "內建的聲碼器不可更換；下面兩個是選用模型，缺少時會相應降級。",
++    model_manager_hint: "匯入的模型存放在應用程式私有目錄，卸載應用程式即一併刪除；匯入後無需連網。",
++    model_manager_load_failed: "讀取狀態失敗：{err}",
++    model_manager_unsupported: "目前平台不支援本機匯入（桌面端請直接把模型放進資源目錄的 models/ 下）。",
++    model_manager_installed: "已安裝 {size}",
++    model_manager_not_installed: "未安裝（需要一個 {file}，約 {mb} MB）",
++    model_manager_restart_needed: "（重啟後生效）",
++    model_manager_waiting_pick: "等待選擇…",
++    model_manager_reimport: "重新匯入",
++    model_manager_import_from_file: "從檔案匯入",
++    model_manager_cancelled: "已取消選擇。",
++    model_manager_import_failed: "匯入失敗",
++    model_manager_import_done_live: "匯入完成（{size}），已即時生效",
++    model_manager_import_done_restart: "匯入完成（{size}），可能需要重啟應用程式",
++    mobile_tool_restore: "還原",
++    mobile_tool_select: "選擇",
++    mobile_tool_drag: "拖曳",
++    ctx_paste: "貼上",
++    menu_view_panel_timeline: "軌道面板",
++    menu_view_panel_params: "參數面板",
++    menu_view_panel_files: "檔案瀏覽器",
++    menu_view_panel_notes: "記事本",
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..e775c564 100644
+index d42792c8..cc4a4df0 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
 @@ -128,6 +128,22 @@ body,
@@ -100131,7 +100369,7 @@ index d42792c8..e775c564 100644
  }
  
  .rt-DialogContent,
-@@ -469,3 +519,1042 @@ textarea {
+@@ -469,3 +519,1044 @@ textarea {
      max-width: 400px;
      tab-size: 4;
  }
@@ -100570,7 +100808,9 @@ index d42792c8..e775c564 100644
 +    border-radius: 6px;
 +    background: transparent;
 +    color: var(--qt-text);
-+    font-size: 12px;
++    /* E36（#8）：工具菜单（选择/绘制）原来写死 12px，而手机顶栏菜单 13.5、底栏参数菜单 13
++       ⇒ 三个"同一家的菜单"三种字号。统一走令牌（13.5px）。 */
++    font-size: var(--hs-font-menu-item);
 +    line-height: 1;
 +    text-align: left;
 +    cursor: pointer;

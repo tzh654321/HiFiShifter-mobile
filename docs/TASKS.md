@@ -4651,3 +4651,73 @@ body[data-hs-header-collapsed="1"] div:has(> [data-track-list-panel]) {  /* 外�
 `ModelManagerDialog` 硬编码中文（要 4 key × 5 locale）· P1-4 的 key 收敛（改名牵动各语言与探针文案）·
 P1-5 字号（令牌已备，建议与"菜单族统一"一起做）· P2-7 宽度上限散乱（属内容决定宽度）·
 浮条族 z 仍是裸数字（值恰好与瞬态档一致，收益低）。
+
+---
+
+## 🧭 E36（2026-10-02 晚）：用户点名要做的三条 + 顺手清掉 i18n 漂移
+
+用户在这一轮的回复里点了几条：
+① 「#2 现在的版本对齐了」（**轨道头对齐复测通过** —— E32 收工）；
+② 「#4 你理解是对的」（**双击轨道 ⇒ 参数面板淡入**，语义确认）；
+③ 「#5 可以改，**关闭与保存的区别在于：后者能取消，前者是在调完选项后就已经生效的**」；
+④ 「#7 需要补」（`ModelManagerDialog` 多语言）；
+⑤ 「#8 你说的是哪三个菜单的字号」。
+
+### ① #10 双击轨道的分屏淡入 —— **实现本来就是对的，是探针点错了地方**
+
+`TimelinePanel.tsx` 的容器级 `onTrackDblClickPhone`（`host.getContainer()` 上监听 `dblclick`，
+仅 `<600px` ⇒ `showMobilePanel("params")`）一直在。而 `_probe-e30-pane-anim.mjs` 原来双击的是
+**`[data-hs-track-row]` 的中心** —— 那是**左侧轨道头**（`TrackList`）里的行，事件根本到不了容器
+⇒ 这条一直**假红**（`TASKS` 里记的"B 段前置不干净、未定论"就是这个）。
+
+修了三处（都在探针里）：
+1. 双击目标改成**泳道本身**（纵向取轨道行中心、横向取容器中部偏右）；
+2. 前置改为 `ensureClosed('params')` —— **`hs-mobile-close-panel` 是 toggle 语义**，
+   原来"对已关闭的面板派发一次"等于把它**打开** ⇒ "关干净后"根本没关掉（`sampleAfterOpen`
+   量到的是上一次播完留下的 `finished`，判据自欺）；
+3. 断言改成**采样一段 opacity**（只看 `animationName` 会被"CSS 规则命中"骗）。
+
+**判据 `_probe-e30-pane-anim.mjs`（模拟器）—— 2 / 2**：
+```
+✅ E30-A 视图菜单开面板  ⇒ opacity 0 → 0.785 → 1，抓到 running
+✅ E30-B 双击轨道泳道    ⇒ opacity 0 → 1，抓到 running
+```
+
+### ② #5 文案：按「关闭 / 保存」规则重判
+
+> 用户口径：**「关闭」= 调完选项后就已经生效；「保存」= 还能取消**。
+
+三个**即时生效**的设置窗，收尾按钮「确定」→「**关闭**」：
+`PitchSnapSettingsDialog` · `SnapGridSettingsDialog` · `SplitTransitionSettingsDialog`。
+依据：三者的输入都是 `onBlur` / `onChange` 就提交（`PitchSnapSettingsDialog.tsx:95`、
+`SplitTransitionSettingsDialog.tsx:188`、`SnapGridSettingsDialog` 的 `patch()`）
+⇒ 只有「确定」而没有「取消」= 用户无从反悔 ⇒ 用「关闭」才诚实。
+（规则与判据已写进 `docs/19` §3.3。）
+
+### ③ #7 `ModelManagerDialog` 多语言 + 🔴 顺手清掉五语种漂移
+
+- 该窗原来 **13 处硬编码中文**（连文件头都写着"i18n 留作后续补"）⇒ 补 **15 个 key**
+  × 5 语种，组件改用 `tAny` + `tf(key, vars)` 做 `{name}` 占位符替换
+  （i18n 是扁平 key→string，没有参数表）。⚠️ `MessageKey` 取自 **`en-US`**（`i18n/messages.ts`），
+  所以**必须**给 en-US 也加，否则类型不认。
+- 🔴 顺带发现 **`zh-TW` / `ja-JP` / `ko-KR` 各比 `en-US` 少 8 个 key**（`mobile_tool_select/drag/restore`、
+  `menu_view_panel_*`、`ctx_paste` —— 都是前几轮新加文案时只补了 en-US + zh-CN 留下的），
+  运行时**静默回退英文**。已补齐 ⇒ **五语种现在各 1450 key、零差异**。
+- 新增单测 **`src/i18n/locales.test.ts`**（3 条）把这件事钉成不变量：
+  ① 五语种 key 集合完全一致；② 没有空字符串；③ **带 `{占位符}` 的 key 五语种占位符集合一致**
+  （否则运行时会静默留着一个 `{size}` 字面量）。⇒ 以后忘补某语种，单测直接红。
+
+### ④ #8 三处菜单字号统一
+
+用户问"哪三个菜单"的准确答案（**已按代码核对，原稿写的第二处是错的**）：
+① **工具菜单**（选择/绘制，`.hs-tool-menu__item`，`index.css`）= **12px**
+② **手机顶栏菜单项**（文件/视图/…，`MobileTopBar` 三处）= **13.5px**
+③ **`VerticalDualPanel`**（👁「参数与覆盖层」面板，`MobileBottomBar:1549`）= **13px**
+⇒ ①③ 现在都走 `var(--hs-font-menu-item)`（13.5px）。
+⚠️ ③ 是 **`showEye` = 平板专用**（`MobileBottomBar.tsx:978` 默认 `false`）⇒ **手机上到不了**，
+所以在手机模拟器上**不可判**，证据由源码给出（判据脚本会如实打印"不可判"）。
+
+### ⏳ 仍未做
+
+`docs/19` §4.5 剩下的：P1-4 的 key 收敛（8 个「关闭」/6 个「确认·应用」，改名牵动各语言与探针断言）·
+P2-7 宽度上限 · 浮条族 z 裸数字。另 `docs/18 §A` 那 39 条"看着做了但没判据"待按主题批量补。
