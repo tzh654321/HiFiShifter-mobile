@@ -35516,10 +35516,10 @@ index 00000000..ccf42cee
 +    );
 +}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..8319c30b 100644
+index 242997f5..7122ddff 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7175 @@
+@@ -1,6438 +1,7236 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -42565,7 +42565,11 @@ index 242997f5..8319c30b 100644
 +    >(null);
 +    React.useEffect(() => {
 +        if (!IS_ANDROID) return;
-+        const dbg = window as unknown as { __hsViewport?: () => unknown };
++        const dbg = window as unknown as {
++            __hsViewport?: () => unknown;
++            /** E34 拖动合帧：拖拽期间「采样次数 vs 预览派发次数」。 */
++            __hsDragStats?: () => unknown;
++        };
 +        let raf = 0;
 +        const tryAttach = () => {
 +            const host = kernelHostRef.current;
@@ -43129,6 +43133,8 @@ index 242997f5..8319c30b 100644
 +                    containerRect: { left: r.left, top: r.top, width: r.width, height: r.height },
 +                };
 +            };
++            // 验收钩子（E34）：拖拽期间"指针采样次数 vs 预览派发次数"，用来证明 rAF 合帧生效。
++            dbg.__hsDragStats = () => host.debugDragStats();
 +            teardown = () => {
 +                for (const off of offs) off();
 +            };
@@ -43139,6 +43145,7 @@ index 242997f5..8319c30b 100644
 +            if (raf !== 0) cancelAnimationFrame(raf);
 +            teardown?.();
 +            delete dbg.__hsViewport;
++            delete dbg.__hsDragStats;
 +        };
 +    }, []);
 +
@@ -44156,6 +44163,50 @@ index 242997f5..8319c30b 100644
 +        dispatch(endInteraction());
 +    }, [dispatch]);
 +
++    /* E34 只读验收钩子：内核拖拽的**决策状态**。
++       🕳️ 背景：实测出现过「拖动被认出（`__hsDragStats` 计数在涨）但 `startSec` 一动不动、
++       甚至中途跳回更早的提交值」的状态；从页外分不清是「预览早退（参与者为空/原点没建立）」、
++       「内核给的位移就是 0」还是「写进去又被旧快照打回」。这个钩子把决策链路的几个关键量
++       一次带出来。**只读**，不参与任何渲染或交互逻辑。 */
++    React.useEffect(() => {
++        const scope = window as unknown as { __hsDragDebug?: () => unknown };
++        scope.__hsDragDebug = () => {
++            const origin = kernelDragOriginRef.current;
++            const session = store.getState().session as unknown as {
++                _interactionLockCount?: number;
++                multiSelectionIntentional?: boolean;
++                selectedClipId?: string | null;
++            };
++            return {
++                hasOrigin: origin !== null,
++                originClipId: origin ? origin.clipId : null,
++                originStartSec: origin ? origin.startSec : null,
++                participants: origin ? origin.participants.length : 0,
++                slipMode: origin ? origin.slipMode : null,
++                copyMode: origin ? origin.copyMode : null,
++                lastDeltaStartSec: origin ? origin.lastDeltaStartSec : null,
++                multiSelected: multiSelectedClipIds.length,
++                selectionIntentional: session.multiSelectionIntentional ?? null,
++                interactionLock: session._interactionLockCount ?? null,
++                lockActive: kernelGestureInteractionActiveRef.current,
++                selectedClipId: session.selectedClipId ?? null,
++                lastArgs: lastDragArgsRef.current,
++            };
++        };
++        return () => {
++            delete (window as unknown as { __hsDragDebug?: unknown }).__hsDragDebug;
++        };
++    }, [multiSelectedClipIds, store]);
++
++    /** E34 只读诊断：最近一次内核拖拽预览的入参与累计次数（见 `__hsDragDebug`）。 */
++    const lastDragArgsRef = React.useRef<{
++        clipId: string;
++        deltaSec: number;
++        targetTrackId: string;
++        alt: boolean;
++        n: number;
++    } | null>(null);
++
 +    const kernelDragOriginRef = React.useRef<{
 +        clipId: string;
 +        startSec: number;
@@ -44236,6 +44287,16 @@ index 242997f5..8319c30b 100644
 +            targetTrackId: string;
 +            modifiers: { ctrlKey: boolean; shiftKey: boolean; altKey: boolean; metaKey: boolean };
 +        }) => {
++            /* E34 只读诊断：记下内核给的入参（`deltaSec` 是否恒 0、命中哪个块），
++               以及本次回调是否"早退"（`participants` 为空 / 原点没建立）。
++               见 `window.__hsDragDebug`。**不参与任何逻辑**。 */
++            lastDragArgsRef.current = {
++                clipId: args.clipId,
++                deltaSec: args.deltaSec,
++                targetTrackId: args.targetTrackId,
++                alt: args.modifiers.altKey,
++                n: (lastDragArgsRef.current?.n ?? 0) + 1,
++            };
 +            if (kernelDragOriginRef.current?.clipId !== args.clipId) {
 +                const session = sessionRef.current;
 +                const clip = session.clips.find((item) => item.id === args.clipId);
@@ -68361,10 +68422,10 @@ index 226da0e7..ec0be5bc 100644
 +};
 \ No newline at end of file
 diff --git a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-index a2ae3b60..a1060b3a 100644
+index a2ae3b60..c2da4b2d 100644
 --- a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
 +++ b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-@@ -1,5487 +1,6061 @@
+@@ -1,5487 +1,6193 @@
 -/**
 - * 时间轴渲染内核 · 命令式宿主
 - *
@@ -75046,6 +75107,15 @@ index a2ae3b60..a1060b3a 100644
 +     * @param clientX 屏幕坐标 x。@param clientY 屏幕坐标 y。
 +     * @returns 命中分区、clip 局部坐标与控件判定（无命中时相应字段缺省）。
 +     */
++    /**
++     * 只读验收钩子（E34）：拖拽预览的「指针采样次数 / 实际派发次数」。
++     *
++     * 用来证明"一帧至多派发一次"的合帧真的生效（`previews < moves`）；比值 ≈ 显示帧率
++     * ÷ `pointermove` 频率。除探针外无人调用，**不参与任何渲染或交互逻辑**。
++     *
++     * @returns 计数快照（自创建起累计，不重置）。
++     */
++    debugDragStats(): { readonly moves: number; readonly previews: number };
 +    debugHitAt(
 +        clientX: number,
 +        clientY: number,
@@ -76858,6 +76928,110 @@ index a2ae3b60..a1060b3a 100644
 +        dragAutoScrollEvent = null;
 +    }
 +
++    // ── E34：拖拽预览的 rAF 合帧（"各种拖动的平滑化/惯性化"里的**块拖动**那一档）──
++    /**
++     * 拖拽预览的「一帧至多派发一次」句柄与待派发事件。
++     *
++     * 【为什么需要】触摸屏的 `pointermove` 在真机上可达 **120Hz**，而每一次预览都会走
++     * `interactions.onDragPreview` ⇒ Redux 乐观写入 ⇒ 整棵时间线重渲。一帧内跑两遍纯属
++     * 白干（后一遍的结果只有一半机会上屏），实测表现就是拖动时掉帧、被拖块"一跳一跳"。
++     * 轨道拖动（E33）当时踩的是同一个坑，用的是同一手法。
++     *
++     * 【为什么**不**做时间上的低通滤波】那会引入跟手延迟，而"不跟手"是用户明确返工过的
++     * 问题（I-2）。合帧只把"一帧内的多次采样"压成"每帧一次、取最后一个采样"，
++     * **零额外延迟**（≤1 帧，且与显示刷新对齐）。
++     */
++    let dragPreviewFrame: number | null = null;
++    let dragPreviewPending: PointerEvent | null = null;
++    /**
++     * 本手势是否已经**同步**派发过第一帧（见 `scheduleDragPreview` 的注释）：
++     * 首帧不压帧，之后的 120Hz 洪水才压。
++     */
++    let dragPreviewPrimed = false;
++    /** 只读计数（验收钩子 `debugDragStats`）：采样式 pointermove 次数 / 实际派发次数。 */
++    const dragStats = { moves: 0, previews: 0 };
++
++    /**
++     * 这些手势的预览会写 Redux / 触发重渲 ⇒ 每帧最多派发一次。
++     *
++     * 刻意**不**含 `seek`（触摸平移）与 `box-select`：前者只写 `ScrollKernel`
++     * （原生滚动，逐事件更跟手），后者只改一个绝对定位框的样式，都不值得压帧。
++     */
++    function isHeavyDragKind(kind: Gesture["kind"]): boolean {
++        return (
++            kind === "clip-drag" ||
++            kind === "clip-trim" ||
++            kind === "clip-fade" ||
++            kind === "gain-drag" ||
++            kind === "crossfade-grip" ||
++            kind === "snap-offset-drag"
++        );
++    }
++
++    function scheduleDragPreview(event: PointerEvent): void {
++        dragStats.moves += 1;
++        /* 🔴 **手势的第一帧同步派发，不压帧**（2026-10-02 实测踩到才补的）：
++           面板是在"**第一次**预览"里才上交互锁（`beginKernelGestureInteraction` ⇒
++           `_interactionLockCount`），而锁的作用正是**丢弃后端过期回包**。
++           首帧被压到下一帧 ⇒ 上锁晚一帧 ⇒ 实测这个窗口足够让上一步提交的回包落进来、
++           把乐观值打回去（现象：**拖动中途值突然跳回一个更早的提交值**，
++           看上去像"这次拖动没生效"）。首帧不压 ⇒ 与改造前的时序逐帧一致；
++           真正需要压的是随后 120Hz 的洪水，那部分照压不误。 */
++        if (!dragPreviewPrimed) {
++            dragPreviewPrimed = true;
++            if (dragPreviewFrame !== null) {
++                cancelAnimationFrame(dragPreviewFrame);
++                dragPreviewFrame = null;
++            }
++            dragPreviewPending = null;
++            dragStats.previews += 1;
++            dispatchMovePreview(event);
++            return;
++        }
++        dragPreviewPending = event;
++        if (dragPreviewFrame !== null) return;
++        dragPreviewFrame = requestAnimationFrame(() => {
++            dragPreviewFrame = null;
++            const pending = dragPreviewPending;
++            dragPreviewPending = null;
++            if (pending === null) return;
++            // 帧内手势已结束（提前抬手 / 被取消）：这一帧作废，收尾已 flush 过。
++            if (gesture.kind === "none") return;
++            dragStats.previews += 1;
++            dispatchMovePreview(pending);
++        });
++    }
++
++    /**
++     * 把压着的那一帧**立刻**落地（幂等）。
++     *
++     * 收尾前**必须**调用：`finalizeActiveGesture` 是按预览写回的 `gesture.lastDeltaSec`
++     * 提交的，压着最后一帧不派发 ⇒ 落位比用户最后看到的少一帧位移
++     * （表现为"松手回跳一点点"）。
++     */
++    function flushDragPreview(): void {
++        if (dragPreviewFrame !== null) {
++            cancelAnimationFrame(dragPreviewFrame);
++            dragPreviewFrame = null;
++        }
++        const pending = dragPreviewPending;
++        dragPreviewPending = null;
++        if (pending === null) return;
++        if (gesture.kind === "none") return;
++        dragStats.previews += 1;
++        dispatchMovePreview(pending);
++    }
++
++    /** 丢弃压着的那一帧（取消 / 卸载用；**不**派发）。 */
++    function cancelDragPreview(): void {
++        if (dragPreviewFrame !== null) {
++            cancelAnimationFrame(dragPreviewFrame);
++            dragPreviewFrame = null;
++        }
++        dragPreviewPending = null;
++        dragPreviewPrimed = false;
++    }
++
 +    /**
 +     * 用最近一次指针事件重放一次手势预览。
 +     *
@@ -78309,7 +78483,10 @@ index a2ae3b60..a1060b3a 100644
 +        // 于是吸附偏移 ◣ 手柄的预览只在跨越 4px 阈值时发生一次、随即冻结
 +        // —— 用户报告为「对齐标记无法正确的被移动」。抽表后由
 +        // `moveDispatch.test.ts` 对全集做表驱动断言，漏登记会直接测试失败。
-+        dispatchMovePreview(event);
++        // E34：重手势（拖动 / 裁剪 / 淡变 / 增益 / 抓手 / 吸附偏移）压到**每帧一次**；
++        // 轻手势（平移视野 / 框选）仍逐事件派发（更跟手，且只写一次样式或原生滚动）。
++        if (isHeavyDragKind(gesture.kind)) scheduleDragPreview(event);
++        else dispatchMovePreview(event);
 +    }
 +
 +    /**
@@ -78728,6 +78905,10 @@ index a2ae3b60..a1060b3a 100644
 +        /** 真实指针事件才有：失焦收尾没有，释放 pointer capture 时跳过。 */
 +        pointerId: number | null = null,
 +    ): void {
++        // E34：先把压着的最后一帧落地再提交 —— 提交用的是预览写回的 `lastDeltaSec`，
++        // 压着不派发会让落位比用户最后看到的少一帧位移（"松手回跳一点"）。
++        // 取消路径也走这里：flush 之后再回滚乐观值，结果与不 flush 等价，少一条分支。
++        flushDragPreview();
 +        /* 手势**升级成了拖拽**（裁切 / 淡变 / 拖动 / 抓手的任意一种）⇒ 长按菜单作废：
 +           用户的意图已经由"按住不动"变成"按住并划动"，再补发菜单就是两个功能一起
 +           触发（TASKS.md A2）。这里统一清一次，避免下面各分支漏清而把菜单延到下一次。 */
@@ -79037,6 +79218,8 @@ index a2ae3b60..a1060b3a 100644
 +                // 已释放 / 未捕获：忽略。
 +            }
 +            gesture = { kind: "none" };
++            // E34：下个手势重新享受"首帧同步派发"（见 `scheduleDragPreview`）。
++            dragPreviewPrimed = false;
 +            // 手势结束立即停掉边缘自动滚屏：不停会让视口在松手后继续滑动，
 +            // 且循环每帧都会读到已失效的手势状态。
 +            stopDragAutoScroll();
@@ -79849,6 +80032,14 @@ index a2ae3b60..a1060b3a 100644
 +            };
 +        },
 +
++        /**
++         * 只读验收钩子（E34，仅供 CDP 探针）：拖拽预览的"采样次数 / 实际派发次数"。
++         * `previews < moves` 即合帧生效的证据；比值 ≈ 显示帧率 / `pointermove` 频率。
++         */
++        debugDragStats() {
++            return { moves: dragStats.moves, previews: dragStats.previews };
++        },
++
 +        debugHitAt(clientX: number, clientY: number) {
 +            const hit = hitAt(clientX, clientY);
 +            if (hit.kind !== "clip") {
@@ -79880,6 +80071,8 @@ index a2ae3b60..a1060b3a 100644
 +            // 卸载时停掉自动滚屏循环：rAF 回调持有容器与 scroll 内核的引用，
 +            // 不停会在组件卸载后继续滚动并阻止相关对象被回收。
 +            stopDragAutoScroll();
++            // E34：同理 —— 压着的预览帧持有指针事件与 gesture 闭包。
++            cancelDragPreview();
 +            resizeObserver.disconnect();
 +            container.removeEventListener("wheel", onWheel);
 +            container.removeEventListener("keydown", onKeyDown);
