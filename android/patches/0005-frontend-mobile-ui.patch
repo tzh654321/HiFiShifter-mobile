@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..d0ab42fe 100644
+index 3802022a..9a460efe 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4790 @@
+@@ -1,4006 +1,4960 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -4630,6 +4630,39 @@ index 3802022a..d0ab42fe 100644
 +            : 0.6;
 +    });
 +    const mobileSplitRatioRef = useRef(mobileSplitRatio);
++    /* ── E25：**每块自己的权重**（2026-10-02，用户口径「三、四个窗口分屏时无法**分别**
++       调节分屏高度」）────────────────────────────────────────────────────
++       E25 之前只有"轨道块 vs 下方块"一段比例：下方块里的 参数/文件/记事本 三块是
++       `flex-1` **均分**，既看不到分界线、也无从单独调。
++       ⇒ 给下方块的三块各一个权重（默认 1 = 与旧行为完全一致），并让**每块自己的
++       顶部标题条**成为它上面那条分界线的可拖手柄：
++         · 第一块可见的下方面板（通常是 params）⇒ 调的仍是"轨道块 vs 下方块"（老路径）；
++         · 其余（files / notes）⇒ 调**它与其上一块**这一对（两者权重之和守恒）。
++       权重存 localStorage，与 `mobileSplitRatio` 各自独立。 */
++    const MOBILE_LOWER_WEIGHTS_KEY = "hifishifter.mobileLowerWeights";
++    const LOWER_PANE_KEYS = ["params", "files", "notes"] as const;
++    type LowerPaneKey = (typeof LOWER_PANE_KEYS)[number];
++    const loadLowerWeights = (): Record<LowerPaneKey, number> => {
++        const out: Record<LowerPaneKey, number> = { params: 1, files: 1, notes: 1 };
++        try {
++            const raw = localStorage.getItem(MOBILE_LOWER_WEIGHTS_KEY);
++            if (raw === null || raw.trim() === "") return out;
++            const parsed = JSON.parse(raw) as Partial<Record<LowerPaneKey, number>>;
++            for (const k of LOWER_PANE_KEYS) {
++                const v = Number(parsed?.[k]);
++                if (Number.isFinite(v) && v > 0.05 && v < 20) out[k] = v;
++            }
++        } catch {
++            /* 解析失败就用默认权重（坏数据不该让布局崩掉） */
++        }
++        return out;
++    };
++    const [mobileLowerWeights, setMobileLowerWeights] =
++        useState<Record<LowerPaneKey, number>>(loadLowerWeights);
++    const mobileLowerWeightsRef = useRef(mobileLowerWeights);
++    useEffect(() => {
++        mobileLowerWeightsRef.current = mobileLowerWeights;
++    }, [mobileLowerWeights]);
 +    const [isDragging, setIsDragging] = useState(false);
 +    const [quickSearchOpen, setQuickSearchOpen] = useState(false);
 +    /** C5/C6：手机端分屏容器（上下两块都在它里面）。 */
@@ -5136,7 +5169,52 @@ index 3802022a..d0ab42fe 100644
 +        /* E8（用户口径）：手柄**只**认带 `data-hs-split-handle` 的那几条（上工具栏 / 文件浏览器标题栏 /
 +   记事本标题栏）。**参数界面的拍数栏不再参与** —— 它原先被塞进这个选择器，导致"拖拍数栏改分屏高度"。 */
 +const HANDLE_SELECTOR = '[data-hs-split-handle]';
-+        let drag: { pointerId: number; startY: number; moved: boolean; ratio: number } | null = null;
++        /* E25：拖动分两种模式 —— `outer` = 轨道块 vs 下方块（老路径）；
++           `inner` = 下方块内部相邻两块（params|files / files|notes）。 */
++        type DragRec = {
++            pointerId: number;
++            startY: number;
++            moved: boolean;
++            /** outer：容器归一化位置；inner：两块的"分界位置"（同一归一化口径）。 */
++            ratio: number;
++            mode: "outer" | "inner";
++            upperKey: LowerPaneKey | null;
++            lowerKey: LowerPaneKey | null;
++            /** inner：拖动开始时那一对的权重（两者之和守恒）。 */
++            baseUpper: number;
++            baseLower: number;
++        };
++        let drag: DragRec | null = null;
++
++        const paneEl = (key: LowerPaneKey): HTMLElement | null =>
++            mobileSplitRef.current?.querySelector<HTMLElement>(`[data-hs-pane="${key}"]`) ?? null;
++
++        /** 手柄对应哪条分界线：拿手柄所在的面板块判断（不在任何面板块里的 ⇒ 老路径）。 */
++        const resolveHandle = (handle: HTMLElement): { mode: "outer" | "inner"; lowerKey: LowerPaneKey | null } => {
++            const pane = handle.closest<HTMLElement>("[data-hs-pane]");
++            const key = (pane?.getAttribute("data-hs-pane") ?? null) as LowerPaneKey | null;
++            if (key === null || !LOWER_PANE_KEYS.includes(key)) return { mode: "outer", lowerKey: null };
++            /* 第一块可见的下方面板 ⇒ 它上面是轨道块 ⇒ 仍然走老路径（轨道 vs 下方块）。
++               只有"上方还有另一块下方面板"时才是内部分界。 */
++            const visible = LOWER_PANE_KEYS.filter((k) => mobilePanelsRef.current[k]);
++            if (visible.length < 2 || visible[0] === key) return { mode: "outer", lowerKey: null };
++            return { mode: "inner", lowerKey: key };
++        };
++
++        /** 内部分界的"上一块"（在可见序列里紧跟它前面的那一块）。 */
++        const upperOf = (key: LowerPaneKey): LowerPaneKey | null => {
++            const visible = LOWER_PANE_KEYS.filter((k) => mobilePanelsRef.current[k]);
++            const i = visible.indexOf(key);
++            return i > 0 ? visible[i - 1] : null;
++        };
++
++        /** 直接改 DOM 的 flexGrow（与桌面分割条同一手法，避免每帧整树重绘）。 */
++        const paintLowerPair = (upperKey: LowerPaneKey, lowerKey: LowerPaneKey, wU: number, wL: number): void => {
++            const a = paneEl(upperKey);
++            const b = paneEl(lowerKey);
++            if (a !== null) a.style.flexGrow = String(wU);
++            if (b !== null) b.style.flexGrow = String(wL);
++        };
 +
 +        const findHandle = (target: EventTarget | null): HTMLElement | null => {
 +            const container = mobileSplitRef.current;
@@ -5168,6 +5246,39 @@ index 3802022a..d0ab42fe 100644
 +            if (container === null) return;
 +            const rect = container.getBoundingClientRect();
 +            if (!(rect.height > 0)) return;
++            /* ── E25 内部分界：只调"这一对"，权重之和守恒 ───────────────────── */
++            if (d.mode === "inner") {
++                const upperKey = d.upperKey;
++                const lowerKey = d.lowerKey;
++                if (upperKey === null || lowerKey === null) return;
++                const a = paneEl(upperKey);
++                const b = paneEl(lowerKey);
++                if (a === null || b === null) return;
++                if (!d.moved) {
++                    if (Math.abs(e.clientY - d.startY) < DEAD_PX) return;
++                    d.moved = true;
++                }
++                e.preventDefault();
++                const ra = a.getBoundingClientRect();
++                const rb = b.getBoundingClientRect();
++                const span = ra.height + rb.height;
++                if (!(span > 0)) return;
++                /* 🔴 **必须按"位移增量"算，不能按指针的绝对位置算**（探针 `_probe-e25-multi-split`
++                   第一版就是这样被抓出来的）：手柄是"下方那一块自己的标题条"，它**不在分界线
++                   上**（在块内部，可能离分界几十像素）。用 `(clientY − ra.top)/span` 会让比例
++                   一起手就偏掉 —— 实测：把 18% 的拖动量算成 0.98 ⇒ 直接越过 COLLAPSE_BOTTOM
++                   把面板关掉，看起来像"拖动没生效"。
++                   ⇒ 用拖动开始那一刻的比例 + 位移/这一对的总高，与手柄落在块内什么位置无关。 */
++                const baseFraction = d.baseUpper / (d.baseUpper + d.baseLower);
++                const t = clamp(baseFraction + (e.clientY - d.startY) / span, 0.06, 0.94);
++                d.ratio = t;
++                const total = d.baseUpper + d.baseLower;
++                const wU = total * t;
++                const wL = total * (1 - t);
++                mobileLowerWeightsRef.current = { ...mobileLowerWeightsRef.current, [upperKey]: wU, [lowerKey]: wL };
++                paintLowerPair(upperKey, lowerKey, wU, wL);
++                return;
++            }
 +            if (!d.moved) {
 +                if (Math.abs(e.clientY - d.startY) < DEAD_PX) return;
 +                d.moved = true;
@@ -5215,6 +5326,29 @@ index 3802022a..d0ab42fe 100644
 +                }, SPLIT_SETTLE_MS);
 +            }
 +            const settled = clamp(d.ratio, 0.15, 0.85);
++            /* ── E25 内部分界收尾：把权重落进 state（不落就会出现"抬手一跳"）── */
++            if (d.mode === "inner" && d.upperKey !== null && d.lowerKey !== null) {
++                const upperKey = d.upperKey;
++                const lowerKey = d.lowerKey;
++                const total = d.baseUpper + d.baseLower;
++                const next: Record<LowerPaneKey, number> = {
++                    ...mobileLowerWeightsRef.current,
++                    [upperKey]: total * settled,
++                    [lowerKey]: total * (1 - settled),
++                };
++                /* 拖到很靠近某一端 ⇒ 那一块已经太小，按"某个界面所得太小则自动关闭"
++                   的既有语义把它收起来（与 outer 的 COLLAPSE_* 同一口径）。 */
++                if (d.ratio >= COLLAPSE_BOTTOM) dispatch(toggleMobilePanel(lowerKey));
++                else if (d.ratio <= COLLAPSE_TOP) dispatch(toggleMobilePanel(upperKey));
++                mobileLowerWeightsRef.current = next;
++                setMobileLowerWeights(next);
++                try {
++                    localStorage.setItem(MOBILE_LOWER_WEIGHTS_KEY, JSON.stringify(next));
++                } catch {
++                    /* 隐私模式等写不进去 ⇒ 忽略（只影响下次启动的初值） */
++                }
++                return;
++            }
 +            if (d.ratio >= COLLAPSE_BOTTOM) {
 +                /* 下方被压得太小 ⇒ 关掉所有"非轨道"面板 ⇒ 回到全屏轨道界面。 */
 +                for (const key of ["params", "files", "notes"] as const) {
@@ -5230,7 +5364,8 @@ index 3802022a..d0ab42fe 100644
 +
 +        const onDown = (e: PointerEvent) => {
 +            if (e.pointerType === "mouse") return; // 鼠标走桌面那条分割条
-+            if (findHandle(e.target) === null) return;
++            const handle = findHandle(e.target);
++            if (handle === null) return;
 +            /* E22 第四刀：新的一次拖动开始 ⇒ 立刻摘掉收尾过渡，否则拖动期间每帧写的
 +               `flexGrow` 都会被过渡"追着跑"，手感变成橡皮筋。 */
 +            const box = mobileSplitRef.current;
@@ -5239,7 +5374,37 @@ index 3802022a..d0ab42fe 100644
 +                mobileSplitSettleTimerRef.current = null;
 +            }
 +            if (box) delete box.dataset.hsSplitSettling;
-+            drag = { pointerId: e.pointerId, startY: e.clientY, moved: false, ratio: mobileSplitRatioRef.current };
++            /* E25：按"手柄属于哪一块"决定调哪条分界线（老路径 = 轨道 vs 下方块）。 */
++            const resolved = resolveHandle(handle);
++            let rec: DragRec = {
++                pointerId: e.pointerId,
++                startY: e.clientY,
++                moved: false,
++                ratio: mobileSplitRatioRef.current,
++                mode: "outer",
++                upperKey: null,
++                lowerKey: null,
++                baseUpper: 1,
++                baseLower: 1,
++            };
++            if (resolved.mode === "inner" && resolved.lowerKey !== null) {
++                const upperKey = upperOf(resolved.lowerKey);
++                if (upperKey !== null) {
++                    const w = mobileLowerWeightsRef.current;
++                    const sum = w[upperKey] + w[resolved.lowerKey];
++                    rec = {
++                        ...rec,
++                        mode: "inner",
++                        upperKey,
++                        lowerKey: resolved.lowerKey,
++                        /* 初值 = 分界线的当前位置（比例口径），拖动时以它为基准加位移。 */
++                        ratio: sum > 0 ? w[upperKey] / sum : 0.5,
++                        baseUpper: w[upperKey],
++                        baseLower: w[resolved.lowerKey],
++                    };
++                }
++            }
++            drag = rec;
 +            mobileSplitDraggingRef.current = true;   /* I-2：拖动期间禁止重写 flexGrow */
 +            window.addEventListener("pointermove", onMove, { passive: false });
 +            window.addEventListener("pointerup", onUp);
@@ -8563,6 +8728,9 @@ index 3802022a..d0ab42fe 100644
 +                                        key={"hs-pane-params-" + glRecoveryEpoch}
 +                                        data-hs-pane="params"
 +                                        className="flex-1 min-h-0 relative"
++                                        /* E25：每块自己的权重（默认 1 = 与旧的"均分"完全一致）。
++                                           `flex-basis` 仍由 `flex-1` 这个类给（别写内联 —— 见硬约定 13）。 */
++                                        style={{ flexGrow: mobileLowerWeights.params }}
 +                                    >
 +                                        {/* #52：用户口径「全屏参数界面下点 ✕ ⇒ 回到全屏轨道界面」。
 +                                         *
@@ -8596,6 +8764,7 @@ index 3802022a..d0ab42fe 100644
 +                                        key="hs-pane-files"
 +                                        data-hs-pane="files"
 +                                        className="flex-1 min-h-0 relative"
++                                        style={{ flexGrow: mobileLowerWeights.files }}
 +                                    >
 +                                        <FileBrowserPanel />
 +                                    </div>
@@ -8605,6 +8774,7 @@ index 3802022a..d0ab42fe 100644
 +                                        key="hs-pane-notes"
 +                                        data-hs-pane="notes"
 +                                        className="flex-1 min-h-0 relative"
++                                        style={{ flexGrow: mobileLowerWeights.notes }}
 +                                    >
 +                                        <NotebookPanel />
 +                                    </div>
