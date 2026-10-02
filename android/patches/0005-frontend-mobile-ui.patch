@@ -61380,10 +61380,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..31faf681 100644
+index c0db2221..09d45d76 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2994 @@
+@@ -1,2297 +1,3143 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -63689,6 +63689,11 @@ index c0db2221..31faf681 100644
 +    longPressDragActive,
 +} from "../longPressArbiter";
 +import { registerDragAbort } from "./gestureFocusGuard";
++import {
++    computeReorderShifts,
++    REORDER_SHIFT_EASING,
++    REORDER_SHIFT_MS,
++} from "./trackReorder";
 +import { formatEditNumber } from "./math";
 +import { measureTextWidth } from "./runtime/timelineCanvasStyle";
 +import { Flex, Box, Text, IconButton, Select } from "@radix-ui/themes";
@@ -64208,6 +64213,17 @@ index c0db2221..31faf681 100644
 +        overTrackId: string | null;
 +        mode: "reorder" | "nest";
 +        indicatorY: number | null;
++        /**
++         * E33（用户口径「松手前纵向**始终跟手**，类似浏览器标签页拖动排序」）
++         * —— 触摸拖动时**不再只画一条插入指示线**，而是：
++         *   · `dragDy`：被拖行**跟手**的纵向位移（px，未吸附）；
++         *   · `shifts`：其余行**让位**的位移（trackId → px，±一个行高）；
++         *   · `animate`：让位是否带过渡（起手第一帧不带，避免"刚长按就抖一下"）。
++         * 鼠标/笔路径（`pointer` + 插入指示线）保持原样，故这些字段可空。
++         */
++        dragDy?: number;
++        shifts?: Record<string, number> | null;
++        animate?: boolean;
 +    } | null>(null);
 +    const volumeCommitTimersRef = useRef<Record<string, number>>({});
 +    const [volumeHoveredTrackId, setVolumeHoveredTrackId] = useState<string | null>(null);
@@ -64414,8 +64430,78 @@ index c0db2221..31faf681 100644
 +        let dragId: string | null = null;
 +        let startY = 0;
 +        let targetIndex: number | null = null;
++        /** E33：当前这一帧的"让位位移"表（判定落点时要用它还原布局位置）。 */
++        let curShifts: Record<string, number> = {};
 +        /** 长按仲裁令牌（本次 effect 生命周期内唯一）。 */
 +        const holdToken = {};
++
++        /* E33：拖动中的「跟手 + 让位」用 **rAF 合帧**写 state。
++           `touchmove` 在部分机型上可达 120Hz，而本列表是虚拟化窗口渲染、每行都带
++           `transform` ⇒ 逐事件 `setState` 会明显掉帧（同类问题在本文件 FLIP/滚动镜像里
++           都踩过，见上面 `onScroll` 的量化注释）。 */
++        let reorderRaf: number | null = null;
++        let pendingReorderUi: {
++            dragDy: number;
++            overTrackId: string | null;
++            shifts: Record<string, number> | null;
++        } | null = null;
++        const paintReorderUi = () => {
++            reorderRaf = null;
++            const p = pendingReorderUi;
++            pendingReorderUi = null;
++            if (p === null || dragId === null) return;
++            setDragUi({
++                draggingTrackId: dragId,
++                overTrackId: p.overTrackId,
++                mode: "reorder",
++                /* 触摸路径**不画插入指示线** —— 改由「跟手 + 让位」表达落点。 */
++                indicatorY: null,
++                dragDy: p.dragDy,
++                shifts: p.shifts,
++                animate: true,
++            });
++        };
++        const scheduleReorderUi = (next: {
++            dragDy: number;
++            overTrackId: string | null;
++            shifts: Record<string, number> | null;
++        }) => {
++            pendingReorderUi = next;
++            if (reorderRaf !== null) return;
++            reorderRaf = requestAnimationFrame(paintReorderUi);
++        };
++        const cancelReorderUi = () => {
++            if (reorderRaf !== null) {
++                cancelAnimationFrame(reorderRaf);
++                reorderRaf = null;
++            }
++            pendingReorderUi = null;
++            setDragUi(null);
++        };
++
++        /**
++         * E33：松手提交排序前，把**拖动中的视觉位置**（含我们写的 `translateY`）写进
++         * FLIP 的 "prev" ⇒ 下一个 `useLayoutEffect([tracks])` 会把它当作动画**起点**。
++         *
++         * 不这么做的话：FLIP 的 prev 还停在**拖动开始前**的布局位置，于是松手那一帧
++         * 行会先从旧位置"重播"一遍 ⇒ 看到的是一顿（"跟手好好的，一松手却跳一下"）。
++         * 有了它，动画正好从手指处吸附到目标槽位，接续上是连续的。
++         */
++        const seedFlipFromCurrentVisual = () => {
++            const host = document.querySelector<HTMLElement>("[data-track-list-panel]");
++            if (host === null) return;
++            const hostTop = host.getBoundingClientRect().top;
++            const next = new Map<string, number>();
++            const order: string[] = [];
++            for (const r of host.querySelectorAll<HTMLElement>("[data-hs-track-row]")) {
++                const id = r.getAttribute("data-hs-track-row");
++                if (id === null) continue;
++                next.set(id, r.getBoundingClientRect().top - hostTop);
++                order.push(id);
++            }
++            flipPrevTopRef.current = next;
++            flipOrderRef.current = order.join("|");
++        };
 +
 +        const reset = () => {
 +            if (timer !== null) window.clearTimeout(timer);
@@ -64424,6 +64510,8 @@ index c0db2221..31faf681 100644
 +            dragId = null;
 +            targetIndex = null;
 +            touchHold.current = null;
++            /* E33：拖动视觉状态也要一起收（否则松手后行停在让位位置）。 */
++            cancelReorderUi();
 +            endLongPress(holdToken);
 +        };
 +        const onStart = (e: TouchEvent) => {
@@ -64473,28 +64561,68 @@ index c0db2221..31faf681 100644
 +            e.preventDefault(); // 吃掉滚动（passive:false 下才有效）
 +            const drag = tracks.find((tr) => tr.id === dragId);
 +            if (!drag) return;
++            /* E33：跟手位移（未吸附）—— 被拖行**始终贴在手指上**。 */
++            const dragDy = tt.clientY - startY;
 +            const rows = [...el.querySelectorAll("[data-hs-track-row]")] as HTMLElement[];
++            const rowH = rowHeightRef.current;
++            /* 🔴 判定落点必须用「**无位移布局**」坐标：
++               此刻各行可能正带着我们写的 `translateY`（被拖行跟手、其余行让位）⇒
++               直接拿 `getBoundingClientRect()` 比会**自己咬自己**（让位改了 rect ⇒ 又改了
++               让位的判定 ⇒ 目标来回抖）。减去该行当前的位移就还原成布局位置 ——
++               而布局位置与"让位算到哪"无关（让位只是叠加在它上面），故**不成环**。
++               被拖行的"虚拟位置"取其**布局位置 + 手指位移**（= 它视觉上所在之处）。 */
++            const shiftOf = (id: string | null): number => {
++                if (id === null) return 0;
++                if (id === dragId) return dragDy;
++                return curShifts[id] ?? 0;
++            };
++            const staticTopOf = (r: HTMLElement): number =>
++                r.getBoundingClientRect().top - shiftOf(r.getAttribute("data-hs-track-row"));
++            const draggedRow = rows.find((r) => r.getAttribute("data-hs-track-row") === dragId);
++            if (draggedRow === undefined) return;
++            /* 🔴 用被拖行的**中心**去判落点，不要用"顶端 + 位移"：
++               后者在"刚好拖满一整格"时 anchorY 正好压在下一行的 `top` 上，而
++               `getBoundingClientRect()` 带小数 ⇒ `anchorY >= t` 可能被浮点误差判成 false
++               ⇒ 落回**自己** ⇒ 那一格完全排不动（实测：向下拖一格时被拖行 +80 跟手、
++               其余行 0 让位，抬手后顺序不变 —— 而向上拖同样的距离却正常）。
++               取中心 ⇒ 余量有半个行高，且"过半即换位"更符合直觉。 */
++            const anchorY = staticTopOf(draggedRow) + dragDy + rowH / 2;
 +            const overRow = rows.find((r) => {
-+                const b = r.getBoundingClientRect();
-+                return tt.clientY >= b.top && tt.clientY < b.bottom;
++                const t = staticTopOf(r);
++                return anchorY >= t && anchorY < t + rowH;
 +            });
 +            const overId = overRow?.getAttribute("data-hs-track-row") ?? null;
 +            if (!overId || overId === dragId) {
 +                targetIndex = null;
++                curShifts = {};
++                scheduleReorderUi({ dragDy, overTrackId: null, shifts: null });
 +                return;
 +            }
 +            const over = tracks.find((tr) => tr.id === overId);
 +            if (!over || (over.parentId ?? null) !== (drag.parentId ?? null)) {
 +                targetIndex = null; // 跨层级不在这里做
++                curShifts = {};
++                scheduleReorderUi({ dragDy, overTrackId: null, shifts: null });
 +                return;
 +            }
 +            const sibs = tracks.filter((tr) => (tr.parentId ?? null) === (drag.parentId ?? null));
-+            targetIndex = sibs.findIndex((tr) => tr.id === overId);
++            const fromIndex = sibs.findIndex((tr) => tr.id === dragId);
++            const toIndex = sibs.findIndex((tr) => tr.id === overId);
++            targetIndex = toIndex;
++            curShifts = computeReorderShifts(
++                sibs.map((s) => s.id),
++                fromIndex,
++                toIndex,
++                rowH,
++            );
++            scheduleReorderUi({ dragDy, overTrackId: overId, shifts: curShifts });
 +        };
 +        const onEnd = () => {
 +            const drag = dragId !== null ? tracks.find((tr) => tr.id === dragId) : null;
 +            const hold = touchHold.current;
 +            if (armed && drag && targetIndex !== null && targetIndex >= 0) {
++                /* E33：把"拖动中的视觉位置"交给 FLIP 当起点（否则松手会跳一下）。 */
++                seedFlipFromCurrentVisual();
 +                onMoveTrack({
 +                    trackId: drag.id,
 +                    targetIndex,
@@ -65632,6 +65760,14 @@ index c0db2221..31faf681 100644
 +                            const indent = depth * 16;
 +                            const dragging = dragUi?.draggingTrackId === track.id;
 +                            const isOver = dragUi?.overTrackId === track.id;
++                            /* E33：跟手 / 让位的纵向位移。
++                               · 被拖行 ⇒ 跟手指（`dragDy`），且**不加过渡**（加过渡就成了"追着跑"）；
++                               · 其余行 ⇒ 让位（±一个行高），带过渡 ⇒ 看起来是"平滑让开"。
++                               没在拖动时二者都为 0，且 `transform` 不下发（行不长期带 transform ——
++                               那会把行内的 `position: fixed` 浮层改成相对行定位，见 index.css E22 注释①）。 */
++                            const shiftDy = dragging
++                                ? (dragUi?.dragDy ?? 0)
++                                : (dragUi?.shifts?.[track.id] ?? 0);
 +                            const muted = Boolean(track.muted);
 +                            const solo = Boolean(track.solo);
 +                            const isRoot = (track.parentId ?? null) == null;
@@ -65653,8 +65789,21 @@ index c0db2221..31faf681 100644
 +                            return (
 +                                <div
 +                                    key={track.id}
-+                                    style={{ height: rowHeight }}
-+                                    className="border-b border-qt-border relative group overflow-hidden"
++                                    style={{
++                                        height: rowHeight,
++                                        /* E33：拖动中才下发（松手即清）。`zIndex` 让被拖行盖在
++                                           其余行之上（行本身已是 `relative`）；给一点阴影与底色
++                                           做出"被拎起来"的手感（浏览器标签页拖动同款）。 */
++                                        transform: shiftDy !== 0 ? `translateY(${shiftDy}px)` : undefined,
++                                        transition: dragging
++                                            ? undefined
++                                            : `transform ${REORDER_SHIFT_MS}ms ${REORDER_SHIFT_EASING}`,
++                                        zIndex: dragging ? 20 : undefined,
++                                    }}
++                                    className={
++                                        "border-b border-qt-border relative group overflow-hidden" +
++                                        (dragging ? " shadow-lg bg-qt-base" : "")
++                                    }
 +                                    /* 触屏「长按并划动 = 移动轨道顺序」用**委托**实现时要能定位到行：
 +                                       原生 touch 监听挂在列表容器上（见下方 useEffect），
 +                                       靠这个属性把 target 映射回 trackId。 */
@@ -79927,6 +80076,116 @@ index 5dda3c55..68838e4c 100644
          gl.deleteBuffer(this.unitBuffer);
          gl.deleteBuffer(this.instanceBuffer);
          gl.deleteVertexArray(this.vao);
+diff --git a/frontend/src/components/layout/timeline/trackReorder.test.ts b/frontend/src/components/layout/timeline/trackReorder.test.ts
+new file mode 100644
+index 00000000..17f7d937
+--- /dev/null
++++ b/frontend/src/components/layout/timeline/trackReorder.test.ts
+@@ -0,0 +1,54 @@
++import { describe, expect, it } from "vitest";
++
++import { computeReorderShifts, REORDER_SHIFT_MS } from "./trackReorder";
++
++/**
++ * E33 轨道拖动排序的**让位几何**。
++ *
++ * 为什么要单测：这段映射算错的三种方式（方向反了 / 少让一行 / 把被拖行自己也算了）
++ * 在设备上都不容易一眼看出来 —— 表现分别是"拖到下面却往上让"、"抬手后顺序和看到的差一格"、
++ * "被拖行同时被两处位移叠加 ⇒ 抖动"。纯函数，直接喂下标就能钉死。
++ */
++describe("拖动排序：让位位移", () => {
++    const ROW = 80;
++
++    it("往下拖：被经过的行各**上移**一行（让出空槽）", () => {
++        const s = computeReorderShifts(["a", "b", "c", "d"], 0, 2, ROW);
++        expect(s).toEqual({ b: -ROW, c: -ROW });
++        // 被拖行自己不含在内（它用跟手位移），未被经过的行不动
++        expect(s.a).toBeUndefined();
++        expect(s.d).toBeUndefined();
++    });
++
++    it("往上拖：被经过的行各**下移**一行", () => {
++        const s = computeReorderShifts(["a", "b", "c", "d"], 3, 1, ROW);
++        expect(s).toEqual({ b: ROW, c: ROW });
++    });
++
++    it("只挪一格：只有相邻那一行让位", () => {
++        expect(computeReorderShifts(["a", "b", "c"], 1, 2, ROW)).toEqual({ c: -ROW });
++        expect(computeReorderShifts(["a", "b", "c"], 1, 0, ROW)).toEqual({ a: ROW });
++    });
++
++    it("原地不动 ⇒ 没有任何位移", () => {
++        expect(computeReorderShifts(["a", "b", "c"], 1, 1, ROW)).toEqual({});
++    });
++
++    it("越界 / 非法行高 ⇒ 一律返回空（宁可不动，也不要算出错位）", () => {
++        expect(computeReorderShifts(["a", "b"], 0, 5, ROW)).toEqual({});
++        expect(computeReorderShifts(["a", "b"], -1, 1, ROW)).toEqual({});
++        expect(computeReorderShifts(["a", "b"], 0, 1, 0)).toEqual({});
++        expect(computeReorderShifts(["a", "b"], 0, 1, -ROW)).toEqual({});
++    });
++
++    it("嵌套层级场景：只传**同父兄弟** ⇒ 位移也只落在这一层", () => {
++        // 同一层是 ["a","a1","a2"]，被拖的是 a1 ⇒ 越过 a2
++        const s = computeReorderShifts(["a", "a1", "a2"], 1, 2, ROW);
++        expect(Object.keys(s)).toEqual(["a2"]);
++        expect(s.a2).toBe(-ROW);
++    });
++
++    it("让位时长与 FLIP 同源（180ms，避免「拖动中让位」和「抬手后落位」两种速度打架）", () => {
++        expect(REORDER_SHIFT_MS).toBe(180);
++    });
++});
+diff --git a/frontend/src/components/layout/timeline/trackReorder.ts b/frontend/src/components/layout/timeline/trackReorder.ts
+new file mode 100644
+index 00000000..029c3455
+--- /dev/null
++++ b/frontend/src/components/layout/timeline/trackReorder.ts
+@@ -0,0 +1,44 @@
++/**
++ * E33（用户口径：「拖动轨道的动画需要松手前**纵向上始终跟手**，类似浏览器标签页拖动排序」）
++ * —— 拖动排序的**纯几何**：把"目标槽位"翻译成"每一行的让位位移"。
++ *
++ * 抽成独立模块是为了能**用单测钉死**：这段映射一旦算错（方向反了 / 少算一行 /
++ * 嵌套层级漏了），表现是"行让位让到别处"或"抬手后顺序和看到的不一致"，
++ * 而在设备上很难一眼看出来。见 `trackReorder.test.ts`。
++ */
++
++/** 让位过渡的时长 / 曲线（与 FLIP 的 180ms 同源，手感一致）。 */
++export const REORDER_SHIFT_MS = 180;
++export const REORDER_SHIFT_EASING = "cubic-bezier(0.22, 1, 0.36, 1)";
++
++/**
++ * @param sibIds    同父兄弟的 id（**当前**顺序，即本次拖动开始前的顺序）
++ * @param fromIndex 被拖行在其中的下标
++ * @param toIndex   目标槽位的下标（= 被拖行视觉上落进哪一个位置）
++ * @param rowH      行高（px）
++ * @returns trackId → 纵向位移（px，正 = 下移）；**不含被拖行自己**（它用跟手位移）
++ */
++export function computeReorderShifts(
++    sibIds: readonly string[],
++    fromIndex: number,
++    toIndex: number,
++    rowH: number,
++): Record<string, number> {
++    const out: Record<string, number> = {};
++    if (fromIndex < 0 || toIndex < 0) return out;
++    if (fromIndex >= sibIds.length || toIndex >= sibIds.length) return out;
++    if (!(rowH > 0)) return out;
++    if (fromIndex === toIndex) return out;
++    const lo = Math.min(fromIndex, toIndex);
++    const hi = Math.max(fromIndex, toIndex);
++    /* 往下拖（toIndex > fromIndex）⇒ 被经过的那几行**上移**一行让出空槽；
++       往上拖则相反。两端（lo..hi）都是闭区间，但要跳过被拖行自己。 */
++    const dy = toIndex > fromIndex ? -rowH : rowH;
++    for (let k = lo; k <= hi; k += 1) {
++        if (k === fromIndex) continue;
++        const id = sibIds[k];
++        if (id === undefined) continue;
++        out[id] = dy;
++    }
++    return out;
++}
 diff --git a/frontend/src/components/layout/touchGesture.ts b/frontend/src/components/layout/touchGesture.ts
 new file mode 100644
 index 00000000..d1123533
@@ -99453,7 +99712,7 @@ index 176638e2..ee7f22c9 100644
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..3457ea12 100644
+index d42792c8..5f38ae04 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
 @@ -128,6 +128,22 @@ body,
@@ -99501,7 +99760,7 @@ index d42792c8..3457ea12 100644
  .rt-DialogContent,
  .rt-DropdownMenuContent,
  .rt-SelectContent,
-@@ -469,3 +500,951 @@ textarea {
+@@ -469,3 +500,971 @@ textarea {
      max-width: 400px;
      tab-size: 4;
  }
@@ -100451,6 +100710,26 @@ index d42792c8..3457ea12 100644
 +    [data-hs-pane],
 +    [data-hs-clip-actions] {
 +        animation: none !important;
++    }
++}
++
++/*
++ * ⑥ 轨道拖动排序（E33，用户口径「拖动轨道的动画需要松手前**纵向上始终跟手**，
++ *    类似浏览器标签页拖动排序的效果」）：被拖行**跟手**（`translateY(手指位移)`，
++ *    无过渡）、它经过的那几行**让位**一个行高（带过渡）。
++ *
++ * 过渡的时长/曲线由组件**内联**写在行上（它随拖动状态变化），所以这里只负责**开关**
++ * —— 与 ⑤ 的分屏收尾同款：`body[data-hs-no-anim]` 或系统「减弱动态效果」时一律关掉。
++ * ⚠️ 必须 `!important`：内联样式没有它，而 `!important` 的作者规则**能**盖过内联。
++ * （踩过：漏了这两条 ⇒ E22-F4 那类"置 `data-hs-no-anim` 后应当零动画"的对照判据变红。）
++ */
++body[data-hs-no-anim] [data-track-list-panel] [data-hs-track-row] {
++    transition: none !important;
++}
++
++@media (prefers-reduced-motion: reduce) {
++    [data-track-list-panel] [data-hs-track-row] {
++        transition: none !important;
 +    }
 +}
 diff --git a/frontend/src/main.tsx b/frontend/src/main.tsx
