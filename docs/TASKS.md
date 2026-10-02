@@ -4400,3 +4400,71 @@ mDisplayCutout=DisplayCutout{insets=Rect(0, 136 - 0, 0) boundingRect={Bounds=[�
 - C 拖「记事本」标题条 ⇒ **记事本↑ / 文件↓**，参数与轨道块不动；
 - D 权重进了 localStorage。
 🕳️ 拖动量必须按**这一对的高度比例**给（写死 +60 在每块只有 75px 时会跨阈值 ⇒ 误判）。
+
+
+---
+
+# §E32 轨道头「缩回」后与轨道区**高度不对齐**（2026-10-02）
+
+**用户口径**：「轨道头缩回且**分屏位置较高**时轨道与轨道头没对齐高度」。
+
+## 真因：收起态那条 CSS 把「撑满高度」一起抹掉了
+
+`index.css` 的收起态规则（`body[data-hs-header-collapsed="1"]`）原本把两个元素写在一起：
+
+```css
+body[data-hs-header-collapsed="1"] [data-track-list-panel],      /* 内层：列表本身 */
+body[data-hs-header-collapsed="1"] div:has(> [data-track-list-panel]) {  /* 外壳：整条轨道头列 */
+    width/min-width/max-width: 26px !important;
+    flex: 0 0 auto !important;   /* ← 这里 */
+    overflow: hidden;
+}
+```
+
+**问题在于这两个元素处在不同的弹性轴上**：
+
+| 元素 | 父的 `flex-direction` | `flex-basis` / `flex-grow` 管的是 | 该写什么 |
+| :--- | :--- | :--- | :--- |
+| 内层 `[data-track-list-panel]`（展开态是 `flex-1` = `1 1 0%`） | **column** | **高度** | 宽度用 width/min/max 收；flex **一个字都别写**（要保留 `flex-1` 的撑满） |
+| 外壳 `div:has(> …)`（整条轨道头列） | **row** | 宽度 | `flex: 0 0 auto`（grow:0 才不和时间线抢宽度） |
+
+原作者担心的是「写 `flex: 0 0 26px` 会把**高度**也定成 26px（因为父是 column）」，于是改成
+`flex: 0 0 auto` —— 但 `flex-grow: 0` 同时把内层的 `flex-1` 抹掉了 ⇒ **列表高度塌成内容高**。
+
+实测（真机 221deeb）：
+
+```
+展开态  panel h=284（= 外壳 332 − 头行 48）
+收起态  panel h=112（= 行高 80 + 「添加轨道」行 32）   ← 下方空出 172px
+```
+
+⇒ 左侧轨道头只看得见 1 行多，右侧轨道区仍全高 ⇒ 用户看到的「高度不对齐」。
+
+## 修法
+
+拆成两条规则：内层给回 `flex: 1 1 0%`（= 原来的 `flex-1`，只收宽度），外壳保留 `flex: 0 0 auto`。
+⚠️ 两者**不能互换**：外壳写成 `1 1 0%` 会与时间线**平分宽度**（各占一半）。
+
+## 判据 `scripts/_probe-e32-header-align.mjs`（真机 221deeb **6/6**）
+
+| 判据 | 修前 | 修后 |
+| :--- | :--- | :--- |
+| E32-1 左划真的收起（`data-hs-header-collapsed` + 宽 ~26px） | ✅ | ✅ |
+| **E32-2 收起后列表高度 == 展开态** | 🔴 284 → **112** | ✅ 221 → 221（Δ0） |
+| E32-3 头行底 == 第 0 行顶（接缝 0） | ✅ | ✅ |
+| E32-4 窄条里**右划能展开**（修 flex 最容易弄坏的一条） | ✅ | ✅ |
+| **E32-5 分界线**上拖后（轨道块变矮）收起仍一致 | 🔴 221 → **112** | ✅ 175 → 175（Δ0） |
+| E32-6 收起不把滚动位置钳掉 | ✅ | ✅ |
+
+- 判据用**真实触摸左划/右划**触发（不能用 `body.setAttribute` —— 那只能验 CSS，验不了手势本身）。
+- 回归：E25 四块分别调高 **4/4** ✅、E27「只剩非轨道块独占高度」93.1% ✅。
+
+## 🕳️ 两个探针坑（本轮各踩一次）
+
+1. **`hs-mobile-close-panel` 是 `toggle` 语义**（`toggleMobilePanel`），不是幂等关闭
+   —— 拿它当"关"用，面板本来是关的就会被**打开**。本轮因此把 `params` 挤掉，
+   而 `[data-hs-split-handle="param-toolbar"]` 只挂在参数块上 ⇒ E32-5 整条不可判。
+   ⇒ 纪律：先读 `[data-hs-pane]` 现状，**只对真在场的**面板 dispatch。
+   （对比：`hs-mobile-switch-tab` 走 `showMobilePanel`，是**累加开**、幂等。）
+2. **分屏比例/权重都会持久化** ⇒ 拖过分界线的探针必须在收尾**拖回原处**，
+   否则下一次运行的起点是脏状态（同 E25 那条纪律）。

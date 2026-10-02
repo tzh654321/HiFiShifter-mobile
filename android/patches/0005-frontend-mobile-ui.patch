@@ -99453,7 +99453,7 @@ index 176638e2..ee7f22c9 100644
 +
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..fb295d25 100644
+index d42792c8..3457ea12 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
 @@ -128,6 +128,22 @@ body,
@@ -99501,7 +99501,7 @@ index d42792c8..fb295d25 100644
  .rt-DialogContent,
  .rt-DropdownMenuContent,
  .rt-SelectContent,
-@@ -469,3 +500,931 @@ textarea {
+@@ -469,3 +500,951 @@ textarea {
      max-width: 400px;
      tab-size: 4;
  }
@@ -100003,16 +100003,36 @@ index d42792c8..fb295d25 100644
 + * 修法：把同一组收窄规则**同时应用到外壳**（用 `:has(> [data-track-list-panel])`
 + * 选中它 —— 外壳没有专门的属性可用），并把内层面板的宽度让给时间线。
 + */
-+body[data-hs-header-collapsed="1"] [data-track-list-panel],
++/* 🔴 同一个"收窄"要作用在两个不同轴上，**弹性声明必须分开写**（2026-10-02 修的，
++   之前合在一起写 `flex: 0 0 auto` ⇒ 列表高度塌陷，用户口径「轨道头缩回…轨道与轨道头
++   没对齐高度」）：
++   · 内层 `[data-track-list-panel]`（列表本身）的父是 **column** 弹性盒
++     ⇒ `flex-basis` / `flex-grow` 管的是**高度**，所以**一个字都不能写**：
++     写 `flex: 0 0 26px` 会把列表压成 26px 高；写 `flex: 0 0 auto` 则把 `flex-1` 的
++     「撑满剩余高度」抹掉 ⇒ 高度塌成**内容高**（实测 284 → 112px，下方空出 172px），
++     轨道头列表区比右侧轨道区矮 ⇒ **纵向错位** —— 这正是用户报的那条。
++     宽度不用管 flex：它是交叉轴，由下面的 width/min/max 决定。
++     所以给回 `flex: 1 1 0%`（= 原来的 `flex-1`），只收宽度。
++   · 外壳 `div:has(> [data-track-list-panel])` 的父是 **row** 弹性盒
++     ⇒ `flex-basis` 管的是**宽度**，且它是"整条轨道头列"，**必须 `grow: 0`**
++     才不会去和时间线抢宽度。这里保留 `flex: 0 0 auto`（basis auto + width 26px ⇒ 26px 宽 ✓）。
++   ⚠️ 两者**不能互换**：外壳写成 `1 1 0%` 会与时间线平分宽度（各占一半），
++   内层写成 `0 0 auto` 就是本轮这个高度塌陷。 */
++body[data-hs-header-collapsed="1"] [data-track-list-panel] {
++    width: 26px !important;
++    min-width: 26px !important;
++    max-width: 26px !important;
++    /* = `flex-1`：撑满外壳里的剩余高度（与展开态逐像素一致）。 */
++    flex: 1 1 0% !important;
++    overflow: hidden;
++}
 +body[data-hs-header-collapsed="1"] div:has(> [data-track-list-panel]) {
 +    width: 26px !important;
 +    min-width: 26px !important;
 +    max-width: 26px !important;
-+    /* ⚠️ **不能写 `flex: 0 0 26px`**：外壳是 `flex-direction: column` 的纵向弹性盒，
-+       那里的 `flex-basis` 管的是**高度** ⇒ 外壳会被压成 26px 高，里面的轨道列表
-+       连盒子都没有了（实测：窄条里右划展开失效 —— 触摸落在"外壳"上而不是列表容器上，
-+       而"左划收起 / 右划展开"的原生 touch 监听挂在列表容器上，事件根本传不下去）。
-+       宽度用 width/min/max 收，弹性只声明"不参与伸缩"。 */
++    /* 外壳 = 整条轨道头列，它的父（`[data-hs-surface="timeline"]`）是 **row**
++       ⇒ 这里的 flex-basis 管**宽度**。必须 `grow: 0`，否则会去和时间线抢宽度
++       （实测写成 `1 1 0%` 时两边各占一半）。宽度本身由上面 width/min/max 给定。 */
 +    flex: 0 0 auto !important;
 +    overflow: hidden;
 +}
