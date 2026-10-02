@@ -356,7 +356,7 @@ else
   #    原来是"五个标记都在 ⇒ 跳过"，于是**改了模板也不生效** —— 生成物永远停在
   #    首次写入的那一版，横屏 padding 口径改了、重跑脚本、自检还报"横屏沉浸补丁: 8"。
   #    改模板时**必须同时把 `_GEN_REV` 与下面 heredoc 里的 `HS-GEN-REV:` 一起 +1**。
-  _GEN_REV='2026-10-02.4'
+  _GEN_REV='2026-10-02.6'
   if [ -f "$MA" ] && grep -q "HS-GEN-REV: $_GEN_REV" "$MA"; then
     echo "· MainActivity.kt 已是 $_GEN_REV 版（$PKG_FROM_PATH），跳过"
   else
@@ -373,8 +373,11 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
+import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.view.View
 import androidx.activity.SystemBarStyle
 import androidx.activity.enableEdgeToEdge
@@ -389,7 +392,7 @@ import androidx.core.view.WindowInsetsControllerCompat
  *    + HS-LANDSCAPE-PATCH —— 本文件由 scripts/setup-gen-android.sh 生成。
  * gen/ 是 tauri-cli 的生成物，手改会在下次 `tauri android init` 时被抹掉；要改请改脚本。
  *
- * HS-GEN-REV: 2026-10-02.4   ← 模板版本号（改模板必须 +1，见脚本里的 `_GEN_REV`）
+ * HS-GEN-REV: 2026-10-02.6   ← 模板版本号（改模板必须 +1，见脚本里的 `_GEN_REV`）
  *
  * upstream 模板只调 enableEdgeToEdge() 就完事，但 HiFiShifter 是桌面 UI 搬过来的，
  * 菜单栏/工具栏/底部状态条都贴着窗口边缘 —— 不处理 inset 就会被系统栏压住。
@@ -427,6 +430,7 @@ class MainActivity : TauriActivity() {
     applySafeAreaInsets()
     // HS-LANDSCAPE-PATCH：冷启动就可能已经是横屏（用户上次就是横着退出的）。
     applyLandscapeImmersive()
+    applyEdgeGestureExclusion()
 
     // HS-RECORD-AUDIO-PATCH —— 录制需要 RECORD_AUDIO，而它是**危险权限**：
     // 光在 Manifest 里声明不够，Android 6+ 必须运行时申请，否则后端一开麦就被拒
@@ -487,6 +491,7 @@ class MainActivity : TauriActivity() {
   override fun onConfigurationChanged(newConfig: Configuration) {
     super.onConfigurationChanged(newConfig)
     applyLandscapeImmersive()
+    applyEdgeGestureExclusion()
   }
 
   /**
@@ -495,14 +500,67 @@ class MainActivity : TauriActivity() {
    */
   override fun onWindowFocusChanged(hasFocus: Boolean) {
     super.onWindowFocusChanged(hasFocus)
-    if (hasFocus) applyLandscapeImmersive()
+    if (hasFocus) {
+      applyLandscapeImmersive()
+      applyEdgeGestureExclusion()
+    }
   }
 
   override fun onResume() {
     super.onResume()
     // 旋转 / 分屏 / 手势导航切换 / 深浅色切换都会改变 inset，重新请求一次。
     applyLandscapeImmersive()
+    applyEdgeGestureExclusion()
     contentView()?.let { ViewCompat.requestApplyInsets(it) }
+  }
+
+  /**
+   * HS-EDGE-GESTURE-PATCH（2026-10-02，用户要求）—— 屏蔽**左右边缘的"返回"手势**。
+   *
+   * 用户口径：「系统的划动左右边缘退出的手势也需要屏蔽」—— 我们的画布/滑条一路铺到屏幕边缘，
+   * 手指在边缘附近起手就会被系统的返回手势抢走（拖到一半整个 Activity 被 pop）。
+   *
+   * 🕳️ **这个不能"完全"屏蔽**，只能**排除**：系统只认 `View.setSystemGestureExclusionRects()`
+   * （API 29+），而且**每条边最多只算 200 dp**（超出的部分被系统裁掉）。手势导航的返回是
+   * 系统进程自己处理的，应用无权关掉它，也改不了系统设置。
+   * ⇒ 这里把 200 dp 的预算**整段**给左/右边缘的**中段**（上下各留 1/6 给悬浮工具条与顶栏，
+   * 避开那里的按钮），横竖屏都生效。想要更强只能让用户把导航改成"三键"，不是应用能做的事。
+   *
+   * 判据见 `scripts/_probe-e29-edge-gesture.mjs`：从被排除的那段边缘起手向内划 ⇒ 应用**不退出**；
+   * 从**未**被排除的边缘（如贴着顶/底的那一小段）起手 ⇒ 仍会退出（如实记录这条边界）。
+   */
+  private fun applyEdgeGestureExclusion() {
+    if (Build.VERSION.SDK_INT < 29) return
+    val view = window.decorView ?: return
+    val w = view.width
+    val h = view.height
+    if (w <= 0 || h <= 0) {
+      // 首帧之前拿不到尺寸 ⇒ 下一帧再来一次。
+      view.post { applyEdgeGestureExclusion() }
+      return
+    }
+    val density = resources.displayMetrics.density
+    val band = (EDGE_GESTURE_BAND_DP * density).toInt()
+    val budget = minOf(h, (EDGE_GESTURE_MAX_DP * density).toInt())
+    val top = ((h - budget) / 2)
+    val rects = ArrayList<Rect>(2)
+    rects.add(Rect(0, top, band, top + budget))
+    rects.add(Rect(w - band, top, w, top + budget))
+    view.systemGestureExclusionRects = rects
+    /* 取证用（判据 `_probe-e29-edge-gesture.mjs` 的 logcat 断言）：
+       这套 rects **没法从 adb 侧读回来**，而行为判据在本机**做不了**（实测
+       `adb shell input swipe` / `input motionevent` 注入的边缘滑动**不会**触发系统的
+       边缘返回手势 —— 对照实验：未排除的那一段也照样不退出 ⇒ 注入方式无效）。
+       所以退一步，用一行日志证明"API 确实被调用、且传的是这两块矩形"。 */
+    Log.i("HiFiShifter", "HS-EDGE exclusion rects=$rects (w=$w h=$h density=$density)")
+  }
+
+  private companion object {
+    /** 系统返回手势的感应带宽度（约 40 dp），取宽一点无妨。 */
+    const val EDGE_GESTURE_BAND_DP = 44f
+
+    /** 系统对"每条边"最多只认 200 dp 的排除区。 */
+    const val EDGE_GESTURE_MAX_DP = 200f
   }
 
   private fun contentView(): View? = findViewById(android.R.id.content)

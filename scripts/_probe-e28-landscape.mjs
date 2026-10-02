@@ -76,14 +76,22 @@ const readOccluders = () => {
     return { cutout: pick('displayCutout'), gesture: pick('mandatorySystemGestures') };
 };
 
-/** 从 `dumpsys activity activities` 取本应用 ActivityRecord 的 resizeMode。 */
+/** 从 `dumpsys activity activities` 取本应用 ActivityRecord 的 resizeMode。
+ *
+ *  🕳️ **窗口要给足**：真机（ColorOS / Android 15）单条 `mGlobalConfig={…}` 就有上万字符，
+ *  原先"从包名起切 4000 字符再取第一个 `resizeMode=`"在真机上切不到 ⇒ 读到 `null`
+ *  ⇒ 判据会把"其实已经屏蔽了"报成失败。改成：**逐条 `resizeMode=` 往前看 40000 字符
+ *  里有没有本包名**，取第一条命中的。
+ */
 const readResizeMode = () => {
     const dump = adb('shell dumpsys activity activities').replace(/\r/g, '');
-    const i = dump.indexOf(`${PKG}/.MainActivity`);
-    if (i < 0) return null;
-    const seg = dump.slice(i, i + 4000);
-    const m = seg.match(/resizeMode=(\w+)/);
-    return m ? m[1] : null;
+    const re = /resizeMode=(\w+)/g;
+    let m;
+    while ((m = re.exec(dump)) !== null) {
+        const start = Math.max(0, m.index - 40000);
+        if (dump.slice(start, m.index).includes(`${PKG}/.MainActivity`)) return m[1];
+    }
+    return null;
 };
 
 /** 显示尺寸（px）。 */

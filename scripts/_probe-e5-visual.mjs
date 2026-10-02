@@ -107,9 +107,18 @@ const downDot = down.dots.find((d) => d.side === 'right') ?? {};
 const ok1 = held.hintExists && held.hintKinds.includes('fade') && held.hintKinds.includes('stretch');
 const ok2 = upDot.mode === 'fade' && upDot.svg >= 1;
 const ok3 = downDot.mode === 'rate' && downDot.svg >= 1;
+/* 🔴 E5-V4（2026-10-02 用户口径：「这两个图标**闪一下就消失**了」）：
+   内核原先在**纵向定型那一刻**主动收提示（`EDGE_KIND_LOCK_PX` 很小，长按期间手抖
+   几像素就定型）⇒ 用户看到"闪一下"。修法是**提示撑到手势结束**。
+   判据：定型之后（这里 already moved 40px）提示**必须还在**。 */
+const ok4 = up.hintExists === true && down.hintExists === true;
 console.log(`\n${ok1 ? '✅' : '🔴'} 长按 ⇒ 上方淡入/淡出 + 下方变速 两个图标都出现`);
 console.log(`      hint=${held.hintExists} kinds=${JSON.stringify(held.hintKinds)}`);
 console.log(`${ok2 ? '✅' : '🔴'} 上移 ⇒ 圆点带 fade 图标（mode=${upDot.mode} svg=${upDot.svg}）`);
 console.log(`${ok3 ? '✅' : '🔴'} 下移 ⇒ 圆点带 rate 图标（mode=${downDot.mode} svg=${downDot.svg}）`);
-console.log(`\n通过 ${[ok1, ok2, ok3].filter(Boolean).length} / 3`);
+console.log(
+    `${ok4 ? '✅' : '🔴'} 上/下划定型后提示**没有消失**（不"闪一下就消失"）` +
+        `（up.hint=${up.hintExists} down.hint=${down.hintExists}）`,
+);
+console.log(`\n通过 ${[ok1, ok2, ok3, ok4].filter(Boolean).length} / 4`);
 cdp.close();

@@ -48964,6 +48964,79 @@ index 242997f5..8319c30b 100644
 +    );
 +};
 \ No newline at end of file
+diff --git a/frontend/src/components/layout/longPressArbiter.ts b/frontend/src/components/layout/longPressArbiter.ts
+new file mode 100644
+index 00000000..0bd9ab3b
+--- /dev/null
++++ b/frontend/src/components/layout/longPressArbiter.ts
+@@ -0,0 +1,67 @@
++/**
++ * 长按仲裁（2026-10-02，用户口径）——
++ *
++ * > 「长按与长按并划动时常出现同时触发的情况，修法是长按操作**松手时才生效**
++ * >   （如调增益与轨道头长按菜单同时出现）」
++ *
++ * 现象成因（实测定位）：长按起手落在**轨道头的增益旋钮**上时，轨道排序的 `touchstart`
++ * 候选会**早退**（起手在交互控件上不参与排序）⇒ 它的 `touchHold` 恒为 `null`
++ * ⇒ 它的"拦下原生菜单、抬手再决定"那道闸门也失效；而 WebView 在长按约 500ms 时
++ * **照样**派发 `contextmenu` ⇒ **增益旋钮的拖动（260ms 已武装）与轨道菜单同时生效**。
++ *
++ * 本模块给"长按"类手势一个**全局互斥**：同一时刻只允许一个长按持有者
++ * （先用者占位，后来者 `begin` 返回 false ⇒ 直接放弃自己的长按）。
++ * 另外暴露 `longPressDragActive()` 给"菜单类"处理器：**只要有长按拖动在跑，就别弹菜单**。
++ *
++ * 设计取舍：
++ * - **以 `token` 认领**（`useRef({})` 或 `Symbol()`），不用 `pointerId` —— 本项目的长按
++ *   有 pointer 与原生 touch 两条路径，`pointerId` 在 `pointercancel` 之后不可靠；
++ *   token 只用于"能否安全释放"，不会把别人的锁清掉。
++ * - 单槽即可：这些都是单指手势，多点同时长按不是本项目的场景。
++ */
++
++type Kind = "menu" | "drag";
++
++let held: { token: object; kind: Kind } | null = null;
++
++/**
++ * 认领长按（应在**门槛定时器触发那一刻**调用，不是按下时）。
++ *
++ * @param token 持有者令牌（同一个对象才能释放）。
++ * @param kind `drag` = 长按并划动；`menu` = 长按不动。
++ * @returns false = 已有别人占着 ⇒ 调用方必须放弃自己的长按。
++ */
++export function beginLongPress(token: object, kind: Kind): boolean {
++    if (held !== null) return false;
++    held = { token, kind };
++    return true;
++}
++
++/** 释放（只有持有者本人能释放，避免误清别人的锁）。 */
++export function endLongPress(token: object): void {
++    if (held !== null && held.token === token) held = null;
++}
++
++/** 当前是否有"长按并划动"在跑 ⇒ 菜单类处理器据此闭嘴。 */
++export function longPressDragActive(): boolean {
++    return held !== null && held.kind === "drag";
++}
++
++/** 当前是否有任何长按在跑（调试/探针用）。 */
++export function longPressBusy(): boolean {
++    return held !== null;
++}
++
++/**
++ * 「起手是否落在交互控件上」——轨道排序/长按菜单都要用同一份判定。
++ *
++ * 之前这段选择器在 `TrackList` 里**抄了两份**（`onStart` 一份、别处一份），
++ * 抄漏一处就会出现"旋钮上按下去还被当成长按空白区"的重复触发。
++ */
++export const INTERACTIVE_TARGET_SELECTOR =
++    "button,[role='slider'],[role='button'],input,textarea,select,a,[data-hs-interactive]";
++
++export function isInteractiveTarget(target: EventTarget | null): boolean {
++    const el = target as HTMLElement | null;
++    return Boolean(el && typeof el.closest === "function" && el.closest(INTERACTIVE_TARGET_SELECTOR));
++}
 diff --git a/frontend/src/components/layout/pianoRoll/VibratoAdjustOverlay.tsx b/frontend/src/components/layout/pianoRoll/VibratoAdjustOverlay.tsx
 new file mode 100644
 index 00000000..f1d868ea
@@ -61137,10 +61210,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..5a7e4cc4 100644
+index c0db2221..31faf681 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,2945 @@
+@@ -1,2297 +1,2994 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -63439,6 +63512,12 @@ index c0db2221..5a7e4cc4 100644
 -
 -export const TrackList = React.memo(TrackListInner);
 +import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
++import {
++    beginLongPress,
++    endLongPress,
++    isInteractiveTarget,
++    longPressDragActive,
++} from "../longPressArbiter";
 +import { registerDragAbort } from "./gestureFocusGuard";
 +import { formatEditNumber } from "./math";
 +import { measureTextWidth } from "./runtime/timelineCanvasStyle";
@@ -64165,6 +64244,8 @@ index c0db2221..5a7e4cc4 100644
 +        let dragId: string | null = null;
 +        let startY = 0;
 +        let targetIndex: number | null = null;
++        /** 长按仲裁令牌（本次 effect 生命周期内唯一）。 */
++        const holdToken = {};
 +
 +        const reset = () => {
 +            if (timer !== null) window.clearTimeout(timer);
@@ -64173,6 +64254,7 @@ index c0db2221..5a7e4cc4 100644
 +            dragId = null;
 +            targetIndex = null;
 +            touchHold.current = null;
++            endLongPress(holdToken);
 +        };
 +        const onStart = (e: TouchEvent) => {
 +            reset();
@@ -64181,7 +64263,9 @@ index c0db2221..5a7e4cc4 100644
 +            const row = t?.closest?.("[data-hs-track-row]") as HTMLElement | null;
 +            if (!row) return;
 +            // 起手落在交互控件上（C/M/S、旋钮、算法下拉…）就不参与排序。
-+            if (t?.closest?.("button,[role='slider'],input,textarea,select,a")) return;
++            // ⚠️ 判定走 `isInteractiveTarget`（与轨道菜单的 contextmenu 守卫**同一份**），
++            //    抄两份必漏 —— 那正是"旋钮上长按还会弹轨道菜单"的来源。
++            if (isInteractiveTarget(t)) return;
 +            dragId = row.getAttribute("data-hs-track-row");
 +            startY = e.touches[0].clientY;
 +            if (dragId === null) return;
@@ -64196,6 +64280,13 @@ index c0db2221..5a7e4cc4 100644
 +            };
 +            timer = window.setTimeout(() => {
 +                timer = null;
++                /* 🔴 长按仲裁（2026-10-02，用户口径「长按与长按并划动常同时触发」）：
++                   门槛到点还不够 —— 必须**抢到全局长按锁**才武装。否则"增益旋钮正在拖动"
++                   时轨道排序也会同时武装 ⇒ 一次长按触发两条功能。抢不到就整套放弃。 */
++                if (!beginLongPress(holdToken, "drag")) {
++                    reset();
++                    return;
++                }
 +                armed = true;
 +            }, ARM_MS);
 +        };
@@ -64783,6 +64874,8 @@ index c0db2221..5a7e4cc4 100644
 +           （监听留在 window 上、`finished` 状态半途而废）⇒ 用户看到
 +           「增益调完之后点别处仍在调增益」。 */
 +        const knobEl = e.currentTarget;
++        /** 长按仲裁令牌（本次按压内唯一）。 */
++        const gainToken = {};
 +        let armed = false;
 +        /** 手指是否还按着。门槛定时器**只在仍按着时**才允许武装拖动。 */
 +        let pressActive = true;
@@ -64830,6 +64923,26 @@ index c0db2221..5a7e4cc4 100644
 +                clearGate();
 +                return;
 +            }
++            /* 🔴 长按仲裁（2026-10-02）：抢不到就放弃 —— 一次长按只准触发一条功能。
++               对手是轨道排序（ARM_MS 450）与轨道菜单；用户实测的现网现象是
++               「调增益与轨道头长按菜单同时出现」。 */
++            if (!beginLongPress(gainToken, "drag")) {
++                clearGate();
++                return;
++            }
++            /* 拖动的收尾在 `startVolumeKnobDragNow` 内部；这里只负责**把长按锁还回去**，
++               否则这把锁会一直占着，后面所有长按（排序、菜单）都进不来。 */
++            const releaseOnce = () => {
++                window.removeEventListener("pointerup", releaseOnce, true);
++                window.removeEventListener("pointercancel", releaseOnce, true);
++                window.removeEventListener("touchend", releaseOnce, true);
++                window.removeEventListener("touchcancel", releaseOnce, true);
++                endLongPress(gainToken);
++            };
++            window.addEventListener("pointerup", releaseOnce, true);
++            window.addEventListener("pointercancel", releaseOnce, true);
++            window.addEventListener("touchend", releaseOnce, true);
++            window.addEventListener("touchcancel", releaseOnce, true);
 +            armed = true;
 +            clearGate();
 +            /* E12：长按识别后震一下（与其它"长按并划动"手势一致）。失败静默即可。 */
@@ -65388,6 +65501,15 @@ index c0db2221..5a7e4cc4 100644
 +                                           在长按约 500ms 时自己派发 contextmenu，而"是否在
 +                                           划动"要等抬手才知道 ⇒ 先存进 ref，由 `onEnd`
 +                                           按 `moved` 决定补发或丢弃。 */
++                                        /* 🔴 2026-10-02 补两个前置（用户口径「调增益与轨道头长按菜单
++                                           同时出现」的真因就在这）：
++                                           ① 起手落在**交互控件**上（增益旋钮/C-M-S 按钮/算法下拉）
++                                              ⇒ 那是那些控件自己的长按语义，轨道菜单**一律不开**；
++                                              此时 `onStart` 早已早退、`touchHold` 恒为 null，
++                                              上面那道 `deferTrackMenuForTouch` 根本拦不住。
++                                           ② 已有任何"长按并划动"在跑 ⇒ 也不开（双保险）。 */
++                                        if (isInteractiveTarget(e.target)) return;
++                                        if (longPressDragActive()) return;
 +                                        if (deferTrackMenuForTouch(e)) return;
 +                                        e.preventDefault();
 +                                        setTrackCtxMenu({
@@ -67920,10 +68042,10 @@ index 226da0e7..ec0be5bc 100644
 +};
 \ No newline at end of file
 diff --git a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-index a2ae3b60..92821a60 100644
+index a2ae3b60..a1060b3a 100644
 --- a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
 +++ b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-@@ -1,5487 +1,6058 @@
+@@ -1,5487 +1,6061 @@
 -/**
 - * 时间轴渲染内核 · 命令式宿主
 - *
@@ -77695,9 +77817,12 @@ index a2ae3b60..92821a60 100644
 +                } else {
 +                    const dyEdge = event.clientY - gesture.startClientY;
 +                    if (Math.abs(dyEdge) < EDGE_KIND_LOCK_PX) return; // 等纵向定型
-+                    // 定型后提示图标收起（用户已经知道要调什么了，图标继续挂着会
-+                    // 挡住控制点附近的波形）。
-+                    interactions?.onClipEdgeLongPressHint?.(null);
++                    /* 🔴 2026-10-02 **不再在定型这一刻收起提示**（用户口径：「长按控制点，
++                       上方出现淡入/淡出图标、下方出现变速缩放图标 —— 这两个图标**闪一下就
++                       消失了**」）。原来的实现就是在这一行收的，理由是"图标会挡住波形"；
++                       但 `EDGE_KIND_LOCK_PX` 很小，长按 500ms 期间手指抖几像素就定型 ⇒
++                       用户看到的就是"闪一下"。⇒ 提示改为**撑到手势结束**（见 onUp 那条
++                       `edgeHold.fired` 分支），两段式手势全程都有"现在在调什么"的锚。 */
 +                    // 先把按下时的几何**拷出来**：下面是"读旧值 + 写新 gesture"，
 +                    // 直接读 `gesture.*` 会在闭包（`find` 的回调）里丢掉 TS 的收窄。
 +                    const sourceClipId = gesture.clipId;
@@ -80538,10 +80663,10 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..1412018f
+index 00000000..7ad0bcda
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,220 @@
+@@ -0,0 +1,228 @@
 +/**
 + * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
@@ -80709,10 +80834,18 @@ index 00000000..1412018f
 +            g.container.left + g.container.width - DOT_R,
 +            g.left + g.width + DOT_FOLLOW_MARGIN_PX,
 +        );
-+        const minY = Math.max(g.container.top + DOT_R, g.top - DOT_FOLLOW_MARGIN_PX);
++        /* 🔴 E24-⑤（2026-10-02 用户口径：「**控制点的位置限制在"王"字型轨道上** ——
++           目前的控制点样式与实际操作很容易无关」）：
++           跟手时**纵向不再允许跑出这一行轨道**。原先上下各留 44px，手指往上一划圆点就
++           飞到上一行轨道去了，看的人根本分不清它在调哪条边。
++           ⇒ 纵向夹在**本行轨道**（`top … top + clipHeight`），横向照旧跟手 ±44px
++             （横向才是"拖边界"的方向）。
++           ⇒ "上划=fade / 下划=rate" 的反馈改由**圆点里的图标**承担（本来就已实现），
++             不再依赖"圆点位移"这种和轨道无关的表达。 */
++        const minY = Math.max(g.container.top + DOT_R, g.top + DOT_R);
 +        const maxY = Math.min(
 +            g.container.top + g.container.height - DOT_R,
-+            g.top + g.clipHeight + DOT_FOLLOW_MARGIN_PX,
++            g.top + g.clipHeight - DOT_R,
 +        );
 +        const clamp = (v: number, lo: number, hi: number) =>
 +            Math.min(Math.max(v, Math.min(lo, hi)), Math.max(lo, hi));
