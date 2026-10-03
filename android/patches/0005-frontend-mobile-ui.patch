@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..d5140263 100644
+index 3802022a..a35e25e7 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,5022 @@
+@@ -1,4006 +1,5038 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -8746,16 +8746,16 @@ index 3802022a..d5140263 100644
 +                                    上下文内生效，压不过后面的兄弟面板 ⇒ 弹窗被分屏块盖住。
 +                                    ⇒ 移到 App 根层（与 `MobileBottomBar` 同级，见下方），
 +                                    与任何面板的层叠上下文都无关。 */}
-+                                <ClipQuickActions />
-+                                {/* 规格 docs/15「音频块·单击 = 选中并显示常用操作**与左右控制点**」：
-+                                    左右边缘的两个抓手（TASKS.md B1）。纯 `pointer-events:none`
-+                                    浮层——手势仍由内核的边缘 / 淡变命中区负责，浮层只负责"看得见"。 */}
-+                                <ClipControlPoints />
-+                                {/* 规格 docs/15「控制点·长按 = 其上方出现淡入/淡出图标、
-+                                    下方出现变速缩放图标」：两段式手势的第一段反馈。
-+                                    与操作条同域（手机 + 时间线面板可见），但它是
-+                                    `position: fixed` 落在指针处，故与操作条并列挂载。 */}
-+                                <ClipEdgeLongPressHint />
++                                {/* 🔴 2026-10-03（用户口径「第四个浮层要高过轨道头 / 拍数栏」，
++                                    实测把 z 提到 60 仍**没生效**）：
++                                    `ClipQuickActions` / `ClipControlPoints` / `ClipEdgeLongPressHint`
++                                    原先挂在这里 —— **在时间线面板块内部**。而 `[data-hs-pane]` 带
++                                    `animation: hs-fade-in … both` ⇒ 每个面板自成**层叠上下文**，
++                                    浮层的 `z-index` 只在该上下文内生效、**压不出这块面板**
++                                    ⇒ 无论提到多少都会被轨道头 / 拍数栏盖住。
++                                    这与上面 `SettingsOverlays` 的 bug **完全同源** ⇒ 三个浮层
++                                    **一并移到 App 根层**（与 `MobileBottomBar` 同级，见下方）。
++                                    三者内部都是 `position: fixed`（视口坐标）⇒ 换挂载点不动几何。 */}
 +                            </div>
 +                        </ExitPresence>
 +                        <ExitPresence open={mobileHasNonTrackPanel} anim="pane">
@@ -8897,6 +8897,22 @@ index 3802022a..d5140263 100644
 +                会成为层叠上下文，弹窗的 z-index 就压不出该面板（用户报的
 +                「弹窗在分屏界面之后」）。仍按原口径只在手机挂载（平板走 MenuBar 那份）。 */}
 +            {isPhone ? <SettingsOverlays /> : null}
++            {/* 规格 docs/15：音频块的三个**瞬态浮层** ——
++                「单击 = 选中并显示常用操作**与左右控制点**」的操作条、左右边缘的两个抓手、
++                以及「控制点长按 = 上方淡入淡出图标 / 下方变速图标」的提示。
++                🔴 2026-10-03（用户口径「应可以显示在更高层级，如轨道头、拍数栏」）：
++                **必须挂在根层** —— 原先挂时间线面板块内部，而 `[data-hs-pane]` 的
++                `hs-fade-in` 动画让每个面板自成层叠上下文 ⇒ 提到 z=60 也压不出该面板
++                （用户实测"确实没有生效"）。与 `SettingsOverlays` 同源、同解。
++                三者内部均为 `position: fixed`（视口坐标）⇒ 换挂载点几何不变。
++                挂载条件保留（手机 + 时间线面板可见）。 */}
++            {isPhone && mobilePanels.timeline ? (
++                <>
++                    <ClipQuickActions />
++                    <ClipControlPoints />
++                    <ClipEdgeLongPressHint />
++                </>
++            ) : null}
 +            {isTouchShell ? <MobileBottomBar showEye={!isPhone} /> : null}
 +            {/* C（#17）：底栏页签已删除 —— 面板显隐改到「视图」菜单。 */}
 +
@@ -13544,1241 +13560,21 @@ index 8baaa308..5cf41eb4 100644
 +    );
 +}
 diff --git a/frontend/src/components/layout/FileBrowserPanel.tsx b/frontend/src/components/layout/FileBrowserPanel.tsx
-index 3ebf39a9..d854d865 100644
+index 3ebf39a9..66720a2d 100644
 --- a/frontend/src/components/layout/FileBrowserPanel.tsx
 +++ b/frontend/src/components/layout/FileBrowserPanel.tsx
-@@ -1,1026 +1,1402 @@
--import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+@@ -1,5 +1,5 @@
+ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 -import { Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
--import {
--    Cross2Icon,
--    FileIcon,
--    MagnifyingGlassIcon,
--    ReloadIcon,
--    ChevronUpIcon,
--    SpeakerLoudIcon,
--    PlayIcon,
--    StopIcon,
--} from "@radix-ui/react-icons";
--import { useAppDispatch, useAppSelector } from "../../app/hooks";
--import type { RootState } from "../../app/store";
--import { useI18n } from "../../i18n/I18nProvider";
--import {
--    loadDirectory,
--    setPreviewVolume,
--    setPreviewingFile,
--    setSearchQuery,
--    setVisible,
--    searchFilesRecursive,
--    toggleRegex,
--    setSortMode,
--    toggleAudioOnly,
--    type SortMode,
--} from "../../features/fileBrowser/fileBrowserSlice";
--import { audioPreview } from "../../features/fileBrowser/audioPreview";
--import { fileBrowserApi, type FileEntry } from "../../services/api/fileBrowser";
--import { applySelectWheelChange } from "../../utils/selectWheel";
--import { isPrimaryModifierDown } from "../../utils/platform";
--
--/** 支持的音频与视频媒体扩展名（视频按音轨导入） */
--const AUDIO_EXTENSIONS = new Set([
--    "wav",
--    "mp3",
--    "flac",
--    "ogg",
--    "oga",
--    "opus",
--    "aac",
--    "m4a",
--    "aif",
--    "aiff",
--    "wma",
--    "ac3",
--    "eac3",
--    "ape",
--    "wv",
--    "mp2",
--    "mpa",
--    "dts",
--    "amr",
--    "mp4",
--    "m4v",
--    "mov",
--    "mkv",
--    "webm",
--    "avi",
--    "flv",
--    "wmv",
--    "ts",
--    "mts",
--    "m2ts",
--    "vob",
--    "mpg",
--    "mpeg",
--    "3gp",
--    "3g2",
--    "ogv",
--    "rm",
--    "rmvb",
--]);
--/**
-- * 支持的 MIDI 文件扩展名（可拖拽导入到时间轴或参数编辑器）。
-- *
-- * 与拖放准入（`timeline/dnd`）和后端 `SUPPORTED_MIDI_EXTS` 保持一致：`smf`
-- * （Standard MIDI File）一并支持，否则它能"被放进来"却"不能从文件浏览器拖出去"。
-- */
--const MIDI_EXTENSIONS = new Set(["mid", "midi", "smf"]);
--
--/**
-- * 支持的工程文件扩展名（可拖拽导入）。
-- *
-- * 与拖放准入（`timeline/dnd`）保持**同一份白名单**：含 `-bak` 备份后缀
-- * （`.hshp-bak` / `.hsp-bak` / `.rpp-bak`）。此前这里不含备份后缀，于是同一个
-- * `.hshp-bak` 文件"拖进时间轴会被接受、从文件浏览器里却拖不动"——同一应用对同一
-- * 文件给出两种答案。
-- *
-- * 注意 FileEntry.extension 是最后一个点后的完整后缀，因此 "proj.hshp-bak" 的
-- * extension 为 "hshp-bak"、而不是 "bak"，天然不会与正本混淆。
-- */
--const PROJECT_EXTENSIONS = new Set([
--    "hshp",
--    "hsp",
--    "hshp-bak",
--    "hsp-bak",
--    "rpp",
--    "rpp-bak",
--    "vshp",
--    "vsp",
--]);
--
--const SORT_MODE_OPTIONS: SortMode[] = ["name", "date", "size"];
--
--function isAudioFile(entry: FileEntry): boolean {
--    return !entry.isDir && !!entry.extension && AUDIO_EXTENSIONS.has(entry.extension);
--}
--
--function isMidiFile(entry: FileEntry): boolean {
--    return !entry.isDir && !!entry.extension && MIDI_EXTENSIONS.has(entry.extension);
--}
--
--/** 工程文件（HiFiShifter / Reaper / VocalShifter 工程）。 */
--function isProjectFile(entry: FileEntry): boolean {
--    return !entry.isDir && !!entry.extension && PROJECT_EXTENSIONS.has(entry.extension);
--}
--
--/**
-- * 可拖拽的文件：音频/视频（拖入时间轴）+ MIDI（拖入时间轴或参数编辑器）
-- * + 工程文件（拖入时间轴弹出 打开/导入 操作）。
-- */
--function isDraggableFile(entry: FileEntry): boolean {
--    return isAudioFile(entry) || isMidiFile(entry) || isProjectFile(entry);
--}
--
--const VIDEO_EXTENSIONS = new Set([
--    "mp4",
--    "m4v",
--    "mov",
--    "mkv",
--    "webm",
--    "avi",
--    "flv",
--    "wmv",
--    "ts",
--    "mts",
--    "m2ts",
--    "vob",
--    "mpg",
--    "mpeg",
--    "3gp",
--    "3g2",
--    "ogv",
--    "rm",
--    "rmvb",
--]);
--
--function isVideoFile(entry: FileEntry): boolean {
--    return isAudioFile(entry) && !!entry.extension && VIDEO_EXTENSIONS.has(entry.extension);
--}
--
--/** 格式化文件大小 */
--function formatSize(bytes: number | null): string {
--    if (bytes == null) return "";
--    if (bytes < 1024) return `${bytes} B`;
--    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
--    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
--}
--
--/** 文件夹图标 SVG */
--function FolderIcon({ className }: { className?: string }) {
--    return (
--        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
--            <path
--                d="M1 3.5C1 3.22386 1.22386 3 1.5 3H5.29289L6.64645 4.35355C6.74021 4.44732 6.86739 4.5 7 4.5H13.5C13.7761 4.5 14 4.72386 14 5V12.5C14 12.7761 13.7761 13 13.5 13H1.5C1.22386 13 1 12.7761 1 12.5V3.5Z"
--                fill="currentColor"
--            />
--        </svg>
--    );
--}
--
--/** 视频媒体图标 SVG */
--function VideoIcon({ className }: { className?: string }) {
--    return (
--        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
--            <rect
--                x="1.5"
--                y="2.5"
--                width="12"
--                height="10"
--                rx="1.5"
--                stroke="currentColor"
--                strokeWidth="1.2"
--            />
--            <path d="M6 5.5V9.5L9.5 7.5L6 5.5Z" fill="currentColor" />
--        </svg>
--    );
--}
--
--/** 音频文件图标 SVG */
--function AudioIcon({ className }: { className?: string }) {
--    return (
--        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
--            <path
--                d="M7.5 0.75L7.5 14.25M10.5 3L10.5 12M4.5 3L4.5 12M13.5 5.5L13.5 9.5M1.5 5.5L1.5 9.5"
--                stroke="currentColor"
--                strokeWidth="1.2"
--                strokeLinecap="round"
--            />
--        </svg>
--    );
--}
--
--/** MIDI 文件图标 SVG（双音符） */
--function MidiIcon({ className }: { className?: string }) {
--    return (
--        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
--            <path
--                d="M5 2.5V9.5M5 9.5C5 8.39543 4.10457 7.5 3 7.5C1.89543 7.5 1 8.39543 1 9.5C1 10.6046 1.89543 11.5 3 11.5C4.10457 11.5 5 10.6046 5 9.5ZM12.5 3.5V9.5M12.5 9.5C12.5 8.39543 11.6046 7.5 10.5 7.5C9.39543 7.5 8.5 8.39543 8.5 9.5C8.5 10.6046 9.39543 11.5 10.5 11.5C11.6046 11.5 12.5 10.6046 12.5 9.5Z"
--                stroke="currentColor"
--                strokeWidth="1.2"
--                strokeLinecap="round"
--            />
--            <path d="M5 2.5L12.5 1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
--        </svg>
--    );
--}
--
--/** 工程文件图标 SVG（文档 + 星标），用于高亮 hshp/hsp/rpp/vshp/vsp。 */
--function ProjectIcon({ className }: { className?: string }) {
--    return (
--        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
--            <path
--                d="M2.5 1.5H6.5L9 4V13.5H2.5V1.5Z"
--                stroke="currentColor"
--                strokeWidth="1.2"
--                strokeLinejoin="round"
--            />
--            <path d="M6.5 1.5V4H9" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
--            <path
--                d="M7.75 6.75L8.36 8.02L9.75 8.18L8.72 9.14L8.96 10.52L7.75 9.84L6.54 10.52L6.78 9.14L5.75 8.18L7.14 8.02L7.75 6.75Z"
--                fill="currentColor"
--            />
--        </svg>
--    );
--}
--
--export const FileBrowserPanel: React.FC = () => {
--    const dispatch = useAppDispatch();
--    const { t } = useI18n();
--    const tAny = t as (key: string) => string;
--    const fb = useAppSelector((state: RootState) => state.fileBrowser);
--    const searchInputRef = useRef<HTMLInputElement>(null);
--    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
--
--    // 清除 debounce
--    useEffect(
--        () => () => {
--            if (debounceRef.current) clearTimeout(debounceRef.current);
--        },
--        [],
--    );
--
--    // 预览音量同步
--    useEffect(() => {
--        audioPreview.setVolume(fb.previewVolume);
--    }, [fb.previewVolume]);
--
--    // 组件挂载时，如果有上次的路径，自动加载
--    useEffect(() => {
--        if (fb.currentPath && fb.entries.length === 0 && !fb.loading) {
--            void dispatch(loadDirectory(fb.currentPath));
--        }
--    }, []); // eslint-disable-line react-hooks/exhaustive-deps
--
--    // 根据搜索模式决定展示配表
--    const isSearchMode = fb.searchQuery.trim().length > 0;
--    const trimmedSearchQuery = fb.searchQuery.trim();
--
--    const hasRegexError = useMemo(() => {
--        if (!isSearchMode || !fb.regexEnabled || !trimmedSearchQuery) {
--            return false;
--        }
--        try {
--            // Validate regex and let UI display an explicit error.
--            void new RegExp(trimmedSearchQuery, "i");
--            return false;
--        } catch {
--            return true;
--        }
--    }, [isSearchMode, fb.regexEnabled, trimmedSearchQuery]);
--
--    // 客户端正则过滤（仅在搜索模式且 regexEnabled 时）
--    const regexFilteredEntries = useMemo(() => {
--        const rawEntries = isSearchMode ? (fb.searchResults ?? []) : fb.entries;
--        if (!isSearchMode || !fb.regexEnabled || !trimmedSearchQuery) {
--            return rawEntries;
--        }
--        try {
--            const re = new RegExp(trimmedSearchQuery, "i");
--            return rawEntries.filter((e) => re.test(e.name));
--        } catch {
--            return [];
--        }
--    }, [isSearchMode, fb.entries, fb.searchResults, fb.regexEnabled, trimmedSearchQuery]);
--
--    // 音频过滤
--    const audioFilteredEntries = useMemo(() => {
--        if (!fb.audioOnly) return regexFilteredEntries;
--        // “仅显示媒体文件”：音频/视频 + MIDI（MIDI 可导入时间轴/参数编辑器）。
--        return regexFilteredEntries.filter((e) => e.isDir || isAudioFile(e) || isMidiFile(e));
--    }, [regexFilteredEntries, fb.audioOnly]);
--
--    // 排序
--    const displayEntries = useMemo(() => {
--        const sorted = [...audioFilteredEntries];
--        switch (fb.sortMode) {
--            case "name":
--                sorted.sort((a, b) => a.name.localeCompare(b.name));
--                break;
--            case "date":
--                sorted.sort((a, b) => (b.modifiedTime ?? 0) - (a.modifiedTime ?? 0));
--                break;
--            case "size":
--                sorted.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
--                break;
--        }
--        // 目录始终排在前面
--        sorted.sort((a, b) => (a.isDir === b.isDir ? 0 : a.isDir ? -1 : 1));
--        return sorted;
--    }, [audioFilteredEntries, fb.sortMode]);
--
--    // 计算展示相对路径（搜索模式下显示文件所在目录）
--    function getRelativeDirHint(fullPath: string): string {
--        const normalFull = fullPath.replace(/\\/g, "/");
--        const normalBase = fb.currentPath.replace(/\\/g, "/").replace(/\/$/, "");
--        if (normalFull.toLowerCase().startsWith(normalBase.toLowerCase() + "/")) {
--            const rel = normalFull.slice(normalBase.length + 1);
--            const lastSlash = rel.lastIndexOf("/");
--            return lastSlash >= 0 ? rel.slice(0, lastSlash) : "";
--        }
--        return "";
--    }
--
--    // 选择文件夹（通过后端 rfd dialog）
--    const handleOpenFolder = useCallback(async () => {
--        try {
--            const result = await fileBrowserApi.pickDirectory();
--            if (result.ok && !result.canceled && result.path) {
--                void dispatch(loadDirectory(result.path));
--            }
--        } catch {
--            // 忽略错误
--        }
--    }, [dispatch]);
--
--    // 刷新当前目录
--    const handleRefresh = useCallback(() => {
--        if (fb.currentPath) {
--            void dispatch(loadDirectory(fb.currentPath));
--        }
--    }, [dispatch, fb.currentPath]);
--
--    // 返回上级目录
--    const handleParentDir = useCallback(() => {
--        if (!fb.currentPath) return;
--        // 处理 Windows 和 Unix 路径
--        const normalized = fb.currentPath.replace(/\\/g, "/");
--        const parts = normalized.split("/").filter(Boolean);
--        if (parts.length <= 1) return; // 已经是根目录
--        parts.pop();
--        // Windows 路径恢复
--        let parentPath = parts.join("/");
--        if (/^[A-Za-z]:$/.test(parts[0])) {
--            parentPath = parts[0] + "/" + parts.slice(1).join("/");
--        }
--        if (fb.currentPath.includes("\\")) {
--            parentPath = parentPath.replace(/\//g, "\\");
--        }
--        void dispatch(loadDirectory(parentPath));
--    }, [dispatch, fb.currentPath]);
--
--    // 进入子目录
--    const handleEnterDir = useCallback(
--        (dirPath: string) => {
--            if (debounceRef.current) clearTimeout(debounceRef.current);
--            dispatch(setSearchQuery(""));
--            void dispatch(loadDirectory(dirPath));
--        },
--        [dispatch],
--    );
--
--    // ── 多选状态 ───────────────────────────────────────────────────────────
--    const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
--    const lastClickedIndexRef = useRef<number>(-1);
--
--    // 获取仅音频的列表用于 shift-range 选择
--    const audioEntries = useMemo(() => displayEntries.filter(isAudioFile), [displayEntries]);
--
--    const handleClickAudio = useCallback(
--        (entry: FileEntry, ev?: React.MouseEvent) => {
--            const idx = audioEntries.findIndex((e) => e.path === entry.path);
--
--            if (ev && isPrimaryModifierDown(ev)) {
--                // macOS: Command+click / Windows: Ctrl+click — toggle selection
--                setSelectedPaths((prev) => {
--                    const next = new Set(prev);
--                    if (next.has(entry.path)) next.delete(entry.path);
--                    else next.add(entry.path);
--                    return next;
--                });
--                lastClickedIndexRef.current = idx;
--                return;
--            }
--
--            if (ev?.shiftKey && lastClickedIndexRef.current >= 0) {
--                // Shift+click: range selection
--                const start = Math.min(lastClickedIndexRef.current, idx);
--                const end = Math.max(lastClickedIndexRef.current, idx);
--                setSelectedPaths((prev) => {
--                    const next = new Set(prev);
--                    for (let i = start; i <= end; i++) {
--                        next.add(audioEntries[i].path);
--                    }
--                    return next;
--                });
--                return;
--            }
--
--            // Normal click: clear selection, preview
--            setSelectedPaths(new Set());
--            lastClickedIndexRef.current = idx;
--            dispatch(setPreviewingFile(entry.path));
--            void audioPreview.play(entry.path, () => {
--                dispatch(setPreviewingFile(null));
--            });
--        },
--        [dispatch, audioEntries],
--    );
--
--    // Clear selection when directory changes
--    useEffect(() => {
--        setSelectedPaths(new Set());
--        lastClickedIndexRef.current = -1;
--    }, [fb.currentPath]);
--
--    // 拖拽开始 — 使用自定义 pointer 事件实现，替代 HTML5 drag API
--    const [dragState, setDragState] = useState<{
--        filePath: string;
--        fileName: string;
--        allFilePaths: string[];
--        startX: number;
--        startY: number;
--        active: boolean; // 超过阈值后才真正激活拖拽
--        isRightDrag: boolean; // 右键拖拽标记
--    } | null>(null);
--    const dragStateRef = useRef(dragState);
--    // eslint-disable-next-line react-hooks/refs -- render 期写 ref 镜像：命令式绘制/事件回调需在同一提交内读取最新值（热路径既有模式）
--    dragStateRef.current = dragState;
--
--    // ghost 元素跟随鼠标
--    const ghostRef = useRef<HTMLDivElement | null>(null);
--
--    const DRAG_THRESHOLD = 5; // 像素阈值，防止误触
--
--    const handlePointerDownForDrag = useCallback(
--        (e: React.PointerEvent<HTMLDivElement>, entry: FileEntry) => {
--            // 允许左键(0)和右键(2)拖拽
--            if (e.button !== 0 && e.button !== 2) return;
--            // Collect all selected paths (include current entry)
--            const paths =
--                selectedPaths.size > 0 && selectedPaths.has(entry.path)
--                    ? Array.from(selectedPaths)
--                    : [entry.path];
--            // 不拦截 pointer，让 click 事件仍能触发预览
--            setDragState({
--                filePath: entry.path,
--                fileName: entry.name,
--                allFilePaths: paths,
--                startX: e.clientX,
--                startY: e.clientY,
--                active: false,
--                isRightDrag: e.button === 2,
--            });
--        },
--        [selectedPaths],
--    );
--
--    useEffect(() => {
--        if (!dragState) return;
--
--        function onPointerMove(e: PointerEvent) {
--            const ds = dragStateRef.current;
--            if (!ds) return;
--
--            if (!ds.active) {
--                const dx = e.clientX - ds.startX;
--                const dy = e.clientY - ds.startY;
--                if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD) return;
--                // 激活拖拽
--                dragStateRef.current = { ...ds, active: true };
--                setDragState(dragStateRef.current);
--                // 发送拖拽开始事件
--                window.dispatchEvent(
--                    new CustomEvent("hifi-file-drag", {
--                        detail: {
--                            type: "start",
--                            filePath: ds.filePath,
--                            fileName: ds.fileName,
--                            filePaths: ds.allFilePaths,
--                            clientX: e.clientX,
--                            clientY: e.clientY,
--                            isRightDrag: ds.isRightDrag,
--                        },
--                    }),
--                );
--                // 异步获取音频时长，获取后通知 TimelinePanel 更新 ghost 宽度
--                fileBrowserApi
--                    .getAudioFileInfo(ds.filePath)
--                    .then((info) => {
--                        if (info && dragStateRef.current?.filePath === ds.filePath) {
--                            window.dispatchEvent(
--                                new CustomEvent("hifi-file-drag", {
--                                    detail: {
--                                        type: "duration",
--                                        filePath: ds.filePath,
--                                        durationSec: info.durationSec,
--                                    },
--                                }),
--                            );
--                        }
--                    })
--                    .catch(() => {
--                        /* 获取失败则保持默认宽度 */
--                    });
--            }
--
--            // 更新 ghost 位置（clamp 到窗口可视范围内，鼠标超出界面时 ghost 停在边缘。
--            // 余量按 ghost 实测尺寸计算：文件名长短不一，固定余量会让 ghost
--            // 在窗口右缘脱离光标，长文件名仍会溢出右边界）。
--            if (ghostRef.current) {
--                const ghost = ghostRef.current;
--                const clampedX = Math.max(
--                    0,
--                    Math.min(e.clientX + 12, window.innerWidth - ghost.offsetWidth - 4),
--                );
--                const clampedY = Math.max(
--                    0,
--                    Math.min(e.clientY + 12, window.innerHeight - ghost.offsetHeight - 4),
--                );
--                ghost.style.left = `${clampedX}px`;
--                ghost.style.top = `${clampedY}px`;
--            }
--
--            // 发送拖拽移动事件（TimelinePanel 监听）
--            window.dispatchEvent(
--                new CustomEvent("hifi-file-drag", {
--                    detail: {
--                        type: "move",
--                        filePath: dragStateRef.current!.filePath,
--                        fileName: dragStateRef.current!.fileName,
--                        filePaths: dragStateRef.current!.allFilePaths,
--                        clientX: e.clientX,
--                        clientY: e.clientY,
--                        isRightDrag: dragStateRef.current!.isRightDrag,
--                    },
--                }),
--            );
--        }
--
--        function onPointerUp(e: PointerEvent) {
--            const ds = dragStateRef.current;
--            if (ds?.active) {
--                // 发送拖拽结束（drop）事件
--                window.dispatchEvent(
--                    new CustomEvent("hifi-file-drag", {
--                        detail: {
--                            type: "drop",
--                            filePath: ds.filePath,
--                            fileName: ds.fileName,
--                            filePaths: ds.allFilePaths,
--                            clientX: e.clientX,
--                            clientY: e.clientY,
--                            isRightDrag: ds.isRightDrag,
--                        },
--                    }),
--                );
--            }
--            setDragState(null);
--        }
--
--        // 指针在窗口外（任务栏/另一显示器）松开时 pointerup 不会派发，
--        // pointercancel / lostpointercapture 是唯一可靠的收尾信号 —— 否则
--        // 拖拽态永久卡死（ghost 滞留、列表行保持半透明、move 事件持续派发）。
--        function onPointerCancel() {
--            const ds = dragStateRef.current;
--            if (ds?.active) {
--                window.dispatchEvent(
--                    new CustomEvent("hifi-file-drag", {
--                        detail: {
--                            type: "drop",
--                            filePath: ds.filePath,
--                            fileName: ds.fileName,
--                            filePaths: ds.allFilePaths,
--                            clientX: ds.startX,
--                            clientY: ds.startY,
--                            isRightDrag: ds.isRightDrag,
--                            canceled: true,
--                        },
--                    }),
--                );
--            }
--            setDragState(null);
--        }
--
--        // 右键拖拽时抑制浏览器原生右键菜单
--        function onContextMenu(e: MouseEvent) {
--            if (dragStateRef.current?.isRightDrag) {
--                e.preventDefault();
--            }
--        }
--
--        window.addEventListener("pointermove", onPointerMove);
--        window.addEventListener("pointerup", onPointerUp);
--        window.addEventListener("pointercancel", onPointerCancel);
--        window.addEventListener("blur", onPointerCancel);
--        window.addEventListener("contextmenu", onContextMenu, true);
--        return () => {
--            window.removeEventListener("pointermove", onPointerMove);
--            window.removeEventListener("pointerup", onPointerUp);
--            window.removeEventListener("pointercancel", onPointerCancel);
--            window.removeEventListener("blur", onPointerCancel);
--            window.removeEventListener("contextmenu", onContextMenu, true);
--        };
--    }, [dragState !== null]); // eslint-disable-line react-hooks/exhaustive-deps
--
--    return (
--        <Flex direction="column" className="h-full bg-qt-window text-qt-text select-none">
--            {/* 标题栏 */}
--            <Flex
--                align="center"
--                justify="between"
--                className="h-8 px-2 border-b border-qt-border shrink-0"
--            >
--                <Text size="2" weight="medium" className="truncate">
--                    {(t as (key: string) => string)("fb_title")}
--                </Text>
--                <Flex align="center" gap="1">
--                    <IconButton
--                        size="1"
--                        variant="ghost"
--                        color="gray"
--                        data-tooltip={(t as (key: string) => string)("fb_open_folder")}
--                        onClick={handleOpenFolder}
--                    >
--                        <FolderIcon />
--                    </IconButton>
--                    <IconButton
--                        size="1"
--                        variant="ghost"
--                        color="gray"
--                        data-tooltip={(t as (key: string) => string)("fb_refresh")}
--                        onClick={handleRefresh}
--                    >
--                        <ReloadIcon />
--                    </IconButton>
--                    <IconButton
--                        size="1"
--                        variant="ghost"
--                        color="gray"
--                        data-tooltip={t("fb_close")}
--                        onClick={() => dispatch(setVisible(false))}
--                    >
--                        <Cross2Icon />
--                    </IconButton>
--                </Flex>
--            </Flex>
--
--            {/* 搜索栏 */}
--            <div className="px-2 py-1 border-b border-qt-border shrink-0">
--                <TextField.Root
--                    ref={searchInputRef}
--                    size="1"
--                    placeholder={(t as (key: string) => string)("fb_search_placeholder")}
--                    value={fb.searchQuery}
--                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
--                        const q = e.target.value;
--                        dispatch(setSearchQuery(q));
--                        if (debounceRef.current) clearTimeout(debounceRef.current);
--                        if (q.trim() && fb.currentPath) {
--                            const backendQuery = fb.regexEnabled ? "" : q.trim();
--                            debounceRef.current = setTimeout(() => {
--                                void dispatch(
--                                    searchFilesRecursive({
--                                        dirPath: fb.currentPath,
--                                        query: backendQuery,
--                                    }),
--                                );
--                            }, 300);
--                        }
--                    }}
--                    style={{ backgroundColor: "var(--qt-base)" }}
--                >
--                    <TextField.Slot>
--                        <MagnifyingGlassIcon height="12" width="12" />
--                    </TextField.Slot>
--                    {fb.searchQuery && (
--                        <TextField.Slot>
--                            <IconButton
--                                size="1"
--                                variant="ghost"
--                                color="gray"
--                                onClick={() => dispatch(setSearchQuery(""))}
--                                style={{ width: 16, height: 16 }}
--                            >
--                                <Cross2Icon width="10" height="10" />
--                            </IconButton>
--                        </TextField.Slot>
--                    )}
--                </TextField.Root>
--
--                {/* 正则切换 + 排序 */}
--                <Flex align="center" gap="1" mt="1">
--                    <IconButton
--                        size="1"
--                        variant={fb.regexEnabled ? "solid" : "ghost"}
--                        color="gray"
--                        data-tooltip={tAny("fb_regex")}
--                        onClick={() => {
--                            const nextRegexEnabled = !fb.regexEnabled;
--                            dispatch(toggleRegex());
--
--                            if (debounceRef.current) {
--                                clearTimeout(debounceRef.current);
--                            }
--
--                            if (trimmedSearchQuery && fb.currentPath) {
--                                void dispatch(
--                                    searchFilesRecursive({
--                                        dirPath: fb.currentPath,
--                                        query: nextRegexEnabled ? "" : trimmedSearchQuery,
--                                    }),
--                                );
--                            }
--                        }}
--                        style={{
--                            fontFamily: "monospace",
--                            fontSize: 10,
--                            width: 22,
--                            height: 22,
--                        }}
--                    >
--                        .*
--                    </IconButton>
--                    <IconButton
--                        size="1"
--                        variant={fb.audioOnly ? "solid" : "ghost"}
--                        color="gray"
--                        data-tooltip={tAny("fb_audio_only")}
--                        onClick={() => dispatch(toggleAudioOnly())}
--                        style={{
--                            width: 22,
--                            height: 22,
--                        }}
--                    >
--                        <AudioIcon />
--                    </IconButton>
--                    <Select.Root
--                        value={fb.sortMode}
--                        size="1"
--                        onValueChange={(v) => dispatch(setSortMode(v as SortMode))}
--                    >
--                        <Select.Trigger
--                            style={{ fontSize: 11, height: 22, flex: 1 }}
--                            onWheel={(event) => {
--                                applySelectWheelChange({
--                                    event,
--                                    currentValue: fb.sortMode,
--                                    options: SORT_MODE_OPTIONS,
--                                    onChange: (next) => dispatch(setSortMode(next as SortMode)),
--                                });
--                            }}
--                        />
--                        <Select.Content>
--                            <Select.Item value="name">{tAny("fb_sort_name")}</Select.Item>
--                            <Select.Item value="date">{tAny("fb_sort_date")}</Select.Item>
--                            <Select.Item value="size">{tAny("fb_sort_size")}</Select.Item>
--                        </Select.Content>
--                    </Select.Root>
--                </Flex>
--
--                {hasRegexError && (
--                    <Text size="1" color="red" mt="1">
--                        {tAny("fb_regex_error")}
--                    </Text>
--                )}
--            </div>
--
--            {/* 路径栏 */}
--            {fb.currentPath && (
--                <Flex
--                    align="center"
--                    gap="1"
--                    className="px-2 py-1 border-b border-qt-border shrink-0 min-h-[28px]"
--                >
--                    <IconButton
--                        size="1"
--                        variant="ghost"
--                        color="gray"
--                        data-tooltip={(t as (key: string) => string)("fb_parent_dir")}
--                        onClick={handleParentDir}
--                    >
--                        <ChevronUpIcon />
--                    </IconButton>
--                    <Text
--                        size="1"
--                        color="gray"
--                        className="truncate flex-1"
--                        data-tooltip={fb.currentPath}
--                    >
--                        {fb.currentPath}
--                    </Text>
--                </Flex>
--            )}
--
--            {/* 文件列表 */}
--            <ScrollArea className="flex-1 min-h-0" scrollbars="vertical">
--                <div className="py-1">
--                    {fb.loading ? (
--                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
--                            {(t as (key: string) => string)("fb_loading")}
--                        </Text>
--                    ) : fb.error ? (
--                        <Text size="1" color="red" className="px-3 py-4 block text-center">
--                            {(t as (key: string) => string)("fb_error")}: {fb.error}
--                        </Text>
--                    ) : !fb.currentPath ? (
--                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
--                            {(t as (key: string) => string)("fb_no_folder")}
--                        </Text>
--                    ) : isSearchMode && fb.searchLoading ? (
--                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
--                            {(t as (key: string) => string)("fb_searching")}
--                        </Text>
--                    ) : displayEntries.length === 0 ? (
--                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
--                            {isSearchMode
--                                ? (t as (key: string) => string)("fb_no_results")
--                                : (t as (key: string) => string)("fb_empty_folder")}
--                        </Text>
--                    ) : (
--                        displayEntries.map((entry) => (
--                            <FileEntryRow
--                                key={entry.path}
--                                entry={entry}
--                                isPlaying={fb.previewingFile === entry.path}
--                                isSelected={selectedPaths.has(entry.path)}
--                                onDoubleClickDir={handleEnterDir}
--                                onClickAudio={handleClickAudio}
--                                onPointerDownForDrag={handlePointerDownForDrag}
--                                isDragging={
--                                    dragState?.active === true &&
--                                    dragState.allFilePaths.includes(entry.path)
--                                }
--                                pathHint={isSearchMode ? getRelativeDirHint(entry.path) : undefined}
--                            />
--                        ))
--                    )}
--                </div>
--            </ScrollArea>
--
--            {/* 底部音量滑块 */}
--            <Flex align="center" gap="2" className="px-2 py-1.5 border-t border-qt-border shrink-0">
--                <SpeakerLoudIcon width="14" height="14" className="text-qt-text-muted shrink-0" />
--                <Slider
--                    size="1"
--                    min={0}
--                    max={100}
--                    step={1}
--                    value={[Math.round(fb.previewVolume * 100)]}
--                    onValueChange={(values: number[]) => {
--                        dispatch(setPreviewVolume(values[0] / 100));
--                    }}
--                    className="flex-1"
--                />
--                <Text size="1" color="gray" className="w-[32px] text-right shrink-0">
--                    {Math.round(fb.previewVolume * 100)}%
--                </Text>
--            </Flex>
--
--            {/* 拖拽 ghost 元素 */}
--            {dragState?.active && (
--                <div
--                    ref={ghostRef}
--                    style={{
--                        position: "fixed",
--                        left: 0,
--                        top: 0,
--                        pointerEvents: "none",
--                        zIndex: 99999,
--                        background: "var(--qt-highlight)",
--                        color: "var(--qt-text)",
--                        padding: "2px 8px",
--                        borderRadius: 4,
--                        fontSize: 11,
--                        whiteSpace: "nowrap",
--                        opacity: 0.9,
--                        boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
--                    }}
--                >
--                    🎵{" "}
--                    {dragState.allFilePaths.length > 1
--                        ? `${dragState.fileName} (+${dragState.allFilePaths.length - 1})`
--                        : dragState.fileName}
--                </div>
--            )}
--        </Flex>
--    );
--};
--
--// ============================================================
--// 文件条目行组件
--// ============================================================
--
--interface FileEntryRowProps {
--    entry: FileEntry;
--    isPlaying: boolean;
--    isSelected?: boolean;
--    onDoubleClickDir: (dirPath: string) => void;
--    onClickAudio: (entry: FileEntry, ev?: React.MouseEvent) => void;
--    onPointerDownForDrag: (e: React.PointerEvent<HTMLDivElement>, entry: FileEntry) => void;
--    isDragging: boolean;
--    pathHint?: string;
--}
--
--const FileEntryRow: React.FC<FileEntryRowProps> = React.memo(
--    ({
--        entry,
--        isPlaying,
--        isSelected,
--        onDoubleClickDir,
--        onClickAudio,
--        onPointerDownForDrag,
--        isDragging,
--        pathHint,
--    }) => {
--        const isAudio = isAudioFile(entry);
--        const isMidi = isMidiFile(entry);
--        const isProject = isProjectFile(entry);
--        const isDraggable = isDraggableFile(entry);
--
--        return (
--            <div
--                className={[
--                    "flex items-center gap-1.5 px-2 py-[3px] cursor-default",
--                    "hover:bg-[color-mix(in_oklab,var(--qt-highlight)_12%,transparent)]",
--                    isSelected
--                        ? "bg-[color-mix(in_oklab,var(--qt-highlight)_25%,transparent)]"
--                        : isPlaying
--                          ? "bg-[color-mix(in_oklab,var(--qt-highlight)_20%,transparent)]"
--                          : "",
--                    isDragging ? "opacity-50" : "",
--                    !entry.isDir && !isDraggable ? "opacity-50" : "",
--                ]
--                    .filter(Boolean)
--                    .join(" ")}
--                onPointerDown={isDraggable ? (e) => onPointerDownForDrag(e, entry) : undefined}
--                onDoubleClick={entry.isDir ? () => onDoubleClickDir(entry.path) : undefined}
--                onClick={isAudio ? (ev: React.MouseEvent) => onClickAudio(entry, ev) : undefined}
--            >
--                {/* 图标 */}
--                <span className="shrink-0 w-[14px] flex items-center justify-center">
--                    {entry.isDir ? (
--                        <FolderIcon className="text-yellow-500" />
--                    ) : isAudio ? (
--                        isPlaying ? (
--                            <StopIcon width="12" height="12" className="text-qt-highlight" />
--                        ) : isVideoFile(entry) ? (
--                            <VideoIcon className="text-purple-400" />
--                        ) : (
--                            <AudioIcon className="text-blue-400" />
--                        )
--                    ) : isMidi ? (
--                        <MidiIcon className="text-qt-highlight" />
--                    ) : isProject ? (
--                        // 工程文件高亮：橙色星标文档图标（备份文件如 .hshp-bak 不在此列）。
--                        <ProjectIcon className="text-amber-400" />
--                    ) : (
--                        <FileIcon width="12" height="12" className="text-qt-text-muted" />
--                    )}
--                </span>
--
--                {/* 文件名 + 路径提示 */}
--                <div className="flex flex-col min-w-0 flex-1">
--                    <Text
--                        size="1"
--                        className={isProject ? "truncate text-amber-300" : "truncate"}
--                        data-tooltip={entry.name}
--                    >
--                        {entry.name}
--                        {entry.isDir ? "/" : ""}
--                    </Text>
--                    {pathHint && (
--                        <Text
--                            size="1"
--                            color="gray"
--                            className="truncate leading-none"
--                            style={{ fontSize: 10 }}
--                        >
--                            {pathHint}
--                        </Text>
--                    )}
--                </div>
--
--                {/* 右侧信息 */}
--                {!entry.isDir && entry.size != null && (
--                    <Text size="1" color="gray" className="shrink-0 text-[10px]">
--                        {formatSize(entry.size)}
--                    </Text>
--                )}
--
--                {/* 音频播放指示 */}
--                {isPlaying && (
--                    <PlayIcon
--                        width="10"
--                        height="10"
--                        className="shrink-0 text-qt-highlight animate-pulse"
--                    />
--                )}
--            </div>
--        );
--    },
--);
--
--FileEntryRow.displayName = "FileEntryRow";
-+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 +import { Button, Flex, Text, IconButton, Select, Slider, TextField, ScrollArea } from "@radix-ui/themes";
-+import {
-+    Cross2Icon,
-+    FileIcon,
-+    MagnifyingGlassIcon,
-+    ReloadIcon,
-+    ChevronUpIcon,
-+    SpeakerLoudIcon,
-+    PlayIcon,
-+    StopIcon,
-+} from "@radix-ui/react-icons";
-+import { useAppDispatch, useAppSelector } from "../../app/hooks";
-+import type { RootState } from "../../app/store";
-+import { useI18n } from "../../i18n/I18nProvider";
-+import {
-+    loadDirectory,
-+    setPreviewVolume,
-+    setPreviewingFile,
-+    setSearchQuery,
-+    setVisible,
-+    searchFilesRecursive,
-+    toggleRegex,
-+    setSortMode,
-+    toggleAudioOnly,
-+    type SortMode,
-+} from "../../features/fileBrowser/fileBrowserSlice";
-+import { audioPreview } from "../../features/fileBrowser/audioPreview";
-+import { fileBrowserApi, type FileEntry } from "../../services/api/fileBrowser";
-+import { applySelectWheelChange } from "../../utils/selectWheel";
-+import { isPrimaryModifierDown } from "../../utils/platform";
-+
-+/** 支持的音频与视频媒体扩展名（视频按音轨导入） */
-+const AUDIO_EXTENSIONS = new Set([
-+    "wav",
-+    "mp3",
-+    "flac",
-+    "ogg",
-+    "oga",
-+    "opus",
-+    "aac",
-+    "m4a",
-+    "aif",
-+    "aiff",
-+    "wma",
-+    "ac3",
-+    "eac3",
-+    "ape",
-+    "wv",
-+    "mp2",
-+    "mpa",
-+    "dts",
-+    "amr",
-+    "mp4",
-+    "m4v",
-+    "mov",
-+    "mkv",
-+    "webm",
-+    "avi",
-+    "flv",
-+    "wmv",
-+    "ts",
-+    "mts",
-+    "m2ts",
-+    "vob",
-+    "mpg",
-+    "mpeg",
-+    "3gp",
-+    "3g2",
-+    "ogv",
-+    "rm",
-+    "rmvb",
-+]);
-+/**
-+ * 支持的 MIDI 文件扩展名（可拖拽导入到时间轴或参数编辑器）。
-+ *
-+ * 与拖放准入（`timeline/dnd`）和后端 `SUPPORTED_MIDI_EXTS` 保持一致：`smf`
-+ * （Standard MIDI File）一并支持，否则它能"被放进来"却"不能从文件浏览器拖出去"。
-+ */
-+const MIDI_EXTENSIONS = new Set(["mid", "midi", "smf"]);
-+
-+/**
-+ * 支持的工程文件扩展名（可拖拽导入）。
-+ *
-+ * 与拖放准入（`timeline/dnd`）保持**同一份白名单**：含 `-bak` 备份后缀
-+ * （`.hshp-bak` / `.hsp-bak` / `.rpp-bak`）。此前这里不含备份后缀，于是同一个
-+ * `.hshp-bak` 文件"拖进时间轴会被接受、从文件浏览器里却拖不动"——同一应用对同一
-+ * 文件给出两种答案。
-+ *
-+ * 注意 FileEntry.extension 是最后一个点后的完整后缀，因此 "proj.hshp-bak" 的
-+ * extension 为 "hshp-bak"、而不是 "bak"，天然不会与正本混淆。
-+ */
-+const PROJECT_EXTENSIONS = new Set([
-+    "hshp",
-+    "hsp",
-+    "hshp-bak",
-+    "hsp-bak",
-+    "rpp",
-+    "rpp-bak",
-+    "vshp",
-+    "vsp",
-+]);
-+
-+const SORT_MODE_OPTIONS: SortMode[] = ["name", "date", "size"];
-+
-+function isAudioFile(entry: FileEntry): boolean {
-+    return !entry.isDir && !!entry.extension && AUDIO_EXTENSIONS.has(entry.extension);
-+}
-+
-+function isMidiFile(entry: FileEntry): boolean {
-+    return !entry.isDir && !!entry.extension && MIDI_EXTENSIONS.has(entry.extension);
-+}
-+
-+/** 工程文件（HiFiShifter / Reaper / VocalShifter 工程）。 */
-+function isProjectFile(entry: FileEntry): boolean {
-+    return !entry.isDir && !!entry.extension && PROJECT_EXTENSIONS.has(entry.extension);
-+}
-+
-+/**
-+ * 可拖拽的文件：音频/视频（拖入时间轴）+ MIDI（拖入时间轴或参数编辑器）
-+ * + 工程文件（拖入时间轴弹出 打开/导入 操作）。
-+ */
-+function isDraggableFile(entry: FileEntry): boolean {
-+    return isAudioFile(entry) || isMidiFile(entry) || isProjectFile(entry);
-+}
-+
-+const VIDEO_EXTENSIONS = new Set([
-+    "mp4",
-+    "m4v",
-+    "mov",
-+    "mkv",
-+    "webm",
-+    "avi",
-+    "flv",
-+    "wmv",
-+    "ts",
-+    "mts",
-+    "m2ts",
-+    "vob",
-+    "mpg",
-+    "mpeg",
-+    "3gp",
-+    "3g2",
-+    "ogv",
-+    "rm",
-+    "rmvb",
-+]);
-+
-+function isVideoFile(entry: FileEntry): boolean {
-+    return isAudioFile(entry) && !!entry.extension && VIDEO_EXTENSIONS.has(entry.extension);
-+}
-+
-+/** 格式化文件大小 */
-+function formatSize(bytes: number | null): string {
-+    if (bytes == null) return "";
-+    if (bytes < 1024) return `${bytes} B`;
-+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-+}
-+
-+/** 文件夹图标 SVG */
-+function FolderIcon({ className }: { className?: string }) {
-+    return (
-+        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
-+            <path
-+                d="M1 3.5C1 3.22386 1.22386 3 1.5 3H5.29289L6.64645 4.35355C6.74021 4.44732 6.86739 4.5 7 4.5H13.5C13.7761 4.5 14 4.72386 14 5V12.5C14 12.7761 13.7761 13 13.5 13H1.5C1.22386 13 1 12.7761 1 12.5V3.5Z"
-+                fill="currentColor"
-+            />
-+        </svg>
-+    );
-+}
-+
-+/** 视频媒体图标 SVG */
-+function VideoIcon({ className }: { className?: string }) {
-+    return (
-+        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
-+            <rect
-+                x="1.5"
-+                y="2.5"
-+                width="12"
-+                height="10"
-+                rx="1.5"
-+                stroke="currentColor"
-+                strokeWidth="1.2"
-+            />
-+            <path d="M6 5.5V9.5L9.5 7.5L6 5.5Z" fill="currentColor" />
-+        </svg>
-+    );
-+}
-+
-+/** 音频文件图标 SVG */
-+function AudioIcon({ className }: { className?: string }) {
-+    return (
-+        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
-+            <path
-+                d="M7.5 0.75L7.5 14.25M10.5 3L10.5 12M4.5 3L4.5 12M13.5 5.5L13.5 9.5M1.5 5.5L1.5 9.5"
-+                stroke="currentColor"
-+                strokeWidth="1.2"
-+                strokeLinecap="round"
-+            />
-+        </svg>
-+    );
-+}
-+
-+/** MIDI 文件图标 SVG（双音符） */
+ import {
+     Cross2Icon,
+     FileIcon,
+@@ -203,7 +203,14 @@ function AudioIcon({ className }: { className?: string }) {
+ }
+ 
+ /** MIDI 文件图标 SVG（双音符） */
+-function MidiIcon({ className }: { className?: string }) {
 +/**
 + * MIDI 文件图标（双音符 + 连线）。
 + *
@@ -14787,19 +13583,13 @@ index 3ebf39a9..d854d865 100644
 + * 遵循上游一贯原则：同一个图形只画一份，避免两处漂移。
 + */
 +export function MidiIcon({ className }: { className?: string }) {
-+    return (
-+        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
-+            <path
-+                d="M5 2.5V9.5M5 9.5C5 8.39543 4.10457 7.5 3 7.5C1.89543 7.5 1 8.39543 1 9.5C1 10.6046 1.89543 11.5 3 11.5C4.10457 11.5 5 10.6046 5 9.5ZM12.5 3.5V9.5M12.5 9.5C12.5 8.39543 11.6046 7.5 10.5 7.5C9.39543 7.5 8.5 8.39543 8.5 9.5C8.5 10.6046 9.39543 11.5 10.5 11.5C11.6046 11.5 12.5 10.6046 12.5 9.5Z"
-+                stroke="currentColor"
-+                strokeWidth="1.2"
-+                strokeLinecap="round"
-+            />
-+            <path d="M5 2.5L12.5 1" stroke="currentColor" strokeWidth="1.2" strokeLinecap="round" />
-+        </svg>
-+    );
-+}
-+
+     return (
+         <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
+             <path
+@@ -217,6 +224,37 @@ function MidiIcon({ className }: { className?: string }) {
+     );
+ }
+ 
 +/**
 + * MIDI 图标（**钢琴键**版）。
 + *
@@ -14831,33 +13621,13 @@ index 3ebf39a9..d854d865 100644
 +    );
 +}
 +
-+/** 工程文件图标 SVG（文档 + 星标），用于高亮 hshp/hsp/rpp/vshp/vsp。 */
-+function ProjectIcon({ className }: { className?: string }) {
-+    return (
-+        <svg width="14" height="14" viewBox="0 0 15 15" fill="none" className={className}>
-+            <path
-+                d="M2.5 1.5H6.5L9 4V13.5H2.5V1.5Z"
-+                stroke="currentColor"
-+                strokeWidth="1.2"
-+                strokeLinejoin="round"
-+            />
-+            <path d="M6.5 1.5V4H9" stroke="currentColor" strokeWidth="1.2" strokeLinejoin="round" />
-+            <path
-+                d="M7.75 6.75L8.36 8.02L9.75 8.18L8.72 9.14L8.96 10.52L7.75 9.84L6.54 10.52L6.78 9.14L5.75 8.18L7.14 8.02L7.75 6.75Z"
-+                fill="currentColor"
-+            />
-+        </svg>
-+    );
-+}
-+
-+export const FileBrowserPanel: React.FC = () => {
-+    const dispatch = useAppDispatch();
-+    const { t } = useI18n();
-+    const tAny = t as (key: string) => string;
-+    const fb = useAppSelector((state: RootState) => state.fileBrowser);
-+    const searchInputRef = useRef<HTMLInputElement>(null);
-+    const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-+
+ /** 工程文件图标 SVG（文档 + 星标），用于高亮 hshp/hsp/rpp/vshp/vsp。 */
+ function ProjectIcon({ className }: { className?: string }) {
+     return (
+@@ -244,6 +282,144 @@ export const FileBrowserPanel: React.FC = () => {
+     const searchInputRef = useRef<HTMLInputElement>(null);
+     const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+ 
 +    /**
 +     * N2：当前目录的列表是否**不可信**（未授权 ⇒ 分区存储会静默隐藏文件）。
 +     *
@@ -14996,215 +13766,36 @@ index 3ebf39a9..d854d865 100644
 +        };
 +    }, [fb.currentPath, fb.entries, fb.loading]);
 +
-+    // 清除 debounce
-+    useEffect(
-+        () => () => {
-+            if (debounceRef.current) clearTimeout(debounceRef.current);
-+        },
-+        [],
-+    );
-+
-+    // 预览音量同步
-+    useEffect(() => {
-+        audioPreview.setVolume(fb.previewVolume);
-+    }, [fb.previewVolume]);
-+
-+    // 组件挂载时，如果有上次的路径，自动加载
-+    useEffect(() => {
-+        if (fb.currentPath && fb.entries.length === 0 && !fb.loading) {
-+            void dispatch(loadDirectory(fb.currentPath));
-+        }
-+    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-+
-+    // 根据搜索模式决定展示配表
-+    const isSearchMode = fb.searchQuery.trim().length > 0;
-+    const trimmedSearchQuery = fb.searchQuery.trim();
-+
-+    const hasRegexError = useMemo(() => {
-+        if (!isSearchMode || !fb.regexEnabled || !trimmedSearchQuery) {
-+            return false;
-+        }
-+        try {
-+            // Validate regex and let UI display an explicit error.
-+            void new RegExp(trimmedSearchQuery, "i");
-+            return false;
-+        } catch {
-+            return true;
-+        }
-+    }, [isSearchMode, fb.regexEnabled, trimmedSearchQuery]);
-+
-+    // 客户端正则过滤（仅在搜索模式且 regexEnabled 时）
-+    const regexFilteredEntries = useMemo(() => {
-+        const rawEntries = isSearchMode ? (fb.searchResults ?? []) : fb.entries;
-+        if (!isSearchMode || !fb.regexEnabled || !trimmedSearchQuery) {
-+            return rawEntries;
-+        }
-+        try {
-+            const re = new RegExp(trimmedSearchQuery, "i");
-+            return rawEntries.filter((e) => re.test(e.name));
-+        } catch {
-+            return [];
-+        }
-+    }, [isSearchMode, fb.entries, fb.searchResults, fb.regexEnabled, trimmedSearchQuery]);
-+
-+    // 音频过滤
-+    const audioFilteredEntries = useMemo(() => {
-+        if (!fb.audioOnly) return regexFilteredEntries;
-+        // “仅显示媒体文件”：音频/视频 + MIDI（MIDI 可导入时间轴/参数编辑器）。
-+        return regexFilteredEntries.filter((e) => e.isDir || isAudioFile(e) || isMidiFile(e));
-+    }, [regexFilteredEntries, fb.audioOnly]);
-+
-+    // 排序
-+    const displayEntries = useMemo(() => {
-+        const sorted = [...audioFilteredEntries];
-+        switch (fb.sortMode) {
-+            case "name":
-+                sorted.sort((a, b) => a.name.localeCompare(b.name));
-+                break;
-+            case "date":
-+                sorted.sort((a, b) => (b.modifiedTime ?? 0) - (a.modifiedTime ?? 0));
-+                break;
-+            case "size":
-+                sorted.sort((a, b) => (b.size ?? 0) - (a.size ?? 0));
-+                break;
-+        }
-+        // 目录始终排在前面
-+        sorted.sort((a, b) => (a.isDir === b.isDir ? 0 : a.isDir ? -1 : 1));
-+        return sorted;
-+    }, [audioFilteredEntries, fb.sortMode]);
-+
-+    // 计算展示相对路径（搜索模式下显示文件所在目录）
-+    function getRelativeDirHint(fullPath: string): string {
-+        const normalFull = fullPath.replace(/\\/g, "/");
-+        const normalBase = fb.currentPath.replace(/\\/g, "/").replace(/\/$/, "");
-+        if (normalFull.toLowerCase().startsWith(normalBase.toLowerCase() + "/")) {
-+            const rel = normalFull.slice(normalBase.length + 1);
-+            const lastSlash = rel.lastIndexOf("/");
-+            return lastSlash >= 0 ? rel.slice(0, lastSlash) : "";
-+        }
-+        return "";
-+    }
-+
-+    // 选择文件夹（通过后端 rfd dialog）
-+    const handleOpenFolder = useCallback(async () => {
-+        try {
-+            const result = await fileBrowserApi.pickDirectory();
-+            if (result.ok && !result.canceled && result.path) {
-+                void dispatch(loadDirectory(result.path));
-+            }
-+        } catch {
-+            // 忽略错误
-+        }
-+    }, [dispatch]);
-+
-+    // 刷新当前目录
-+    const handleRefresh = useCallback(() => {
-+        if (fb.currentPath) {
-+            void dispatch(loadDirectory(fb.currentPath));
-+        }
-+    }, [dispatch, fb.currentPath]);
-+
-+    // 返回上级目录
-+    const handleParentDir = useCallback(() => {
-+        if (!fb.currentPath) return;
-+        // 处理 Windows 和 Unix 路径
-+        const normalized = fb.currentPath.replace(/\\/g, "/");
-+        const parts = normalized.split("/").filter(Boolean);
-+        if (parts.length <= 1) return; // 已经是根目录
-+        parts.pop();
-+        // Windows 路径恢复
-+        let parentPath = parts.join("/");
-+        if (/^[A-Za-z]:$/.test(parts[0])) {
-+            parentPath = parts[0] + "/" + parts.slice(1).join("/");
-+        }
-+        if (fb.currentPath.includes("\\")) {
-+            parentPath = parentPath.replace(/\//g, "\\");
-+        }
-+        void dispatch(loadDirectory(parentPath));
-+    }, [dispatch, fb.currentPath]);
-+
-+    // 进入子目录
-+    const handleEnterDir = useCallback(
-+        (dirPath: string) => {
-+            if (debounceRef.current) clearTimeout(debounceRef.current);
-+            dispatch(setSearchQuery(""));
-+            void dispatch(loadDirectory(dirPath));
-+        },
-+        [dispatch],
-+    );
-+
-+    // ── 多选状态 ───────────────────────────────────────────────────────────
-+    const [selectedPaths, setSelectedPaths] = useState<Set<string>>(new Set());
-+    const lastClickedIndexRef = useRef<number>(-1);
-+
-+    // 获取仅音频的列表用于 shift-range 选择
-+    const audioEntries = useMemo(() => displayEntries.filter(isAudioFile), [displayEntries]);
-+
-+    const handleClickAudio = useCallback(
-+        (entry: FileEntry, ev?: React.MouseEvent) => {
-+            const idx = audioEntries.findIndex((e) => e.path === entry.path);
-+
-+            if (ev && isPrimaryModifierDown(ev)) {
-+                // macOS: Command+click / Windows: Ctrl+click — toggle selection
-+                setSelectedPaths((prev) => {
-+                    const next = new Set(prev);
-+                    if (next.has(entry.path)) next.delete(entry.path);
-+                    else next.add(entry.path);
-+                    return next;
-+                });
-+                lastClickedIndexRef.current = idx;
-+                return;
-+            }
-+
-+            if (ev?.shiftKey && lastClickedIndexRef.current >= 0) {
-+                // Shift+click: range selection
-+                const start = Math.min(lastClickedIndexRef.current, idx);
-+                const end = Math.max(lastClickedIndexRef.current, idx);
-+                setSelectedPaths((prev) => {
-+                    const next = new Set(prev);
-+                    for (let i = start; i <= end; i++) {
-+                        next.add(audioEntries[i].path);
-+                    }
-+                    return next;
-+                });
-+                return;
-+            }
-+
-+            // Normal click: clear selection, preview
-+            setSelectedPaths(new Set());
-+            lastClickedIndexRef.current = idx;
-+            dispatch(setPreviewingFile(entry.path));
-+            void audioPreview.play(entry.path, () => {
+     // 清除 debounce
+     useEffect(
+         () => () => {
+@@ -421,12 +597,21 @@ export const FileBrowserPanel: React.FC = () => {
+             // Normal click: clear selection, preview
+             setSelectedPaths(new Set());
+             lastClickedIndexRef.current = idx;
++            /* 🔴 2026-10-03（用户口径）：「文件管理音乐停不掉……**点击停止时又从头播了一遍**」。
++               文件项上那颗"正在播放"标记本身就是用户心里的停止入口；原来点它又走 `play()`
++               ⇒ **从头重播**。⇒ 点**正在试听**的那一项 = **停止试听**（通用交互惯例）；
++               想重播就再点一次（那时已不在试听态，走下面的分支）。 */
++            if (fb.previewingFile === entry.path) {
++                audioPreview.stop();
 +                dispatch(setPreviewingFile(null));
-+            });
-+        },
-+        [dispatch, audioEntries],
-+    );
-+
-+    // Clear selection when directory changes
-+    useEffect(() => {
-+        setSelectedPaths(new Set());
-+        lastClickedIndexRef.current = -1;
-+    }, [fb.currentPath]);
-+
-+    // 拖拽开始 — 使用自定义 pointer 事件实现，替代 HTML5 drag API
-+    const [dragState, setDragState] = useState<{
-+        filePath: string;
-+        fileName: string;
-+        allFilePaths: string[];
-+        startX: number;
-+        startY: number;
-+        active: boolean; // 超过阈值后才真正激活拖拽
-+        isRightDrag: boolean; // 右键拖拽标记
-+    } | null>(null);
-+    const dragStateRef = useRef(dragState);
-+    // eslint-disable-next-line react-hooks/refs -- render 期写 ref 镜像：命令式绘制/事件回调需在同一提交内读取最新值（热路径既有模式）
-+    dragStateRef.current = dragState;
-+
-+    // ghost 元素跟随鼠标
-+    const ghostRef = useRef<HTMLDivElement | null>(null);
-+
-+    const DRAG_THRESHOLD = 5; // 像素阈值，防止误触
++                return;
++            }
+             dispatch(setPreviewingFile(entry.path));
+             void audioPreview.play(entry.path, () => {
+                 dispatch(setPreviewingFile(null));
+             });
+         },
+-        [dispatch, audioEntries],
++        [dispatch, audioEntries, fb.previewingFile],
+     );
+ 
+     // Clear selection when directory changes
+@@ -453,6 +638,29 @@ export const FileBrowserPanel: React.FC = () => {
+     const ghostRef = useRef<HTMLDivElement | null>(null);
+ 
+     const DRAG_THRESHOLD = 5; // 像素阈值，防止误触
 +    /* 🔴 真机 bug 修复（用户口径「跨界面拖动文件依旧不成功，原因可能是长按并拖动
 +       没有优先于落指直接划动平移界面」）—— 判断完全正确：
 +       原实现里 pointerdown 就置位、**移动 5px 立即激活拖拽**，而列表是 `ScrollArea`，
@@ -15228,16 +13819,13 @@ index 3ebf39a9..d854d865 100644
 +            longPressTimerRef.current = null;
 +        }
 +    }, []);
-+
-+    const handlePointerDownForDrag = useCallback(
-+        (e: React.PointerEvent<HTMLDivElement>, entry: FileEntry) => {
-+            // 允许左键(0)和右键(2)拖拽
-+            if (e.button !== 0 && e.button !== 2) return;
-+            // Collect all selected paths (include current entry)
-+            const paths =
-+                selectedPaths.size > 0 && selectedPaths.has(entry.path)
-+                    ? Array.from(selectedPaths)
-+                    : [entry.path];
+ 
+     const handlePointerDownForDrag = useCallback(
+         (e: React.PointerEvent<HTMLDivElement>, entry: FileEntry) => {
+@@ -463,6 +671,22 @@ export const FileBrowserPanel: React.FC = () => {
+                 selectedPaths.size > 0 && selectedPaths.has(entry.path)
+                     ? Array.from(selectedPaths)
+                     : [entry.path];
 +            /* 长按门槛：按住够久才把"拖拽权"从浏览器滚动那边抢过来（见上方注释）。 */
 +            dragArmedRef.current = false;
 +            clearLongPressTimer();
@@ -15254,33 +13842,30 @@ index 3ebf39a9..d854d865 100644
 +                    /* 忽略 */
 +                }
 +            }, LONG_PRESS_MS);
-+            // 不拦截 pointer，让 click 事件仍能触发预览
-+            setDragState({
-+                filePath: entry.path,
-+                fileName: entry.name,
-+                allFilePaths: paths,
-+                startX: e.clientX,
-+                startY: e.clientY,
-+                active: false,
-+                isRightDrag: e.button === 2,
-+            });
-+        },
+             // 不拦截 pointer，让 click 事件仍能触发预览
+             setDragState({
+                 filePath: entry.path,
+@@ -474,9 +698,15 @@ export const FileBrowserPanel: React.FC = () => {
+                 isRightDrag: e.button === 2,
+             });
+         },
+-        [selectedPaths],
 +        [selectedPaths, clearLongPressTimer],
-+    );
-+
+     );
+ 
 +    /** B4：边缘切页的停留计时（避免误触）。 */
 +    const edgeSwitchRef = useRef<{ side: "left" | "right" | null; timer: number | null }>({
 +        side: null,
 +        timer: null,
 +    });
 +
-+    useEffect(() => {
-+        if (!dragState) return;
-+
-+        function onPointerMove(e: PointerEvent) {
-+            const ds = dragStateRef.current;
-+            if (!ds) return;
-+
+     useEffect(() => {
+         if (!dragState) return;
+ 
+@@ -484,12 +714,58 @@ export const FileBrowserPanel: React.FC = () => {
+             const ds = dragStateRef.current;
+             if (!ds) return;
+ 
 +            /* B4：**拖到屏幕左右边缘 ⇒ 自动切到轨道页**。
 +               手机是单面板（文件页显示时轨道页没渲染），不切页就永远拖不过去。
 +               加 400ms 停留判定避免手指划过边缘时误切。 */
@@ -15309,10 +13894,10 @@ index 3ebf39a9..d854d865 100644
 +                }
 +            }
 +
-+            if (!ds.active) {
-+                const dx = e.clientX - ds.startX;
-+                const dy = e.clientY - ds.startY;
-+                if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD) return;
+             if (!ds.active) {
+                 const dx = e.clientX - ds.startX;
+                 const dy = e.clientY - ds.startY;
+                 if (Math.sqrt(dx * dx + dy * dy) < DRAG_THRESHOLD) return;
 +                /* 长按还没成立就先动了 ⇒ 用户在**滚动列表**，不是要拖拽：
 +                   直接放弃本次拖拽（不 preventDefault、不发 start 事件），
 +                   让浏览器照常滚 —— 这是"长按并拖动优先于落指划动"的另一半。 */
@@ -15322,8 +13907,8 @@ index 3ebf39a9..d854d865 100644
 +                    setDragState(null);
 +                    return;
 +                }
-+                // 激活拖拽
-+                dragStateRef.current = { ...ds, active: true };
+                 // 激活拖拽
+                 dragStateRef.current = { ...ds, active: true };
 +
 +                /* B4：把拖拽上下文交给 window —— 若中途切页（文件面板被卸载），
 +                   App 要用它继续派发 move / drop。 */
@@ -15333,133 +13918,33 @@ index 3ebf39a9..d854d865 100644
 +                    filePaths: ds.allFilePaths,
 +                    durationSec: 0,
 +                };
-+                setDragState(dragStateRef.current);
-+                // 发送拖拽开始事件
-+                window.dispatchEvent(
-+                    new CustomEvent("hifi-file-drag", {
-+                        detail: {
-+                            type: "start",
-+                            filePath: ds.filePath,
-+                            fileName: ds.fileName,
-+                            filePaths: ds.allFilePaths,
-+                            clientX: e.clientX,
-+                            clientY: e.clientY,
-+                            isRightDrag: ds.isRightDrag,
-+                        },
-+                    }),
-+                );
-+                // 异步获取音频时长，获取后通知 TimelinePanel 更新 ghost 宽度
-+                fileBrowserApi
-+                    .getAudioFileInfo(ds.filePath)
-+                    .then((info) => {
-+                        if (info && dragStateRef.current?.filePath === ds.filePath) {
-+                            window.dispatchEvent(
-+                                new CustomEvent("hifi-file-drag", {
-+                                    detail: {
-+                                        type: "duration",
-+                                        filePath: ds.filePath,
-+                                        durationSec: info.durationSec,
-+                                    },
-+                                }),
-+                            );
-+                        }
-+                    })
-+                    .catch(() => {
-+                        /* 获取失败则保持默认宽度 */
-+                    });
-+            }
-+
-+            // 更新 ghost 位置（clamp 到窗口可视范围内，鼠标超出界面时 ghost 停在边缘。
-+            // 余量按 ghost 实测尺寸计算：文件名长短不一，固定余量会让 ghost
-+            // 在窗口右缘脱离光标，长文件名仍会溢出右边界）。
-+            if (ghostRef.current) {
-+                const ghost = ghostRef.current;
-+                const clampedX = Math.max(
-+                    0,
-+                    Math.min(e.clientX + 12, window.innerWidth - ghost.offsetWidth - 4),
-+                );
-+                const clampedY = Math.max(
-+                    0,
-+                    Math.min(e.clientY + 12, window.innerHeight - ghost.offsetHeight - 4),
-+                );
-+                ghost.style.left = `${clampedX}px`;
-+                ghost.style.top = `${clampedY}px`;
-+            }
-+
-+            // 发送拖拽移动事件（TimelinePanel 监听）
-+            window.dispatchEvent(
-+                new CustomEvent("hifi-file-drag", {
-+                    detail: {
-+                        type: "move",
-+                        filePath: dragStateRef.current!.filePath,
-+                        fileName: dragStateRef.current!.fileName,
-+                        filePaths: dragStateRef.current!.allFilePaths,
-+                        clientX: e.clientX,
-+                        clientY: e.clientY,
-+                        isRightDrag: dragStateRef.current!.isRightDrag,
-+                    },
-+                }),
-+            );
-+        }
-+
-+        function onPointerUp(e: PointerEvent) {
-+            const ds = dragStateRef.current;
+                 setDragState(dragStateRef.current);
+                 // 发送拖拽开始事件
+                 window.dispatchEvent(
+@@ -561,6 +837,10 @@ export const FileBrowserPanel: React.FC = () => {
+ 
+         function onPointerUp(e: PointerEvent) {
+             const ds = dragStateRef.current;
 +            // 收尾：清掉长按计时器与"已获得拖拽权"标记（否则下一次手势开始前
 +            // 滚动会被残留的 armed 挡住）。
 +            clearLongPressTimer();
 +            dragArmedRef.current = false;
-+            if (ds?.active) {
-+                // 发送拖拽结束（drop）事件
-+                window.dispatchEvent(
-+                    new CustomEvent("hifi-file-drag", {
-+                        detail: {
-+                            type: "drop",
-+                            filePath: ds.filePath,
-+                            fileName: ds.fileName,
-+                            filePaths: ds.allFilePaths,
-+                            clientX: e.clientX,
-+                            clientY: e.clientY,
-+                            isRightDrag: ds.isRightDrag,
-+                        },
-+                    }),
-+                );
-+            }
-+            setDragState(null);
-+        }
-+
-+        // 指针在窗口外（任务栏/另一显示器）松开时 pointerup 不会派发，
-+        // pointercancel / lostpointercapture 是唯一可靠的收尾信号 —— 否则
-+        // 拖拽态永久卡死（ghost 滞留、列表行保持半透明、move 事件持续派发）。
-+        function onPointerCancel() {
-+            const ds = dragStateRef.current;
+             if (ds?.active) {
+                 // 发送拖拽结束（drop）事件
+                 window.dispatchEvent(
+@@ -585,6 +865,8 @@ export const FileBrowserPanel: React.FC = () => {
+         // 拖拽态永久卡死（ghost 滞留、列表行保持半透明、move 事件持续派发）。
+         function onPointerCancel() {
+             const ds = dragStateRef.current;
 +            clearLongPressTimer();
 +            dragArmedRef.current = false;
-+            if (ds?.active) {
-+                window.dispatchEvent(
-+                    new CustomEvent("hifi-file-drag", {
-+                        detail: {
-+                            type: "drop",
-+                            filePath: ds.filePath,
-+                            fileName: ds.fileName,
-+                            filePaths: ds.allFilePaths,
-+                            clientX: ds.startX,
-+                            clientY: ds.startY,
-+                            isRightDrag: ds.isRightDrag,
-+                            canceled: true,
-+                        },
-+                    }),
-+                );
-+            }
-+            setDragState(null);
-+        }
-+
-+        // 右键拖拽时抑制浏览器原生右键菜单
-+        function onContextMenu(e: MouseEvent) {
-+            if (dragStateRef.current?.isRightDrag) {
-+                e.preventDefault();
-+            }
-+        }
-+
+             if (ds?.active) {
+                 window.dispatchEvent(
+                     new CustomEvent("hifi-file-drag", {
+@@ -611,12 +893,26 @@ export const FileBrowserPanel: React.FC = () => {
+             }
+         }
+ 
 +        /* 🔴 从浏览器手里抢手势（长按成立之后）：
 +           列表是 `ScrollArea`，浏览器会把它当纵向滚动接管并派发 `pointercancel`，
 +           把我们的拖拽掐死在半路。`touch-action` 不能在手势中途改，
@@ -15473,61 +13958,39 @@ index 3ebf39a9..d854d865 100644
 +        }
 +        window.addEventListener("touchmove", onTouchMoveBlockScroll, { passive: false });
 +
-+        window.addEventListener("pointermove", onPointerMove);
-+        window.addEventListener("pointerup", onPointerUp);
-+        window.addEventListener("pointercancel", onPointerCancel);
-+        window.addEventListener("blur", onPointerCancel);
-+        window.addEventListener("contextmenu", onContextMenu, true);
-+        return () => {
+         window.addEventListener("pointermove", onPointerMove);
+         window.addEventListener("pointerup", onPointerUp);
+         window.addEventListener("pointercancel", onPointerCancel);
+         window.addEventListener("blur", onPointerCancel);
+         window.addEventListener("contextmenu", onContextMenu, true);
+         return () => {
 +            window.removeEventListener("touchmove", onTouchMoveBlockScroll);
-+            window.removeEventListener("pointermove", onPointerMove);
-+            window.removeEventListener("pointerup", onPointerUp);
-+            window.removeEventListener("pointercancel", onPointerCancel);
-+            window.removeEventListener("blur", onPointerCancel);
-+            window.removeEventListener("contextmenu", onContextMenu, true);
-+        };
-+    }, [dragState !== null]); // eslint-disable-line react-hooks/exhaustive-deps
-+
-+    return (
-+        <Flex direction="column" className="h-full bg-qt-window text-qt-text select-none">
+             window.removeEventListener("pointermove", onPointerMove);
+             window.removeEventListener("pointerup", onPointerUp);
+             window.removeEventListener("pointercancel", onPointerCancel);
+@@ -627,11 +923,16 @@ export const FileBrowserPanel: React.FC = () => {
+ 
+     return (
+         <Flex direction="column" className="h-full bg-qt-window text-qt-text select-none">
+-            {/* 标题栏 */}
 +            {/* 标题栏
 +                C5/C6：它同时是**手机端分屏边界的手柄**（规格 `docs/15` / `prompt.md`：
 +                「上下拖动 …文件管理标题栏… 可以更改分屏边界位置」）—— 标题栏正好压在
 +                上下两块的边界上；App 侧按 `data-hs-split-handle` 集中绑定（不侵入本组件）。
 +                条里的按钮（打开文件夹 / 刷新 / 关闭）不归手柄管，App 侧会跳过。 */}
-+            <Flex
-+                align="center"
-+                justify="between"
-+                className="h-8 px-2 border-b border-qt-border shrink-0"
+             <Flex
+                 align="center"
+                 justify="between"
+                 className="h-8 px-2 border-b border-qt-border shrink-0"
 +                data-hs-split-handle="files"
-+            >
-+                <Text size="2" weight="medium" className="truncate">
-+                    {(t as (key: string) => string)("fb_title")}
-+                </Text>
-+                <Flex align="center" gap="1">
-+                    <IconButton
-+                        size="1"
-+                        variant="ghost"
-+                        color="gray"
-+                        data-tooltip={(t as (key: string) => string)("fb_open_folder")}
-+                        onClick={handleOpenFolder}
-+                    >
-+                        <FolderIcon />
-+                    </IconButton>
-+                    <IconButton
-+                        size="1"
-+                        variant="ghost"
-+                        color="gray"
-+                        data-tooltip={(t as (key: string) => string)("fb_refresh")}
-+                        onClick={handleRefresh}
-+                    >
-+                        <ReloadIcon />
-+                    </IconButton>
-+                    <IconButton
-+                        size="1"
-+                        variant="ghost"
-+                        color="gray"
-+                        data-tooltip={t("fb_close")}
+             >
+                 <Text size="2" weight="medium" className="truncate">
+                     {(t as (key: string) => string)("fb_title")}
+@@ -660,7 +961,16 @@ export const FileBrowserPanel: React.FC = () => {
+                         variant="ghost"
+                         color="gray"
+                         data-tooltip={t("fb_close")}
+-                        onClick={() => dispatch(setVisible(false))}
 +                        onClick={() => {
 +                            dispatch(setVisible(false));
 +                            /* #5：手机端面板显隐看 `session.mobilePanels`，
@@ -15538,162 +14001,13 @@ index 3ebf39a9..d854d865 100644
 +                                }),
 +                            );
 +                        }}
-+                    >
-+                        <Cross2Icon />
-+                    </IconButton>
-+                </Flex>
-+            </Flex>
-+
-+            {/* 搜索栏 */}
-+            <div className="px-2 py-1 border-b border-qt-border shrink-0">
-+                <TextField.Root
-+                    ref={searchInputRef}
-+                    size="1"
-+                    placeholder={(t as (key: string) => string)("fb_search_placeholder")}
-+                    value={fb.searchQuery}
-+                    onChange={(e: React.ChangeEvent<HTMLInputElement>) => {
-+                        const q = e.target.value;
-+                        dispatch(setSearchQuery(q));
-+                        if (debounceRef.current) clearTimeout(debounceRef.current);
-+                        if (q.trim() && fb.currentPath) {
-+                            const backendQuery = fb.regexEnabled ? "" : q.trim();
-+                            debounceRef.current = setTimeout(() => {
-+                                void dispatch(
-+                                    searchFilesRecursive({
-+                                        dirPath: fb.currentPath,
-+                                        query: backendQuery,
-+                                    }),
-+                                );
-+                            }, 300);
-+                        }
-+                    }}
-+                    style={{ backgroundColor: "var(--qt-base)" }}
-+                >
-+                    <TextField.Slot>
-+                        <MagnifyingGlassIcon height="12" width="12" />
-+                    </TextField.Slot>
-+                    {fb.searchQuery && (
-+                        <TextField.Slot>
-+                            <IconButton
-+                                size="1"
-+                                variant="ghost"
-+                                color="gray"
-+                                onClick={() => dispatch(setSearchQuery(""))}
-+                                style={{ width: 16, height: 16 }}
-+                            >
-+                                <Cross2Icon width="10" height="10" />
-+                            </IconButton>
-+                        </TextField.Slot>
-+                    )}
-+                </TextField.Root>
-+
-+                {/* 正则切换 + 排序 */}
-+                <Flex align="center" gap="1" mt="1">
-+                    <IconButton
-+                        size="1"
-+                        variant={fb.regexEnabled ? "solid" : "ghost"}
-+                        color="gray"
-+                        data-tooltip={tAny("fb_regex")}
-+                        onClick={() => {
-+                            const nextRegexEnabled = !fb.regexEnabled;
-+                            dispatch(toggleRegex());
-+
-+                            if (debounceRef.current) {
-+                                clearTimeout(debounceRef.current);
-+                            }
-+
-+                            if (trimmedSearchQuery && fb.currentPath) {
-+                                void dispatch(
-+                                    searchFilesRecursive({
-+                                        dirPath: fb.currentPath,
-+                                        query: nextRegexEnabled ? "" : trimmedSearchQuery,
-+                                    }),
-+                                );
-+                            }
-+                        }}
-+                        style={{
-+                            fontFamily: "monospace",
-+                            fontSize: 10,
-+                            width: 22,
-+                            height: 22,
-+                        }}
-+                    >
-+                        .*
-+                    </IconButton>
-+                    <IconButton
-+                        size="1"
-+                        variant={fb.audioOnly ? "solid" : "ghost"}
-+                        color="gray"
-+                        data-tooltip={tAny("fb_audio_only")}
-+                        onClick={() => dispatch(toggleAudioOnly())}
-+                        style={{
-+                            width: 22,
-+                            height: 22,
-+                        }}
-+                    >
-+                        <AudioIcon />
-+                    </IconButton>
-+                    <Select.Root
-+                        value={fb.sortMode}
-+                        size="1"
-+                        onValueChange={(v) => dispatch(setSortMode(v as SortMode))}
-+                    >
-+                        <Select.Trigger
-+                            style={{ fontSize: 11, height: 22, flex: 1 }}
-+                            onWheel={(event) => {
-+                                applySelectWheelChange({
-+                                    event,
-+                                    currentValue: fb.sortMode,
-+                                    options: SORT_MODE_OPTIONS,
-+                                    onChange: (next) => dispatch(setSortMode(next as SortMode)),
-+                                });
-+                            }}
-+                        />
-+                        <Select.Content>
-+                            <Select.Item value="name">{tAny("fb_sort_name")}</Select.Item>
-+                            <Select.Item value="date">{tAny("fb_sort_date")}</Select.Item>
-+                            <Select.Item value="size">{tAny("fb_sort_size")}</Select.Item>
-+                        </Select.Content>
-+                    </Select.Root>
-+                </Flex>
-+
-+                {hasRegexError && (
-+                    <Text size="1" color="red" mt="1">
-+                        {tAny("fb_regex_error")}
-+                    </Text>
-+                )}
-+            </div>
-+
-+            {/* 路径栏 */}
-+            {fb.currentPath && (
-+                <Flex
-+                    align="center"
-+                    gap="1"
-+                    className="px-2 py-1 border-b border-qt-border shrink-0 min-h-[28px]"
-+                >
-+                    <IconButton
-+                        size="1"
-+                        variant="ghost"
-+                        color="gray"
-+                        data-tooltip={(t as (key: string) => string)("fb_parent_dir")}
-+                        onClick={handleParentDir}
-+                    >
-+                        <ChevronUpIcon />
-+                    </IconButton>
-+                    <Text
-+                        size="1"
-+                        color="gray"
-+                        className="truncate flex-1"
-+                        data-tooltip={fb.currentPath}
-+                    >
-+                        {fb.currentPath}
-+                    </Text>
-+                </Flex>
-+            )}
-+
-+            {/* 文件列表 */}
-+            <ScrollArea className="flex-1 min-h-0" scrollbars="vertical">
-+                <div className="py-1">
+                     >
+                         <Cross2Icon />
+                     </IconButton>
+@@ -817,14 +1127,87 @@ export const FileBrowserPanel: React.FC = () => {
+             {/* 文件列表 */}
+             <ScrollArea className="flex-1 min-h-0" scrollbars="vertical">
+                 <div className="py-1">
 +                    {/* N2：「列表可信度」提示条（2026-09-28）。
 +                        ⚠️ 为什么必须有它：分区存储下未授权时 `readdir()` 会**静默隐藏**
 +                        无权限的文件（目录还在、文件消失、**系统不报错**）⇒ 列表"读取成功"
@@ -15756,11 +14070,14 @@ index 3ebf39a9..d854d865 100644
 +                            ) : null}
 +                        </Flex>
 +                    ) : null}
-+                    {fb.loading ? (
-+                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
-+                            {(t as (key: string) => string)("fb_loading")}
-+                        </Text>
-+                    ) : fb.error ? (
+                     {fb.loading ? (
+                         <Text size="1" color="gray" className="px-3 py-4 block text-center">
+                             {(t as (key: string) => string)("fb_loading")}
+                         </Text>
+                     ) : fb.error ? (
+-                        <Text size="1" color="red" className="px-3 py-4 block text-center">
+-                            {(t as (key: string) => string)("fb_error")}: {fb.error}
+-                        </Text>
 +                        <Flex direction="column" align="center" gap="2" className="px-3 py-4">
 +                            <Text size="1" color="red" className="block text-center">
 +                                {(t as (key: string) => string)("fb_error")}: {fb.error}
@@ -15775,207 +14092,20 @@ index 3ebf39a9..d854d865 100644
 +                                {(t as (key: string) => string)("fb_grant_dir_access")}
 +                            </Button>
 +                        </Flex>
-+                    ) : !fb.currentPath ? (
-+                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
-+                            {(t as (key: string) => string)("fb_no_folder")}
-+                        </Text>
-+                    ) : isSearchMode && fb.searchLoading ? (
-+                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
-+                            {(t as (key: string) => string)("fb_searching")}
-+                        </Text>
-+                    ) : displayEntries.length === 0 ? (
-+                        <Text size="1" color="gray" className="px-3 py-4 block text-center">
-+                            {isSearchMode
-+                                ? (t as (key: string) => string)("fb_no_results")
-+                                : (t as (key: string) => string)("fb_empty_folder")}
-+                        </Text>
-+                    ) : (
-+                        displayEntries.map((entry) => (
-+                            <FileEntryRow
-+                                key={entry.path}
-+                                entry={entry}
-+                                isPlaying={fb.previewingFile === entry.path}
-+                                isSelected={selectedPaths.has(entry.path)}
-+                                onDoubleClickDir={handleEnterDir}
-+                                onClickAudio={handleClickAudio}
-+                                onPointerDownForDrag={handlePointerDownForDrag}
-+                                isDragging={
-+                                    dragState?.active === true &&
-+                                    dragState.allFilePaths.includes(entry.path)
-+                                }
-+                                pathHint={isSearchMode ? getRelativeDirHint(entry.path) : undefined}
-+                            />
-+                        ))
-+                    )}
-+                </div>
-+            </ScrollArea>
-+
-+            {/* 底部音量滑块 */}
-+            <Flex align="center" gap="2" className="px-2 py-1.5 border-t border-qt-border shrink-0">
-+                <SpeakerLoudIcon width="14" height="14" className="text-qt-text-muted shrink-0" />
-+                <Slider
-+                    size="1"
-+                    min={0}
-+                    max={100}
-+                    step={1}
-+                    value={[Math.round(fb.previewVolume * 100)]}
-+                    onValueChange={(values: number[]) => {
-+                        dispatch(setPreviewVolume(values[0] / 100));
-+                    }}
-+                    className="flex-1"
-+                />
-+                <Text size="1" color="gray" className="w-[32px] text-right shrink-0">
-+                    {Math.round(fb.previewVolume * 100)}%
-+                </Text>
-+            </Flex>
-+
-+            {/* 拖拽 ghost 元素 */}
-+            {dragState?.active && (
-+                <div
-+                    ref={ghostRef}
-+                    style={{
-+                        position: "fixed",
-+                        left: 0,
-+                        top: 0,
-+                        pointerEvents: "none",
+                     ) : !fb.currentPath ? (
+                         <Text size="1" color="gray" className="px-3 py-4 block text-center">
+                             {(t as (key: string) => string)("fb_no_folder")}
+@@ -888,7 +1271,9 @@ export const FileBrowserPanel: React.FC = () => {
+                         left: 0,
+                         top: 0,
+                         pointerEvents: "none",
+-                        zIndex: 99999,
 +                        /* E35：从 99999 收到 ghost 档 —— 原来与「快速搜索」撞同一个值，
 +                           两者同屏时层级靠 DOM 顺序决定，语义上说不清谁该在上面。 */
 +                        zIndex: "var(--hs-z-ghost)",
-+                        background: "var(--qt-highlight)",
-+                        color: "var(--qt-text)",
-+                        padding: "2px 8px",
-+                        borderRadius: 4,
-+                        fontSize: 11,
-+                        whiteSpace: "nowrap",
-+                        opacity: 0.9,
-+                        boxShadow: "0 2px 8px rgba(0,0,0,0.3)",
-+                    }}
-+                >
-+                    🎵{" "}
-+                    {dragState.allFilePaths.length > 1
-+                        ? `${dragState.fileName} (+${dragState.allFilePaths.length - 1})`
-+                        : dragState.fileName}
-+                </div>
-+            )}
-+        </Flex>
-+    );
-+};
-+
-+// ============================================================
-+// 文件条目行组件
-+// ============================================================
-+
-+interface FileEntryRowProps {
-+    entry: FileEntry;
-+    isPlaying: boolean;
-+    isSelected?: boolean;
-+    onDoubleClickDir: (dirPath: string) => void;
-+    onClickAudio: (entry: FileEntry, ev?: React.MouseEvent) => void;
-+    onPointerDownForDrag: (e: React.PointerEvent<HTMLDivElement>, entry: FileEntry) => void;
-+    isDragging: boolean;
-+    pathHint?: string;
-+}
-+
-+const FileEntryRow: React.FC<FileEntryRowProps> = React.memo(
-+    ({
-+        entry,
-+        isPlaying,
-+        isSelected,
-+        onDoubleClickDir,
-+        onClickAudio,
-+        onPointerDownForDrag,
-+        isDragging,
-+        pathHint,
-+    }) => {
-+        const isAudio = isAudioFile(entry);
-+        const isMidi = isMidiFile(entry);
-+        const isProject = isProjectFile(entry);
-+        const isDraggable = isDraggableFile(entry);
-+
-+        return (
-+            <div
-+                className={[
-+                    "flex items-center gap-1.5 px-2 py-[3px] cursor-default",
-+                    "hover:bg-[color-mix(in_oklab,var(--qt-highlight)_12%,transparent)]",
-+                    isSelected
-+                        ? "bg-[color-mix(in_oklab,var(--qt-highlight)_25%,transparent)]"
-+                        : isPlaying
-+                          ? "bg-[color-mix(in_oklab,var(--qt-highlight)_20%,transparent)]"
-+                          : "",
-+                    isDragging ? "opacity-50" : "",
-+                    !entry.isDir && !isDraggable ? "opacity-50" : "",
-+                ]
-+                    .filter(Boolean)
-+                    .join(" ")}
-+                onPointerDown={isDraggable ? (e) => onPointerDownForDrag(e, entry) : undefined}
-+                onDoubleClick={entry.isDir ? () => onDoubleClickDir(entry.path) : undefined}
-+                onClick={isAudio ? (ev: React.MouseEvent) => onClickAudio(entry, ev) : undefined}
-+            >
-+                {/* 图标 */}
-+                <span className="shrink-0 w-[14px] flex items-center justify-center">
-+                    {entry.isDir ? (
-+                        <FolderIcon className="text-yellow-500" />
-+                    ) : isAudio ? (
-+                        isPlaying ? (
-+                            <StopIcon width="12" height="12" className="text-qt-highlight" />
-+                        ) : isVideoFile(entry) ? (
-+                            <VideoIcon className="text-purple-400" />
-+                        ) : (
-+                            <AudioIcon className="text-blue-400" />
-+                        )
-+                    ) : isMidi ? (
-+                        <MidiIcon className="text-qt-highlight" />
-+                    ) : isProject ? (
-+                        // 工程文件高亮：橙色星标文档图标（备份文件如 .hshp-bak 不在此列）。
-+                        <ProjectIcon className="text-amber-400" />
-+                    ) : (
-+                        <FileIcon width="12" height="12" className="text-qt-text-muted" />
-+                    )}
-+                </span>
-+
-+                {/* 文件名 + 路径提示 */}
-+                <div className="flex flex-col min-w-0 flex-1">
-+                    <Text
-+                        size="1"
-+                        className={isProject ? "truncate text-amber-300" : "truncate"}
-+                        data-tooltip={entry.name}
-+                    >
-+                        {entry.name}
-+                        {entry.isDir ? "/" : ""}
-+                    </Text>
-+                    {pathHint && (
-+                        <Text
-+                            size="1"
-+                            color="gray"
-+                            className="truncate leading-none"
-+                            style={{ fontSize: 10 }}
-+                        >
-+                            {pathHint}
-+                        </Text>
-+                    )}
-+                </div>
-+
-+                {/* 右侧信息 */}
-+                {!entry.isDir && entry.size != null && (
-+                    <Text size="1" color="gray" className="shrink-0 text-[10px]">
-+                        {formatSize(entry.size)}
-+                    </Text>
-+                )}
-+
-+                {/* 音频播放指示 */}
-+                {isPlaying && (
-+                    <PlayIcon
-+                        width="10"
-+                        height="10"
-+                        className="shrink-0 text-qt-highlight animate-pulse"
-+                    />
-+                )}
-+            </div>
-+        );
-+    },
-+);
-+
-+FileEntryRow.displayName = "FileEntryRow";
+                         background: "var(--qt-highlight)",
+                         color: "var(--qt-text)",
+                         padding: "2px 8px",
 diff --git a/frontend/src/components/layout/KeybindingsDialog.tsx b/frontend/src/components/layout/KeybindingsDialog.tsx
 index 640e395d..efd6aeae 100644
 --- a/frontend/src/components/layout/KeybindingsDialog.tsx
@@ -61746,10 +59876,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..d289019f 100644
+index c0db2221..28b2a151 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,3316 @@
+@@ -1,2297 +1,3326 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -67175,7 +65305,15 @@ index c0db2221..d289019f 100644
 +                    ref={trackCtxMenuRef}
 +                    data-track-ctx-menu
 +                    data-hs-context-menu="1"
-+                    className="fixed z-[var(--hs-z-menu)] min-w-[140px] rounded-[var(--hs-radius-menu)] border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
++                    /* 🔴 2026-10-03（用户口径）：「点击了『合成』的轨道的轨道头菜单**太宽**了，
++                       保持与默认轨道的菜单一样宽」。
++                       真机实测：默认轨 **152px**、合成轨 **292px**（`min-w-[140px]` 只是下限，
++                       宽度实际由内容撑开 —— 合成轨多了"音高分析算法"那一段，它的说明文字
++                       把整条菜单撑到近两倍）。
++                       ⇒ 改为**固定宽度 `w-[152px]`**（= 默认轨当前的自然宽度），
++                         段标题允许换行（`break-words`）、项内文本省略（见各处 `truncate`）
++                         ⇒ 两种轨道菜单宽度严格一致，后续加项也不会再把菜单撑宽。 */
++                    className="fixed z-[var(--hs-z-menu)] w-[152px] rounded-[var(--hs-radius-menu)] border border-qt-border bg-qt-window text-qt-text shadow-lg py-1"
 +                    style={{ left: trackCtxMenu.x, top: trackCtxMenu.y }}
 +                    onPointerDown={(e) => e.stopPropagation()}
 +                >
@@ -67317,7 +65455,9 @@ index c0db2221..d289019f 100644
 +                                    return (
 +                                        <>
 +                                            <div className="my-1 border-t border-qt-border" />
-+                                            <div className="px-3 pt-1 pb-0.5 text-[11px] opacity-60">
++                                            {/* 段标题允许换行：菜单已是**固定宽度**（152px，与默认轨一致），
++                                                长标签不能再把菜单撑宽 —— 宁可多占一行。 */}
++                                            <div className="px-3 pt-1 pb-0.5 text-[11px] opacity-60 break-words whitespace-normal">
 +                                                {t("algo_label")}
 +                                            </div>
 +                                            {(
@@ -82687,10 +80827,10 @@ index 00000000..ffd07881
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..a63356d2
+index 00000000..46ec27a5
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,2079 @@
+@@ -0,0 +1,2095 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -83725,6 +81865,9 @@ index 00000000..a63356d2
 +    const [eyeOpen, setEyeOpen] = React.useState(false);
 +
 +    const isPlaying = useAppSelector((s) => s.session.runtime.isPlaying);
++    /* 🔴 2026-10-03（用户口径）：试听（文件管理的 WebAudio 预览）与工程播放是两条路。
++       播放键必须知道**现在是否有试听在响**，才能把"按播放键"解释成"停止试听"。 */
++    const previewingFile = useAppSelector((s) => s.fileBrowser.previewingFile);
 +    const recording = useAppSelector((s) => s.recording, shallowEqual);
 +    const s = useAppSelector(
 +        (st) => ({
@@ -83914,7 +82057,20 @@ index 00000000..a63356d2
 +                // 原版播放键是 **solid 常亮**（不是"播放中才实底"）
 +                visual="solid"
 +                active={isPlaying}
-+                onClick={() => (isPlaying ? dispatch(stopAudioPlayback()) : dispatch(playOriginal()))}
++                /* 🔴 2026-10-03（用户口径）：「在文件管理里预览音频时如果点了下工具栏的
++                   播放键，应该**直接停掉预览音频**，而不是卡着播放键按不动」。
++                   试听走 WebAudio（`audioPreview`），与工程播放是两条独立的路：
++                   试听期间按播放键应当理解成"停止试听"，**不顺带起播工程** ——
++                   否则用户听到的是另一路声音，而播放键自身的状态（`isPlaying`）并不会
++                   因为试听而改变 ⇒ 观感就是"按了没反应 / 卡着"。 */
++                onClick={() => {
++                    if (previewingFile !== null) {
++                        dispatch(stopAudioPlayback());
++                        return;
++                    }
++                    if (isPlaying) dispatch(stopAudioPlayback());
++                    else dispatch(playOriginal());
++                }}
 +            >
 +                {isPlaying ? <PauseIcon width={16} height={16} /> : <PlayIcon width={16} height={16} />}
 +            </BarButton>
@@ -99765,35 +97921,48 @@ index ad269869..6039e410 100644
 +    },
 +);
 diff --git a/frontend/src/features/session/thunks/transportThunks.ts b/frontend/src/features/session/thunks/transportThunks.ts
-index 59e658ed..3939ddf1 100644
+index 59e658ed..27eeb07e 100644
 --- a/frontend/src/features/session/thunks/transportThunks.ts
 +++ b/frontend/src/features/session/thunks/transportThunks.ts
-@@ -3,6 +3,9 @@ import { webApi } from "../../../services/webviewApi";
+@@ -3,6 +3,12 @@ import { webApi } from "../../../services/webviewApi";
  
  import { setMetronomeConfig, persistUiSettings } from "../sessionSlice";
  import type { SessionState } from "../sessionSlice";
 +// 文件浏览器的试听引擎（WebAudio 单例）。传输栏的播放/停止必须同时管它 ——
 +// 见 `stopAudioPlayback` 里的 bug 说明（两条路原本互不相干 ⇒「按停止停不下来」）。
 +import { audioPreview } from "../../fileBrowser/audioPreview";
++// 停止时还要清掉文件浏览器的「正在试听」标记 —— 只停声音不清标记的话，文件项上那颗
++// 播放标记会一直亮着（用户以为没停，再点一次 ⇒ 重播，见下方 `stopAudioPlayback` 注释）。
++import { setPreviewingFile } from "../../fileBrowser/fileBrowserSlice";
  
  /**
   * 更新节拍器配置并即时应用到引擎：
-@@ -83,6 +86,14 @@ function enqueueTransportCommand<T>(run: () => Promise<T>): Promise<T> {
+@@ -82,7 +88,23 @@ function enqueueTransportCommand<T>(run: () => Promise<T>): Promise<T> {
+ 
  export const stopAudioPlayback = createAsyncThunk(
      "session/stopAudioPlayback",
-     async (options: { restoreAnchor?: boolean } | void, { getState }) => {
+-    async (options: { restoreAnchor?: boolean } | void, { getState }) => {
++    async (options: { restoreAnchor?: boolean } | void, { getState, dispatch }) => {
 +        /* 🔴 上游 bug 修复（用户口径「预览时按停止停不下来」）：
 +           文件浏览器的试听走 **WebAudio**（`features/fileBrowser/audioPreview`），
 +           与工程的播放/停止**完全是两条路** —— 传输栏的「停止」只 dispatch 本 thunk、
 +           停的是工程播放，试听声音照旧在响。
 +           修法选在 **thunk 层**而不是各个按钮上：`stopAudioPlayback` / `playOriginal`
 +           是所有入口（手机底栏、桌面 ActionBar、时间线内按钮、键盘快捷键、录制流程）
-+           的共同下游，这里一处即可全覆盖。 */
++           的共同下游，这里一处即可全覆盖。
++
++           🔴 2026-10-03（用户口径）：「文件管理音乐停不掉……**点击停止时又从头播了一遍**」。
++           上一版只 `audioPreview.stop()`（声音确实停了），但**没清 `previewingFile`**
++           ⇒ 文件项上那颗"正在播放"标记一直亮着 ⇒ 用户以为没停、再去点那一项（想停）
++           ⇒ 命中 `handleClickAudio` 的"普通点击 = 预览"分支 ⇒ **从头重播**。
++           ⇒ 这里一并清标记；`FileBrowserPanel` 那侧也补了"点正在试听的那一项 = 停止"
++             （见 `handleClickAudio`），两条路都堵上。 */
 +        audioPreview.stop();
++        dispatch(setPreviewingFile(null));
          const restoreAnchor = Boolean(
              (options as { restoreAnchor?: boolean } | undefined)?.restoreAnchor,
          );
-@@ -158,6 +169,9 @@ export type PlayOriginalResult = {
+@@ -158,6 +180,9 @@ export type PlayOriginalResult = {
  export const playOriginal = createAsyncThunk<PlayOriginalResult, void>(
      "session/playOriginal",
      async (_, { getState }) => {

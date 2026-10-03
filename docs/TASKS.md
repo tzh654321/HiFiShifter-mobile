@@ -5201,3 +5201,49 @@ Chrome 的**触摸目标调整（touch target adjustment）**会把触点**附�
 > `scripts/_dbg-layers-z.mjs`（④）· `scripts/_dbg-proj-beats.mjs`（⑤）。
 > ⚠️ ④ 的采样**不能用 `elementFromPoint` / `elementsFromPoint`**：两个浮层都是 `pointer-events:none`，
 > 两者都会把它们跳过 ⇒ 只能读 computed `z-index` + 截图目视。
+
+---
+
+## E40（2026-10-03 第三轮 · 用户 4 条）
+
+### ① 「第四条确实没有生效」—— 真因：浮层被**面板块的层叠上下文**困住
+
+- 上一轮把三个浮层的 z 提到 60（`--hs-z-transient`）**没用** —— 因为 **z 只在同一层叠上下文内比较**。
+- 真因（与上一轮"存储/工程设置弹窗被分屏块盖住"**完全同源**）：
+
+  ```css
+  [data-hs-pane] { animation: hs-fade-in var(--hs-anim-dur-pane) var(--hs-anim-ease) both; }
+  ```
+
+  每个手机面板块（timeline / params / files / notes）**自成层叠上下文**；三个浮层原先挂在
+  **时间线面板块内部**（`App.tsx` 原 4719–4728）⇒ 无论 z 提到多少都**压不出这块面板**。
+
+- **修**：`ClipQuickActions` / `ClipControlPoints` / `ClipEdgeLongPressHint` **移到 App 根层**
+  （与 `SettingsOverlays` / `MobileBottomBar` 同级），挂载条件 `isPhone && mobilePanels.timeline`。
+  三者**内部都是 `position: fixed`**（视口坐标）⇒ 换挂载点**几何不变**。
+- 🔑 **规律**：手机端任何"要浮在面板块之上"的东西，**一律挂 App 根层**；挂在 pane 内再调 z 是徒劳。
+
+### ② 合成轨的轨道头菜单太宽 —— 实测 152px vs 292px
+
+- `min-w-[140px]` 只是**下限**，宽度实际由内容撑开；合成轨多出的「音高分析算法」段把菜单撑到近两倍。
+- **实测**（`scripts/_dbg-trackmenu-width.mjs`）：**默认轨 152px · 合成轨 292px**。
+- **修**：菜单容器改**固定 `w-[152px]`**（= 默认轨自然宽度）；段标题加 `break-words` 允许换行
+  （长标签不再撑宽菜单）。
+
+### ③ 「文件管理音乐停不掉……点击停止时又从头播了一遍」
+
+- 上一版 `stopAudioPlayback` 只 `audioPreview.stop()`（**声音确实停了**），但**没清 `previewingFile`**
+  ⇒ 文件项上那颗"正在播放"标记仍亮 ⇒ 用户以为没停、**再去点那一项（想停）**
+  ⇒ 命中 `handleClickAudio` 的"普通点击 = 预览"分支 ⇒ **从头重播**。
+- **修**：① thunk 里补 `dispatch(setPreviewingFile(null))`（所有停止入口一致）；
+  ② `FileBrowserPanel.handleClickAudio` 加"点**正在试听**的那一项 = **停止试听**"
+  （通用交互惯例；想重播再点一次）。
+
+### ④ 预览时按下工具栏播放键应停掉预览，而不是"卡着按不动"
+
+- 试听走 WebAudio（`audioPreview`），与工程播放是**两条路**；试听期间按播放键原来会走
+  `playOriginal()`（起播工程）⇒ 用户听到另一路声音、而播放键自身状态不变 ⇒ 观感"按不动"。
+- **修**：播放键改为 `previewingFile !== null` ⇒ 只 `dispatch(stopAudioPlayback())`
+  （停试听 + 清标记），**不顺带起播工程**。
+
+> 判据脚本：`scripts/_dbg-trackmenu-width.mjs`（②，实测两轨道的菜单宽度）。
