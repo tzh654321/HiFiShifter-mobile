@@ -5174,3 +5174,30 @@ Chrome 的**触摸目标调整（touch target adjustment）**会把触点**附�
 真机判据兜住。
 
 > 本轮交付包与提交：见构建日志与 `git log --oneline -1`。
+
+---
+
+## E39b（2026-10-03 第二轮 · 用户 5 条，装机 22:02）
+
+| # | 用户口径 | 改法 | 真机判据 |
+| :--- | :--- | :--- | :--- |
+| 1 | 「功能测试正常，但**显示不好看了**」（三角被挪到按钮右下角外侧） | 角标**回原位**（贴 16×16 图标右下角、14×14）；抢事件改由 `cornerEnabled`（未激活 ⇒ `pointer-events:none`）兜住 | `_dbg-tool-click` **5/5** + `_probe-e37-tool-switch` **6/6** |
+| 2 | **大幅调低**圆点的长按阈值 | `TOUCH_EDGE_HOLD_MS` **500 → 200**（纵向定型 `EDGE_KIND_LOCK_PX=8` 才是防误判主力） | 按住 **300ms** ⇒ 提示窗出现（按旧 500ms 不会 fired） |
+| 3 | 淡出 / 变速两个临时窗口**滑到"王"的上下边后就消失** | `ClipControlPoints` 里 `useEffect` 监听 `grab.mode` 由 `none` → `fade`/`rate` 时 `dispatchClipEdgeLongPressHint(null)` | 上划 24px（> `MODE_THRESHOLD_PX` 18）⇒ `hintOn=false` + `mode=fade` |
+| 4 | 三浮层**要高过轨道头 / 拍数栏** | 裸数字 `25 / 26 / 27` → 设计令牌 `--hs-z-transient`（**60**）：高于拍数栏/轨道头(25/26)/menubar(41)，仍低于面板(500)/菜单(999)/弹窗(1000) | z 读数 **60** ✅（视觉端到端待用户确认，见下） |
+| 5 | 工程设置：**分子换输入框** + 分母**加 1 与 32** | 分子 → `<input data-hs-project-beats-input>` + Enter/「保存」提交（`applyBeats`，1…64）；`DENOMINATOR_OPTIONS` → `[1,2,4,8,16,32]` | `_dbg-proj-beats`：输入框 ✅ value=4；分母按钮 `["1","2","4","8","16","32"]` ✅ |
+
+### ⏳ ④ 的遗留疑点（下一轮排查）
+
+`[data-hs-clip-actions]`（常用功能浮条）在**分屏（参数面板 + 时间线）**状态下，经
+`__hsImportAudioBase64` 导入并选中块后**始终不在 DOM**（试过：直接选中 / 先点空白再点块 / 重置工程）。
+同时**控制点浮层与长按提示都正常在场** ⇒ 不是 `isPhone` / viewport 层面的问题，疑点在
+`ClipQuickActions` 的 `hiddenForClipId` 或 `vp.containerRect`。
+
+⇒ **产品侧 z 已改（60），但"浮条压过轨道头"的端到端画面需要用户实测**；本条同时记为
+「浮条为何不渲染」的排查项。
+
+> 判据脚本：`scripts/_dbg-tool-click.mjs`（①）· `scripts/_dbg-e39b-hint-threshold.mjs`（②③，含三张截图）·
+> `scripts/_dbg-layers-z.mjs`（④）· `scripts/_dbg-proj-beats.mjs`（⑤）。
+> ⚠️ ④ 的采样**不能用 `elementFromPoint` / `elementsFromPoint`**：两个浮层都是 `pointer-events:none`，
+> 两者都会把它们跳过 ⇒ 只能读 computed `z-index` + 截图目视。

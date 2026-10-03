@@ -35199,10 +35199,10 @@ index e9d70c04..f9bcf43d 100644
                  </Flex>
 diff --git a/frontend/src/components/layout/ProjectSettingsDialog.tsx b/frontend/src/components/layout/ProjectSettingsDialog.tsx
 new file mode 100644
-index 00000000..a506558a
+index 00000000..80f8cc40
 --- /dev/null
 +++ b/frontend/src/components/layout/ProjectSettingsDialog.tsx
-@@ -0,0 +1,263 @@
+@@ -0,0 +1,295 @@
 +/**
 + * ProjectSettingsOverlay —— E1 + G-3：「菜单栏-文件 → 工程设置…」。
 + *
@@ -35232,8 +35232,12 @@ index 00000000..a506558a
 +
 +/** 与 `ScaleKey` 一致（♭ 记法）。 */
 +const BASE_SCALES = ["C", "Db", "D", "Eb", "E", "F", "Gb", "G", "Ab", "A", "Bb", "B"] as const;
-+const BEATS_OPTIONS = [2, 3, 4, 5, 6, 7, 8, 9, 12] as const;
-+const DENOMINATOR_OPTIONS = [2, 4, 8, 16] as const;
++/**
++ * 🔴 2026-10-03（用户口径）：「每小节拍数**分子换成输入框**、分母**添加 1 与 32**」。
++ * ⇒ 分子不再用固定档位（旧 `[2,3,4,5,6,7,8,9,12]` 覆盖不到 10/11/13…），改成自由输入；
++ *   分母补上 1（全音符为一拍）与 32（极细分）。
++ */
++const DENOMINATOR_OPTIONS = [1, 2, 4, 8, 16, 32] as const;
 +
 +export function ProjectSettingsDialog({ open, onOpenChange }: Props) {
 +    const { t } = useI18n();
@@ -35260,6 +35264,11 @@ index 00000000..a506558a
 +
 +    const beatsPerBar = Math.max(1, Math.round(s.beats || 4));
 +    const denominator = s.denominator || 4;
++    /** 每小节拍数（分子）的输入框 —— 受控，仅在本组件内（用户口径 2026-10-03：分子改输入框）。 */
++    const [beatsInput, setBeatsInput] = React.useState<string>(String(beatsPerBar));
++    React.useEffect(() => {
++        setBeatsInput(String(beatsPerBar));
++    }, [beatsPerBar, open]);
 +
 +    const applyBpm = (raw: string) => {
 +        const v = Number(raw);
@@ -35272,6 +35281,19 @@ index 00000000..a506558a
 +        void (webApi.setProjectTimelineSettings(beats, den, grid) as Promise<unknown>).finally(() =>
 +            setBusy(false),
 +        );
++    };
++    /**
++     * 提交"每小节拍数"（分子，输入框版）。
++     *
++     * 只接受正整数；非法输入**不提交也不清空**（输入框保留原样让用户改），
++     * 与 `applyBpm` 同一套口径。上限取 64：再大的拍号在后端也只是个整数，
++     * 但网格线会密到没意义。
++     */
++    const applyBeats = (raw: string) => {
++        const v = Number(raw);
++        if (!Number.isFinite(v) || v <= 0) return;
++        const clamped = Math.min(64, Math.max(1, Math.round(v)));
++        applyTimeline(clamped, denominator, s.gridSize || "1/4");
 +    };
 +
 +    const infoRow = (label: string, value: string, title?: string) => (
@@ -35393,18 +35415,28 @@ index 00000000..a506558a
 +                    <Text size="2" weight="bold">
 +                        {tAny("beats_per_bar")}
 +                    </Text>
-+                    <Flex gap="1" wrap="wrap">
-+                        {BEATS_OPTIONS.map((n) => (
-+                            <Button
-+                                key={n}
-+                                size="1"
-+                                variant={beatsPerBar === n ? "solid" : "soft"}
-+                                disabled={busy}
-+                                onClick={() => applyTimeline(n, denominator, s.gridSize || "1/4")}
-+                            >
-+                                {String(n)}
-+                            </Button>
-+                        ))}
++                    {/* 分子（每小节拍数）：**输入框**。用户口径 2026-10-03 —— 旧按钮组
++                        档位 `[2..12]` 覆盖不到 10/11/13…；这里与 BPM 同款（Enter 或「保存」提交）。 */}
++                    <Flex align="center" gap="2">
++                        <input
++                            data-hs-project-beats-input
++                            value={beatsInput}
++                            onChange={(e) => setBeatsInput(e.target.value)}
++                            onKeyDown={(e) => {
++                                e.stopPropagation();
++                                if (e.key === "Enter") applyBeats(beatsInput.trim());
++                            }}
++                            inputMode="numeric"
++                            className="text-xs rounded px-2 py-1 outline-none bg-qt-base text-qt-text border border-qt-border"
++                            style={{ width: 72 }}
++                        />
++                        <Button
++                            size="1"
++                            disabled={busy || !beatsInput.trim()}
++                            onClick={() => applyBeats(beatsInput.trim())}
++                        >
++                            {tAny("storage_save")}
++                        </Button>
 +                    </Flex>
 +                    <Text size="1" weight="bold" mt="1">
 +                        {tAny("time_signature_denominator")}
@@ -68869,10 +68901,10 @@ index 226da0e7..ec0be5bc 100644
 +};
 \ No newline at end of file
 diff --git a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-index a2ae3b60..9cf1e45b 100644
+index a2ae3b60..41d7dc8c 100644
 --- a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
 +++ b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-@@ -1,5487 +1,6229 @@
+@@ -1,5487 +1,6236 @@
 -/**
 - * 时间轴渲染内核 · 命令式宿主
 - *
@@ -77052,8 +77084,15 @@ index a2ae3b60..9cf1e45b 100644
 +    const TOUCH_PAN_THRESHOLD = 8;
 +    /** 触摸按住多久算「长按」（规格「长按并划动」）。 */
 +    const TOUCH_HOLD_MS = 500;
-+    /** 触屏「控制点·长按」的按住时长（规格 E 列：长按后才按纵向定型）。 */
-+    const TOUCH_EDGE_HOLD_MS = 500;
++    /**
++     * 触屏「控制点·长按」的按住时长（规格 E 列：长按后才按纵向定型）。
++     *
++     * 🔴 2026-10-03（用户口径：「**大幅调低**圆点的长按阈值」）：500 → **200**。
++     * 500ms 对"按一下再划"的两段式手势太长（用户要等半秒才有反馈，手感发滞）；
++     * 200ms 仍远高于点击抖动，且下方 `EDGE_KIND_LOCK_PX = 8` 的**纵向定型**门槛
++     * 才是防误判的主力（单纯横拖不会定型成 fade / rate，见 `onGesturePointerMove`）。
++     */
++    const TOUCH_EDGE_HOLD_MS = 200;
 +    /** 长按成立后判定「上划 / 下划」的纵向位移（CSS px）：够了才定型，避免手抖误判。 */
 +    const EDGE_KIND_LOCK_PX = 8;
 +
@@ -81768,10 +81807,10 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..297cca28
+index 00000000..7776c34e
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,297 @@
+@@ -0,0 +1,321 @@
 +/**
 + * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
@@ -81795,6 +81834,7 @@ index 00000000..297cca28
 + */
 +import React from "react";
 +import { useClipOverlayGeometry } from "./useClipOverlayGeometry";
++import { dispatchClipEdgeLongPressHint } from "./ClipEdgeLongPressHint";
 +
 +/** 圆点半径（直径 14），比旧版竖条更接近 flm 的抓手观感。 */
 +const DOT_R = 7;
@@ -81867,6 +81907,27 @@ index 00000000..297cca28
 +    /** 几何放进 ref：指针旁听器只挂一次，不能每帧重挂。 */
 +    const geomRef = React.useRef(g);
 +    geomRef.current = g;
++
++    /**
++     * 🔴 2026-10-03（用户口径）：「淡出与变速这两个**临时窗口**应该**滑动到"王"的上下边后
++     * 就消失**」。
++     *
++     * 那个提示窗（`ClipEdgeLongPressHint`，两个 pill）的使命是"告诉用户往上 / 往下各有什么"，
++     * 属于两段式手势的**第一段**反馈。一旦圆点真的滑进了上横轨（fade）或下横轨（rate），
++     * 用户已经从圆点自身的图标态看到结果 ⇒ 提示应当退场，别再一直占着轨道上方 / 下方。
++     *
++     * 实现放在 `useEffect` 里（而不是 `onMove` 的 setState updater 内）：
++     * updater 必须是纯函数（StrictMode 会双调），而且它**异步执行**，在里面做副作用
++     * 既可能重发、也可能读到还没提交的值。这里只比较"上一帧 mode → 本帧 mode"。
++     */
++    const prevModeRef = React.useRef<Mode>("none");
++    React.useEffect(() => {
++        const m: Mode = grab?.mode ?? "none";
++        if (m !== "none" && prevModeRef.current === "none") {
++            dispatchClipEdgeLongPressHint(null);
++        }
++        prevModeRef.current = m;
++    }, [grab?.mode]);
 +
 +    // 全局旁听：按下时判断"是否抓在块外侧的控制点附近"。
 +    React.useEffect(() => {
@@ -82062,7 +82123,9 @@ index 00000000..297cca28
 +    return (
 +        <div
 +            data-hs-clip-control-points
-+            style={{ position: "absolute", left: 0, top: 0, zIndex: 25, pointerEvents: "none" }}
++            /* 🔴 2026-10-03（用户口径）：三个手机浮层要**盖住轨道头 / 拍数栏**
++               ⇒ 原来裸数字 25 与拍数栏同档 ⇒ 改用设计令牌 `--hs-z-transient`（60）。 */
++            style={{ position: "absolute", left: 0, top: 0, zIndex: "var(--hs-z-transient)", pointerEvents: "none" }}
 +        >
 +            {dotPressable(baseXOf("left")) ? dot("left") : null}
 +            {dotPressable(baseXOf("right")) ? dot("right") : null}
@@ -82071,10 +82134,10 @@ index 00000000..297cca28
 +}
 diff --git a/frontend/src/components/mobile/ClipEdgeLongPressHint.tsx b/frontend/src/components/mobile/ClipEdgeLongPressHint.tsx
 new file mode 100644
-index 00000000..c51ea7f9
+index 00000000..b44f8bc2
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipEdgeLongPressHint.tsx
-@@ -0,0 +1,143 @@
+@@ -0,0 +1,146 @@
 +/**
 + * 音频块头尾「控制点」长按提示 —— 规格 `docs/15` 触屏交互规格表，
 + * 「音频块头尾的控制点」列 · **长按**行：
@@ -82197,7 +82260,10 @@ index 00000000..c51ea7f9
 +        <div
 +            data-hs-edge-longpress-hint
 +            data-hs-edge-side={hint.side}
-+            style={{ position: "fixed", left: x, top: hint.clientY, zIndex: 27, pointerEvents: "none" }}
++            /* 🔴 2026-10-03（用户口径）：临时窗口要**盖住轨道头 / 拍数栏**
++               ⇒ 原来裸数字 27 与它们同档 ⇒ 改用设计令牌 `--hs-z-transient`（60）。
++               本层是 `position: fixed`，定位仍在视口坐标（不受令牌影响）。 */
++            style={{ position: "fixed", left: x, top: hint.clientY, zIndex: "var(--hs-z-transient)", pointerEvents: "none" }}
 +        >
 +            {/* 上划 = 淡入淡出时长（左控制点 = 淡入，右控制点 = 淡出） */}
 +            <div data-hs-edge-hint="fade" style={{ ...pill, top: -54 }}>
@@ -82220,10 +82286,10 @@ index 00000000..c51ea7f9
 +}
 diff --git a/frontend/src/components/mobile/ClipQuickActions.tsx b/frontend/src/components/mobile/ClipQuickActions.tsx
 new file mode 100644
-index 00000000..6044163a
+index 00000000..ffd07881
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipQuickActions.tsx
-@@ -0,0 +1,389 @@
+@@ -0,0 +1,395 @@
 +/**
 + * 音频块「常用操作」浮动条 —— 规格 `docs/15` 音频块·单击：
 + * 「选中并显示常用操作与左右控制点（参考 flm1.png）」。
@@ -82573,7 +82639,13 @@ index 00000000..6044163a
 +        <div
 +            data-hs-clip-actions
 +            onPointerDown={(e) => e.stopPropagation()}
-+            style={{ position: "absolute", left: 0, top: 0, zIndex: 26, pointerEvents: "none" }}
++            /* 🔴 2026-10-03（用户口径）：「常用功能临时菜单、控制点、淡出与变速这两个临时窗口
++               **应可以显示在更高层级（如轨道头、拍数栏）**」。
++               原来这里是**裸数字 26**，与拍数栏（`TimeRuler` z=25）/ 轨道头同档
++               ⇒ 谁在 DOM 后面谁赢，浮条会被轨道头、拍数栏压住。
++               ⇒ 改用设计令牌 `--hs-z-transient`（60）：高过拍数栏/轨道头/menubar(41)，
++                 仍低于常驻面板(500) / 菜单(999) / 弹窗(1000)，不会盖住该盖的东西。 */
++            style={{ position: "absolute", left: 0, top: 0, zIndex: "var(--hs-z-transient)", pointerEvents: "none" }}
 +        >
 +            <div
 +                style={{
@@ -82615,10 +82687,10 @@ index 00000000..6044163a
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..2ec1373a
+index 00000000..a63356d2
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,2084 @@
+@@ -0,0 +1,2079 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -83169,21 +83241,17 @@ index 00000000..2ec1373a
 +                onPointerDown={(ev) => ev.stopPropagation()}
 +                style={{
 +                    position: "absolute",
-+                    /* 🔴 2026-10-03（用户第二次报「点未选中的工具却弹菜单」，实测未通过）：
-+                       角标原来按 **16×16 图标**定位（`right:-4/bottom:-4`），命中区落在按钮
-+                       `[18,32]²` —— **把按钮正中心 (20,20) 也盖住**；改成按钮尺寸后落在
-+                       `[28,42]²`，但真机实测**仍然**被命中：同一次会话里
-+                       `elementFromPoint(中心)` 给的是图标、而真实触摸 `pointerdown` 的
-+                       target 却是角标（中心到角标最近点只有 11px，Chrome 的触摸目标调整
-+                       会把这么近的可点元素算进去）⇒ 光靠 `elementFromPoint` 会误判。
-+                       ⇒ 再挪远一档并收小：**10×10 / right:-4 / bottom:-4** ⇒ 命中区
-+                         `[34,44]²`，到按钮中心最近 19.8px（> 触点半径）。
-+                       图形仍只画 6×6。判据必须用**真实触摸的 `pointerdown` target**
-+                         查，不能用 `elementFromPoint`。 */
++                    /* 🔴 2026-10-03：角标**回到原位**（16×16 图标的右下角，14×14 命中区）。
++                       期间试过"按按钮尺寸定位 + 外移 + 收小到 10×10"来躲开按钮中心，但用户
++                       反馈「功能测试正常，显示不好看了」⇒ 位置恢复原样。
++                       抢事件的问题**改由 `pointerEvents` 解决**（未激活 ⇒ none），不再依赖
++                       几何避让；已激活时角标与本体同为"开菜单"⇒ 放回原位无副作用。
++                       判据仍必须用**真实触摸的 `pointerdown` target** —— Chrome 的触摸目标
++                       调整会把触点附近的可点元素算进来，`elementFromPoint` 会骗人。 */
 +                    right: -4,
 +                    bottom: -4,
-+                    width: 10,
-+                    height: 10,
++                    width: 14,
++                    height: 14,
 +                    opacity: 0.9,
 +                    cursor: "pointer",
 +                    /* 未激活时角标**退出命中**（见 `cornerEnabled` 的注释）：
@@ -83384,21 +83452,17 @@ index 00000000..2ec1373a
 +                onPointerDown={(ev) => ev.stopPropagation()}
 +                style={{
 +                    position: "absolute",
-+                    /* 🔴 2026-10-03（用户第二次报「点未选中的工具却弹菜单」，实测未通过）：
-+                       角标原来按 **16×16 图标**定位（`right:-4/bottom:-4`），命中区落在按钮
-+                       `[18,32]²` —— **把按钮正中心 (20,20) 也盖住**；改成按钮尺寸后落在
-+                       `[28,42]²`，但真机实测**仍然**被命中：同一次会话里
-+                       `elementFromPoint(中心)` 给的是图标、而真实触摸 `pointerdown` 的
-+                       target 却是角标（中心到角标最近点只有 11px，Chrome 的触摸目标调整
-+                       会把这么近的可点元素算进去）⇒ 光靠 `elementFromPoint` 会误判。
-+                       ⇒ 再挪远一档并收小：**10×10 / right:-4 / bottom:-4** ⇒ 命中区
-+                         `[34,44]²`，到按钮中心最近 19.8px（> 触点半径）。
-+                       图形仍只画 6×6。判据必须用**真实触摸的 `pointerdown` target**
-+                         查，不能用 `elementFromPoint`。 */
++                    /* 🔴 2026-10-03：角标**回到原位**（16×16 图标的右下角，14×14 命中区）。
++                       期间试过"按按钮尺寸定位 + 外移 + 收小到 10×10"来躲开按钮中心，但用户
++                       反馈「功能测试正常，显示不好看了」⇒ 位置恢复原样。
++                       抢事件的问题**改由 `pointerEvents` 解决**（未激活 ⇒ none），不再依赖
++                       几何避让；已激活时角标与本体同为"开菜单"⇒ 放回原位无副作用。
++                       判据仍必须用**真实触摸的 `pointerdown` target** —— Chrome 的触摸目标
++                       调整会把触点附近的可点元素算进来，`elementFromPoint` 会骗人。 */
 +                    right: -4,
 +                    bottom: -4,
-+                    width: 10,
-+                    height: 10,
++                    width: 14,
++                    height: 14,
 +                    opacity: 0.9,
 +                    cursor: "pointer",
 +                    /* 未激活时角标**退出命中**（见 `cornerEnabled` 的注释）：
@@ -84527,8 +84591,11 @@ index 00000000..2ec1373a
 +                    <IconCursorWithCorner
 +                        drag={s.toolModeGroup === "drag"}
 +                        onCornerClick={openSelectMenu}
-+                        /* 外层盒子按按钮尺寸 + 未激活时角标退出命中（同绘制按钮）。 */
-+                        boxPx={BTN_BOX}
++                        /* 🔴 2026-10-03 用户口径：「功能测试正常，但显示不好看了」——
++                           角标**位置回到图标右下角（原位置）**：抢事件的问题已由
++                           `cornerEnabled`（未激活 ⇒ `pointer-events:none`）解决，
++                           不再需要靠"挪远"来避让 ⇒ 尺寸与定位全部回默认。
++                           已激活时角标与本体的结果**同为"开菜单"** ⇒ 放回原位无副作用。 */
 +                        cornerEnabled={isSelectActive}
 +                    />
 +                </span>
@@ -84559,10 +84626,10 @@ index 00000000..2ec1373a
 +                            /* A5：点角标 = 开绘制工具子菜单，与「选择」同一套交互
 +                               （长按那条路仍在，两者都调同一个 `openDrawMenu`）。 */
 +                            onCornerClick={openDrawMenu}
-+                            /* 外层盒子必须按**按钮**尺寸，否则角标会盖住按钮中心
-+                               （见 `IconPencilWithCorner` 里角标的注释）。 */
-+                            boxPx={BTN_BOX}
-+                            /* 未激活 ⇒ 角标退出命中，保证"点未选中的工具 = 直接切换"。 */
++                            /* 🔴 2026-10-03 用户口径：「功能测试正常，但显示不好看了」
++                               ⇒ 角标**回到图标右下角（原位置）**，尺寸/定位全部回默认；
++                               抢事件已由 `cornerEnabled`（未激活 ⇒ `pointer-events:none`）解决，
++                               不再需要"挪远"避让。已激活时角标与本体同为"开菜单"⇒ 无副作用。 */
 +                            cornerEnabled={isDrawActive}
 +                        />
 +                    )}
