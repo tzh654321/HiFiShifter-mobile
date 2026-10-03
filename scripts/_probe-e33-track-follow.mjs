@@ -262,6 +262,11 @@ await sleep(950);
 
 const gB = await geometry();
 const rDown = gB.rows[0];
+/* 让采样读数知道"哪一行是被拖的"（E33-8 只关心它）。 */
+await cdp.call((id) => {
+    window.__e33DragId = id;
+    return true;
+}, rDown.id);
 await touch('touchStart', [{ x: rDown.cx, y: rDown.cy }]);
 await sleep(560);
 for (let i = 1; i <= 6; i += 1) {
@@ -277,6 +282,33 @@ check(
     Math.abs(nextTy + rDown.h) <= Math.max(8, rDown.h * 0.15),
     `行 ${downNextId} 期望 −${rDown.h}px（上移让位），实测 ${nextTy}px`,
 );
+/* 松手前后的逐帧读数：**单独起一个短采样器** —— 上面那个总采样器只跑 6s，
+   而整条探针跑到这里早就超时了 ⇒ 第一版 E33-8 读到空数组（探针自己的 bug，不是产品的）。 */
+await cdp.call(() => {
+    const host = document.querySelector('[data-track-list-panel]');
+    window.__e33rel = { log: [], stop: false };
+    const ty = (el) => {
+        const t = getComputedStyle(el).transform;
+        if (!t || t === 'none') return 0;
+        try {
+            return Math.round(new DOMMatrixReadOnly(t).m42);
+        } catch {
+            return NaN;
+        }
+    };
+    const t0 = performance.now();
+    let n = 0;
+    const tick = () => {
+        if (window.__e33rel.stop || n > 30) return;
+        n += 1;
+        const r = host ? host.querySelector(`[data-hs-track-row="${window.__e33DragId}"]`) : null;
+        window.__e33rel.log.push({ dt: Math.round(performance.now() - t0), ty: r ? ty(r) : null });
+        requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    return true;
+});
+const tyBeforeRelease = duringDown.rows.find((r) => r.id === rDown.id)?.ty ?? NaN;
 await touch('touchEnd', []);
 await sleep(1400);
 const gC = await geometry();
@@ -285,6 +317,70 @@ check(
     JSON.stringify(gC.ids) !== JSON.stringify(gB.ids),
     `${JSON.stringify(gB.ids)} → ${JSON.stringify(gC.ids)}`,
 );
+
+/* ── E33-8（2026-10-03 用户口径）：「松手归位时**不是从手的位置**而是从原位置开始弹」──
+   判据 = 松手后**第一帧**被拖行的 `translateY` 应该**接着松手前那个值**继续收，
+   而不是当场变成 0（立刻吸附到目标槽 ⇒ 视觉上"啪"一下）或跳到别的量级。
+   读数直接打出来，红了就知道是哪一类。 */
+{
+    const series = await cdp.call(() => (window.__e33rel ? window.__e33rel.log : []));
+    const first = series.find((s) => s.ty !== null);
+    const ok =
+        first !== undefined &&
+        Math.abs(first.ty - tyBeforeRelease) <= Math.max(10, Math.abs(tyBeforeRelease) * 0.25);
+    check(
+        'E33-8 松手后**第一帧接着手指的位置**继续（不是从原位置/0 开始）',
+        ok,
+        `松手前 ty=${tyBeforeRelease}；松手后前 10 帧 ty=${JSON.stringify(series.slice(0, 10).map((s) => s.ty))}`,
+    );
+}
+
+/* ── E33-9（2026-10-03 用户口径）：「拖到**特殊位置**会出现下方轨道**来回弹**（看着像闪烁）」──
+   "特殊位置" = anchor 滑过**不同层级**的行（子轨 / 别的父级）时，落点被判无效、让位被清空，
+   手指稍退又恢复 ⇒ 让位表 **非空 → 空 → 非空** 反复 = 视觉闪烁；松手正落在"空"那一态
+   就整行滑回原槽（用户说的"从原位置开始弹"）。
+   判据 = **整张列表往下扫一遍**，逐步记录"非被拖行的那些行的让位向量"：
+   出现「上一格非空、本格全空、下一格又非空」的塌陷 ⇒ 判红（修前正是这个形状）。 */
+{
+    const gD = await geometry();
+    const head = gD.rows[0];
+    await cdp.call((id) => {
+        window.__e33DragId = id;
+        return true;
+    }, head.id);
+    const orderBefore = gD.ids;
+    await touch('touchStart', [{ x: head.cx, y: head.cy }]);
+    await sleep(560);
+    const seq = [];
+    const steps = 14;
+    for (let i = 1; i <= steps; i += 1) {
+        await touch('touchMove', [
+            { x: head.cx, y: Math.round(head.cy + (head.h * 0.5 * i)) },
+        ]);
+        await sleep(90);
+        const rs = (await geometry()).rows;
+        seq.push(
+            rs
+                .filter((r) => r.id !== head.id)
+                .map((r) => r.ty)
+                .join(','),
+        );
+    }
+    const nonEmpty = seq.map((s) => s !== '' && s !== '0' && !/^(0,)*0$/.test(s));
+    let collapses = 0;
+    for (let i = 1; i < nonEmpty.length - 1; i += 1) {
+        if (!nonEmpty[i] && nonEmpty[i - 1] && nonEmpty[i + 1]) collapses += 1;
+    }
+    await touch('touchEnd', []);
+    await sleep(1400);
+    const orderAfter = (await geometry()).ids;
+    const moved = JSON.stringify(orderBefore) !== JSON.stringify(orderAfter);
+    check(
+        'E33-9 扫过整张列表：让位表**不塌陷**（修前"非空→空→非空"= 来回弹）且松手真的重排',
+        collapses === 0 && moved,
+        `塌陷次数=${collapses}；让位序列=${JSON.stringify(seq)}\n     顺序 ${JSON.stringify(orderBefore)} → ${JSON.stringify(orderAfter)}`,
+    );
+}
 
 console.log(`\n── E33 轨道拖动跟手：通过 ${pass} / 失败 ${fail} ──`);
 cdp.close();

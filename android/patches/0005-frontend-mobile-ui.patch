@@ -18,10 +18,10 @@ index b2617279..86a7dc26 100644
      </head>
      <body>
 diff --git a/frontend/src/App.tsx b/frontend/src/App.tsx
-index 3802022a..aa40f6ff 100644
+index 3802022a..d5140263 100644
 --- a/frontend/src/App.tsx
 +++ b/frontend/src/App.tsx
-@@ -1,4006 +1,4971 @@
+@@ -1,4006 +1,5022 @@
 -import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 -import { Flex, Box, Text, Dialog, Button } from "@radix-ui/themes";
 -import { MenuBar } from "./components/layout/MenuBar";
@@ -4663,6 +4663,7 @@ index 3802022a..aa40f6ff 100644
 +    useEffect(() => {
 +        mobileLowerWeightsRef.current = mobileLowerWeights;
 +    }, [mobileLowerWeights]);
++
 +    const [isDragging, setIsDragging] = useState(false);
 +    const [quickSearchOpen, setQuickSearchOpen] = useState(false);
 +    /** C5/C6：手机端分屏容器（上下两块都在它里面）。 */
@@ -4693,6 +4694,50 @@ index 3802022a..aa40f6ff 100644
 +       注意这两个滞后值只喂给 `flexGrow` 计算，**不**参与面板显隐（那是 ExitPresence 的事）。 */
 +    const mobileTimelineForLayout = useExitLayoutLag(mobilePanels.timeline);
 +    const mobileHasNonTrackForLayout = useExitLayoutLag(mobileHasNonTrackPanel);
++    /* E38：下面三块的**滞后在场**（给"权重归一化"用，见 `lowerWeightScale` 的注释）。 */
++    const mobileParamsForLayout = useExitLayoutLag(mobilePanels.params);
++    const mobileFilesForLayout = useExitLayoutLag(mobilePanels.files);
++    const mobileNotesForLayout = useExitLayoutLag(mobilePanels.notes);
++    const lowerPaneVisibleForLayout = useMemo(
++        () => ({
++            params: mobileParamsForLayout,
++            files: mobileFilesForLayout,
++            notes: mobileNotesForLayout,
++        }),
++        [mobileParamsForLayout, mobileFilesForLayout, mobileNotesForLayout],
++    );
++
++    /**
++     * 🔴 E38（用户 2026-10-03 #1：「开轨道+参数+文件，关掉文件后**参数没铺满**」）
++     * —— 根因是 **`flex-grow` 的规范语义**，不是布局写错了：
++     *
++     *   CSS Flexbox §9.7「Resolving Flexible Lengths」：**当 Σflex-grow < 1 时**，
++     *   剩余空间要先**乘以 Σflex-grow** 再用 ⇒ 面板只填"Σgrow 那个比例"，剩下留白。
++     *   单个 item 的 grow = 0.7 ⇒ 只占 70%（实测真机：可用 329px，参数面板 230px
++     *   = 329 × 0.700051，下方留白 99px，与用户描述逐像素吻合）。
++     *
++     *   而 E25 的权重是**相对值**、还会持久化（localStorage），且拖动内部分界只保
++     *   "这一对之和"守恒 ⇒ **全局和没有任何保证**：关掉/重开一块之后，可见集合的和
++     *   可能 < 1（用户这个 case 就是 params 单独可见、权重 0.700051）。
++     *
++     * 修法：**按"当前可见的下方面板"归一化** —— 和 < 1 时整体放大到 1（各块**比例不变**，
++     * 观感与 E25 完全一致），和 ≥ 1 时原样（不动既有手感，E25 的判据不受影响）。
++     * ⚠️ 渲染与拖动必须用**同一个**缩放：只改渲染会让拖动期间闪一下留白。
++     */
++    const lowerWeightScale = useMemo(() => {
++        /* ⚠️ 用**滞后过的**在场标志（`*ForLayout`），与 E22 第二刀的出场动画同规：
++           正在淡出的那一块在动画期间**仍占着 flex 份额**，若这里立刻把它从"可见集合"里去掉，
++           归一化因子会在淡出那一帧就跳（实测式：params 70% → 77% → 100%，两次闪动）。
++           用滞后值 ⇒ 淡出期间份额不变、动画结束那块卸载时才一次性补上。 */
++        const visible = LOWER_PANE_KEYS.filter((k) => lowerPaneVisibleForLayout[k]);
++        if (visible.length === 0) return 1;
++        const sum = visible.reduce((acc, k) => acc + mobileLowerWeights[k], 0);
++        return sum > 0 && sum < 1 ? 1 / sum : 1;
++    }, [lowerPaneVisibleForLayout, mobileLowerWeights]);
++    const mobileLowerScaleRef = useRef(lowerWeightScale);
++    useEffect(() => {
++        mobileLowerScaleRef.current = lowerWeightScale;
++    }, [lowerWeightScale]);
 +
 +    /**
 +     * D3（2026-09-27）：打开「同步参数编辑器水平位置与缩放」且**两块面板同屏**时，
@@ -5391,6 +5436,10 @@ index 3802022a..aa40f6ff 100644
 +                const upperKey = upperOf(resolved.lowerKey);
 +                if (upperKey !== null) {
 +                    const w = mobileLowerWeightsRef.current;
++                    /* E38：拖动也要按**归一化后**的权重来（否则拖动期间 `paintLowerPair`
++                       写的是未缩放值 ⇒ 和 < 1 时拖动过程中会闪一下留白，抬手才对上）。
++                       比例 `ratio` 用原始值算即可 —— 缩放因子会约掉。 */
++                    const k = mobileLowerScaleRef.current;
 +                    const sum = w[upperKey] + w[resolved.lowerKey];
 +                    rec = {
 +                        ...rec,
@@ -5399,8 +5448,8 @@ index 3802022a..aa40f6ff 100644
 +                        lowerKey: resolved.lowerKey,
 +                        /* 初值 = 分界线的当前位置（比例口径），拖动时以它为基准加位移。 */
 +                        ratio: sum > 0 ? w[upperKey] / sum : 0.5,
-+                        baseUpper: w[upperKey],
-+                        baseLower: w[resolved.lowerKey],
++                        baseUpper: w[upperKey] * k,
++                        baseLower: w[resolved.lowerKey] * k,
 +                    };
 +                }
 +            }
@@ -8735,8 +8784,10 @@ index 3802022a..aa40f6ff 100644
 +                                        data-hs-pane="params"
 +                                        className="flex-1 min-h-0 relative"
 +                                        /* E25：每块自己的权重（默认 1 = 与旧的"均分"完全一致）。
-+                                           `flex-basis` 仍由 `flex-1` 这个类给（别写内联 —— 见硬约定 13）。 */
-+                                        style={{ flexGrow: mobileLowerWeights.params }}
++                                           `flex-basis` 仍由 `flex-1` 这个类给（别写内联 —— 见硬约定 13）。
++                                           E38：再乘 `lowerWeightScale` —— 可见集合的和 < 1 时
++                                           flexbox 只会填那个比例（见上面的长注释）。 */
++                                        style={{ flexGrow: mobileLowerWeights.params * lowerWeightScale }}
 +                                    >
 +                                        {/* #52：用户口径「全屏参数界面下点 ✕ ⇒ 回到全屏轨道界面」。
 +                                         *
@@ -8770,7 +8821,7 @@ index 3802022a..aa40f6ff 100644
 +                                        key="hs-pane-files"
 +                                        data-hs-pane="files"
 +                                        className="flex-1 min-h-0 relative"
-+                                        style={{ flexGrow: mobileLowerWeights.files }}
++                                        style={{ flexGrow: mobileLowerWeights.files * lowerWeightScale }}
 +                                    >
 +                                        <FileBrowserPanel />
 +                                    </div>
@@ -8780,7 +8831,7 @@ index 3802022a..aa40f6ff 100644
 +                                        key="hs-pane-notes"
 +                                        data-hs-pane="notes"
 +                                        className="flex-1 min-h-0 relative"
-+                                        style={{ flexGrow: mobileLowerWeights.notes }}
++                                        style={{ flexGrow: mobileLowerWeights.notes * lowerWeightScale }}
 +                                    >
 +                                        <NotebookPanel />
 +                                    </div>
@@ -61663,10 +61714,10 @@ index 147331ce..5a625f64 100644
 + */
 +export const TimeRuler = React.memo(TimeRulerInner);
 diff --git a/frontend/src/components/layout/timeline/TrackList.tsx b/frontend/src/components/layout/timeline/TrackList.tsx
-index c0db2221..6fce1847 100644
+index c0db2221..d289019f 100644
 --- a/frontend/src/components/layout/timeline/TrackList.tsx
 +++ b/frontend/src/components/layout/timeline/TrackList.tsx
-@@ -1,2297 +1,3176 @@
+@@ -1,2297 +1,3316 @@
 -import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 -import { registerDragAbort } from "./gestureFocusGuard";
 -import { formatEditNumber } from "./math";
@@ -64519,6 +64570,20 @@ index c0db2221..6fce1847 100644
 +        shifts?: Record<string, number> | null;
 +        animate?: boolean;
 +    } | null>(null);
++    /**
++     * E38：`dragUi` 的镜像 ref —— FLIP 的 layout effect 要用它把"拖动中那一层位移"
++     * 从量到的 rect 里**减掉**（不然后者量到的是视觉位置、`dy` 恒 0 ⇒ 动画不跑）。
++     */
++    const dragUiRef = useRef(dragUi);
++    useEffect(() => {
++        dragUiRef.current = dragUi;
++    });
++    /**
++     * E38：**"提交排序后，视觉状态要等 FLIP 那一帧再交还"** 的旗标。
++     * 松手时置位；FLIP 的 layout effect 负责在**同一帧**里 clear（那时动画已经接管
++     * `transform`）⇒ 中间不会出现"既没有位移、也没有动画"的裸奔帧。
++     */
++    const pendingReorderClearRef = useRef(false);
 +    const volumeCommitTimersRef = useRef<Record<string, number>>({});
 +    const [volumeHoveredTrackId, setVolumeHoveredTrackId] = useState<string | null>(null);
 +    const [volumeTooltipPos, setVolumeTooltipPos] = useState<{ x: number; y: number } | null>(null);
@@ -64739,6 +64804,8 @@ index c0db2221..6fce1847 100644
 +           `transform` ⇒ 逐事件 `setState` 会明显掉帧（同类问题在本文件 FLIP/滚动镜像里
 +           都踩过，见上面 `onScroll` 的量化注释）。 */
 +        let reorderRaf: number | null = null;
++        /** 「没跨过槽位就松手 ⇒ 滑回原位」那一小段过渡的收尾定时器（E38）。 */
++        let reorderReturnTimer: number | null = null;
 +        let pendingReorderUi: {
 +            dragDy: number;
 +            overTrackId: string | null;
@@ -64774,8 +64841,68 @@ index c0db2221..6fce1847 100644
 +                cancelAnimationFrame(reorderRaf);
 +                reorderRaf = null;
 +            }
++            if (reorderReturnTimer !== null) {
++                window.clearTimeout(reorderReturnTimer);
++                reorderReturnTimer = null;
++            }
 +            pendingReorderUi = null;
 +            setDragUi(null);
++        };
++
++        /**
++         * 手势**记账**收尾（不含视觉）：清候选/目标、取消合帧、**立刻释放长按仲裁锁**。
++         *
++         * ⚠️ 仲裁锁必须**立刻**放，不能等过渡跑完 —— 否则那 240ms 里别的长按（增益旋钮）
++         * 抢不到锁（E31 那类互斥误伤）。
++         * 三种收尾共用它：① 直接清（`reset`）② "滑回原位"（`settleReorderReturn`）
++         * ③ **提交排序**（视觉留着，交还给 FLIP 那一帧，见 `pendingReorderClearRef`）。
++         */
++        const releaseGesture = () => {
++            if (timer !== null) {
++                window.clearTimeout(timer);
++                timer = null;
++            }
++            if (reorderRaf !== null) {
++                cancelAnimationFrame(reorderRaf);
++                reorderRaf = null;
++            }
++            pendingReorderUi = null;
++            armed = false;
++            dragId = null;
++            targetIndex = null;
++            curShifts = {};
++            touchHold.current = null;
++            endLongPress(holdToken);
++        };
++
++        /**
++         * E38（用户 2026-10-03 #10 的另一半）：**没跨过槽位就松手**时，被拖行要**滑回原位**，
++         * 不能瞬跳。
++         *
++         * 为什么需要它：松手帧我们已经**不给过渡**了（那是"回弹"的来源，落位交给 FLIP）。
++         * 但 FLIP 只在**顺序真的变了**（`[tracks]` 更新）时才跑；没跨过槽位 ⇒ 没有重排 ⇒
++         * 没有任何动画接住 ⇒ 内联 `translateY` 一清就是**瞬跳回原位**。
++         * ⇒ 这样收尾：先下发一个"**所有行位移归零**"的状态（此时过渡是开的 —— 因为
++         * `dragUi !== null && !dragging`），让各行**滑**回去；滑完（180ms + 余量）再清成 null。
++         * `draggingTrackId: ""` 是刻意的 —— 没有任何行的 id 是空串 ⇒ 所有行都走"让位"分支
++         * （`dragging` 恒 false ⇒ 过渡生效）。
++         */
++        const settleReorderReturn = () => {
++            releaseGesture();
++            setDragUi({
++                draggingTrackId: "",
++                overTrackId: null,
++                mode: "reorder",
++                indicatorY: null,
++                dragDy: 0,
++                shifts: {},
++                animate: true,
++            });
++            if (reorderReturnTimer !== null) window.clearTimeout(reorderReturnTimer);
++            reorderReturnTimer = window.setTimeout(() => {
++                reorderReturnTimer = null;
++                setDragUi(null);
++            }, REORDER_SHIFT_MS + 60);
 +        };
 +
 +        /**
@@ -64800,18 +64927,21 @@ index c0db2221..6fce1847 100644
 +            }
 +            flipPrevTopRef.current = next;
 +            flipOrderRef.current = order.join("|");
++            /* 🔴 2026-10-03：**同时**存一份"待消费的种子"。
++               为什么不能只写 `flipPrevTopRef`：那个 ref 会被 FLIP 的 layout effect
++               **每次 `tracks` 变化都整体覆写**（`flipPrevTopRef.current = cur`）。
++               `onMoveTrack` 是异步的（走后端 IPC），松手到真正重排之间只要插进来**任何一次**
++               `tracks` 变化（其它回包/乐观更新），种子就被"布局位置"顶掉 ⇒ 重排那一帧
++               `dy = 布局_旧 − 布局_新 = 0` ⇒ 被拖行**不跑动画、直接瞬移到新槽**
++               （用户口径：「松手归位时**不是从手的位置**而是从原位置开始弹」）。
++               ⇒ 种子单独放一份，由重排那一帧**优先**使用；过期（>500ms）才丢。 */
++            pendingFlipSeedRef.current = { prev: next, at: performance.now() };
 +        };
 +
 +        const reset = () => {
-+            if (timer !== null) window.clearTimeout(timer);
-+            timer = null;
-+            armed = false;
-+            dragId = null;
-+            targetIndex = null;
-+            touchHold.current = null;
++            releaseGesture();
 +            /* E33：拖动视觉状态也要一起收（否则松手后行停在让位位置）。 */
 +            cancelReorderUi();
-+            endLongPress(holdToken);
 +        };
 +        const onStart = (e: TouchEvent) => {
 +            reset();
@@ -64867,64 +64997,64 @@ index c0db2221..6fce1847 100644
 +            if (!drag) return;
 +            /* E33：跟手位移（未吸附）—— 被拖行**始终贴在手指上**。 */
 +            const dragDy = tt.clientY - startY;
-+            const rows = [...el.querySelectorAll("[data-hs-track-row]")] as HTMLElement[];
 +            const rowH = rowHeightRef.current;
-+            /* 🔴 判定落点必须用「**无位移布局**」坐标：
-+               此刻各行可能正带着我们写的 `translateY`（被拖行跟手、其余行让位）⇒
-+               直接拿 `getBoundingClientRect()` 比会**自己咬自己**（让位改了 rect ⇒ 又改了
-+               让位的判定 ⇒ 目标来回抖）。减去该行当前的位移就还原成布局位置 ——
-+               而布局位置与"让位算到哪"无关（让位只是叠加在它上面），故**不成环**。
-+               被拖行的"虚拟位置"取其**布局位置 + 手指位移**（= 它视觉上所在之处）。 */
-+            const shiftOf = (id: string | null): number => {
-+                if (id === null) return 0;
-+                if (id === dragId) return dragDy;
-+                return curShifts[id] ?? 0;
-+            };
-+            const staticTopOf = (r: HTMLElement): number =>
-+                r.getBoundingClientRect().top - shiftOf(r.getAttribute("data-hs-track-row"));
-+            const draggedRow = rows.find((r) => r.getAttribute("data-hs-track-row") === dragId);
-+            if (draggedRow === undefined) return;
-+            /* 🔴 用被拖行的**中心**去判落点，不要用"顶端 + 位移"：
-+               后者在"刚好拖满一整格"时 anchorY 正好压在下一行的 `top` 上，而
-+               `getBoundingClientRect()` 带小数 ⇒ `anchorY >= t` 可能被浮点误差判成 false
-+               ⇒ 落回**自己** ⇒ 那一格完全排不动（实测：向下拖一格时被拖行 +80 跟手、
-+               其余行 0 让位，抬手后顺序不变 —— 而向上拖同样的距离却正常）。
-+               取中心 ⇒ 余量有半个行高，且"过半即换位"更符合直觉。 */
-+            const anchorY = staticTopOf(draggedRow) + dragDy + rowH / 2;
-+            const overRow = rows.find((r) => {
-+                const t = staticTopOf(r);
-+                return anchorY >= t && anchorY < t + rowH;
-+            });
-+            const overId = overRow?.getAttribute("data-hs-track-row") ?? null;
-+            if (!overId || overId === dragId) {
++            /* 🔴 2026-10-03 用户口径：「拖到**特殊位置**会出现下方轨道**来回弹**（看着像闪烁）」+
++               「松手 轨道归位时不是从手的位置而是从**原位置**开始弹」。
++
++               落点判定的演进（三次都被真机打回来，记在这里免得再走一遍）：
++               ① 最初 = 「anchor 落在哪一行的**几何带**内」。问题：anchor 由
++                  「被拖行的布局位置 + 手指位移」算出，而"布局位置"要靠**减去我们自己写的让位位移**
++                  还原（`rect.top - curShifts[id]`）⇒ 只要某行的位移没被正确还原，
++                  判定就错，而判定又决定位移 ⇒ **自我振荡**；
++                  滑过**别层级**的行时更糟：找不到候选 ⇒ 落点清空 ⇒ 视觉弹回原位，
++                  手指稍退又恢复 ⇒ **来回弹/闪烁**；松手正落在"空"那一态 ⇒ 未提交 ⇒ 整行滑回原槽。
++               ② 中间版 = 「只在同级兄弟里按跨过中心」：去掉了跨层级的抖，但仍是几何判定，
++                  且"恰好拖满一整格"时是**边界相等**，一个像素的舍入就能判回自己
++                  （实测 E33-6/E33-7 红：向下拖一格，`让位 0px`、顺序不变）。
++               ③ **现在 = 纯索引**：只在同级兄弟里，`steps = round(位移 / 行高)`，
++                  目标下标 = 原下标 + steps（夹在 [0, len-1]）。
++                  —— 单调、无反馈环（不再需要 `curShifts` 反算几何）、
++                  跨层级天然不可能选中（候选集只有兄弟）、越界自然钳到两端。
++                  阈值仍是"过半格才换位"（0.5 行高），与拖拽排序的直觉一致。 */
++            const siblingList = tracksRef.current.filter(
++                (tr) => (tr.parentId ?? null) === (drag.parentId ?? null),
++            );
++            const fromIdx = siblingList.findIndex((tr) => tr.id === dragId);
++            if (fromIdx < 0) return;
++            /* round-half-away-from-zero：正负方向对称，"刚好一整格"稳定算 1 格。 */
++            const steps =
++                dragDy > 0
++                    ? Math.floor(dragDy / rowH + 0.5)
++                    : Math.ceil(dragDy / rowH - 0.5);
++            const toIdx = Math.max(0, Math.min(siblingList.length - 1, fromIdx + steps));
++            if (toIdx === fromIdx) {
 +                targetIndex = null;
 +                curShifts = {};
 +                scheduleReorderUi({ dragDy, overTrackId: null, shifts: null });
 +                return;
 +            }
-+            const over = tracksRef.current.find((tr) => tr.id === overId);
-+            if (!over || (over.parentId ?? null) !== (drag.parentId ?? null)) {
-+                targetIndex = null; // 跨层级不在这里做
-+                curShifts = {};
-+                scheduleReorderUi({ dragDy, overTrackId: null, shifts: null });
-+                return;
-+            }
-+            const sibs = tracksRef.current.filter((tr) => (tr.parentId ?? null) === (drag.parentId ?? null));
-+            const fromIndex = sibs.findIndex((tr) => tr.id === dragId);
-+            const toIndex = sibs.findIndex((tr) => tr.id === overId);
-+            targetIndex = toIndex;
++            targetIndex = toIdx;
 +            curShifts = computeReorderShifts(
-+                sibs.map((s) => s.id),
-+                fromIndex,
-+                toIndex,
++                siblingList.map((s) => s.id),
++                fromIdx,
++                toIdx,
 +                rowH,
 +            );
-+            scheduleReorderUi({ dragDy, overTrackId: overId, shifts: curShifts });
++            scheduleReorderUi({
++                dragDy,
++                overTrackId: siblingList[toIdx].id,
++                shifts: curShifts,
++            });
 +        };
 +        const onEnd = () => {
 +            const drag = dragId !== null ? tracksRef.current.find((tr) => tr.id === dragId) : null;
 +            const hold = touchHold.current;
++            /** 这次松手**真的要提交排序**吗（决定收尾走 FLIP 还是"滑回原位"）。 */
++            let committed = false;
++            /** 拖动中是否真的武装过（决定收尾要不要"滑回原位"那一段过渡）。 */
++            const hadVisual = armed && dragId !== null;
 +            if (armed && drag && targetIndex !== null && targetIndex >= 0) {
++                committed = true;
 +                /* E33：把"拖动中的视觉位置"交给 FLIP 当起点（否则松手会跳一下）。 */
 +                seedFlipFromCurrentVisual();
 +                onMoveTrackRef.current({
@@ -64932,6 +65062,15 @@ index c0db2221..6fce1847 100644
 +                    targetIndex,
 +                    parentTrackId: drag.parentId ?? null,
 +                });
++                /* 🔴 E38：**视觉状态先留着**，等 FLIP 那一帧再交还。
++                   原因（真机 rAF 采样，逐帧可看）：`onMoveTrack` 是**异步**的（要走后端 IPC），
++                   重排与 FLIP 要几十毫秒后才到。若在松手这一帧就把内联 `translateY` 清掉，
++                   中间这段（实测 ~50ms / 4 帧）行会**裸奔回原来那一槽**
++                   ⇒ 观感就是"松手先跳回原位、再弹下来落位"（用户报的 #10）。
++                   ⇒ 这里只做**记账**收尾；视觉由 FLIP 的 layout effect 接手
++                   （`pendingReorderClearRef`，见下方 FLIP 那段）。 */
++                pendingReorderClearRef.current = true;
++                releaseGesture();
 +            } else if (
 +                /* 「长按不动 → **松手**开轨道菜单」：只有**没移动过**才补发（移动过 = 用户在做
 +                   长按并划动 = 排序，菜单出现会同时生效两条功能，正是 A2 要消掉的现象）。
@@ -64949,7 +65088,17 @@ index c0db2221..6fce1847 100644
 +                const at = hold.menu ?? { x: hold.x, y: hold.y };
 +                setTrackCtxMenu({ x: at.x, y: at.y, trackId: hold.trackId });
 +            }
-+            reset();
++            /* E38：收尾分三种 ——
++               · 已提交排序 ⇒ 视觉**留给 FLIP 那一帧**交还（这里什么都不做，见上面）；
++               · 没提交但武装过（划过又退回来 / 没跨过槽位 / 划到列表外）⇒ 滑回原位；
++               · 其他（点一下 / 长按不动后开菜单）⇒ 直接清。 */
++            if (committed) {
++                /* 交给 FLIP 的 layout effect。 */
++            } else if (hadVisual) {
++                settleReorderReturn();
++            } else {
++                reset();
++            }
 +        };
 +        el.addEventListener("touchstart", onStart, { passive: true });
 +        el.addEventListener("touchmove", onMove, { passive: false });
@@ -65910,25 +66059,58 @@ index c0db2221..6fce1847 100644
 +     */
 +    const flipPrevTopRef = useRef<Map<string, number>>(new Map());
 +    const flipOrderRef = useRef<string>("");
++    /**
++     * 松手那一刻"跟手视觉位置"的**待消费种子**（2026-10-03）。
++     *
++     * 为什么要单独存：`flipPrevTopRef` 每次 `tracks` 变化都被覆写；而 `onMoveTrack` 是
++     * 异步的（后端 IPC），中间只要插进一次 `tracks` 更新，种子就被顶成"布局位置"
++     * ⇒ 重排那一帧算出的 `dy = 0` ⇒ 被拖行不跑动画、直接瞬移（用户报的
++     * 「松手归位时不是从手的位置而是从原位置开始弹」）。种子的存活窗口见 `SEED_MS`。
++     */
++    const pendingFlipSeedRef = useRef<{ prev: Map<string, number>; at: number } | null>(null);
 +    useLayoutEffect(() => {
 +        const host = document.querySelector<HTMLElement>("[data-track-list-panel]");
 +        if (!host) return;
 +        const hostTop = host.getBoundingClientRect().top;
 +        const nodes = Array.from(host.querySelectorAll<HTMLElement>("[data-hs-track-row]"));
++        /* 🔴 E38：量"当前布局位置"时必须**减掉拖动那一层位移**。
++           拖动提交后我们有**意**把 `dragUi`（被拖行跟手 / 其余行让位）留到这一帧才交还
++           （见 `pendingReorderClearRef`）⇒ 此刻行上的 rect 是**视觉位置**。
++           不减掉的话 `dy = 视觉_旧 − 视觉_新 = 0` ⇒ 动画根本不跑，而等状态清掉时又瞬跳一次。 */
++        const ui = dragUiRef.current;
++        const dragShiftOf = (id: string): number => {
++            if (ui === null) return 0;
++            if (ui.draggingTrackId === id) return ui.dragDy ?? 0;
++            return ui.shifts?.[id] ?? 0;
++        };
 +        const cur = new Map<string, number>();
 +        const order: string[] = [];
 +        for (const el of nodes) {
 +            const id = el.getAttribute("data-hs-track-row");
 +            if (!id) continue;
-+            cur.set(id, el.getBoundingClientRect().top - hostTop);
++            cur.set(id, el.getBoundingClientRect().top - hostTop - dragShiftOf(id));
 +            order.push(id);
 +        }
 +        const orderKey = order.join("|");
-+        const prev = flipPrevTopRef.current;
++        /* 种子优先（见 `pendingFlipSeedRef` 的注释）：只要它没过期，就用"松手时的视觉位置"
++           当 FLIP 起点，不被中间那些 `tracks` 更新顶掉。 */
++        const seed = pendingFlipSeedRef.current;
++        const seedFresh = seed !== null && performance.now() - seed.at < 500;
++        const prev = seedFresh ? seed.prev : flipPrevTopRef.current;
 +        const sameSet = prev.size === cur.size && order.every((id) => prev.has(id));
 +        const reordered = flipOrderRef.current !== "" && flipOrderRef.current !== orderKey;
++        if (reordered) pendingFlipSeedRef.current = null; // 用上了就消费掉
++        else if (seed !== null && !seedFresh) pendingFlipSeedRef.current = null; // 过期丢掉
 +        flipPrevTopRef.current = cur;
 +        flipOrderRef.current = orderKey;
++        /* E38：拖动视觉状态在这一帧**交还**（无论后面是否早退 —— 早退也必须还，
++           否则行的 `translateY` 就永久留在那儿了）。放在这里是因为本 effect 与
++           `el.animate()` **同一帧、且在同一个提交里**：动画已经在管 `transform`，
++           清掉内联值不会产生"既无位移也无动画"的裸奔帧。 */
++        if (pendingReorderClearRef.current) {
++            pendingReorderClearRef.current = false;
++            setDragUi(null);
++        }
 +        if (!sameSet || !reordered) return;
 +        if (document.body.hasAttribute("data-hs-no-anim")) return;
 +        if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches) return;
@@ -66111,9 +66293,18 @@ index c0db2221..6fce1847 100644
 +                                           其余行之上（行本身已是 `relative`）；给一点阴影与底色
 +                                           做出"被拎起来"的手感（浏览器标签页拖动同款）。 */
 +                                        transform: shiftDy !== 0 ? `translateY(${shiftDy}px)` : undefined,
-+                                        transition: dragging
-+                                            ? undefined
-+                                            : `transform ${REORDER_SHIFT_MS}ms ${REORDER_SHIFT_EASING}`,
++                                        /* 🔴 E38（用户 2026-10-03 #10：「松手归位**从原位置**开始弹」）：
++                                           过渡**只在拖动进行中**给（它负责"其余行平滑让位"，也负责
++                                           目标退回去时平滑滑回）。松手那一帧 `dragUi` 变 null、内联
++                                           `translateY` 同时被移除 —— 若那一刻把 `transition` 一起恢复，
++                                           CSS 过渡会与 FLIP 的 WAAPI 动画**同时**作用于 `transform`
++                                           （一个从旧槽滑回、一个从视觉位置吸附）⇒ 就是看到的来回弹。
++                                           现在松手帧不带过渡，落位完全交给 FLIP（它已按"拖动中的
++                                           视觉位置"起算，见 `seedFlipFromCurrentVisual`）。 */
++                                        transition:
++                                            dragUi !== null && !dragging
++                                                ? `transform ${REORDER_SHIFT_MS}ms ${REORDER_SHIFT_EASING}`
++                                                : undefined,
 +                                        zIndex: dragging ? 20 : undefined,
 +                                    }}
 +                                    className={
@@ -81541,10 +81732,10 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..d3efb358
+index 00000000..297cca28
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,283 @@
+@@ -0,0 +1,297 @@
 +/**
 + * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
@@ -81663,6 +81854,17 @@ index 00000000..d3efb358
 +                e.clientX <= geo.left + geo.width + OUTSIDE_EDGE_SLACK_PX;
 +            if (!leftHit && !rightHit) return;
 +            const side: "left" | "right" = leftHit ? "left" : "right";
++            /* 🔴 2026-10-03 用户口径（第二次报）：「触摸到控制点后**常用功能临时菜单**
++               就应该隐藏了」。
++               原先这条广播放在下面"圆点是否可点"判定**之后** ⇒ 只有圆点**画出来**时才隐藏。
++               而圆点在贴容器边缘时是**不画**的（`dotPressable`，规格如此），可用户手指按的
++               正是**块边缘那条命中带**（圆点本来就贴在边缘上）—— 此时浮条照旧挡在那儿
++               ⇒ 用户看到的就是"触摸了控制点但浮条没消失"。
++               ⇒ **广播提前**：只要按进左右控制点的命中带就隐藏浮条；
++                  `setGrab`（点亮圆点的视觉反馈）继续受 `dotPressable` 约束。
++               另外补一个"手势结束"通知，让浮条在**整段手势期间**都不许自己回来
++               （只靠时间窗在长按拖动时会漏，见 `ClipQuickActions` 的 `grabActiveRef`）。 */
++            window.dispatchEvent(new CustomEvent("hs-hide-clip-actions"));
 +            /* 与渲染同一条判据：按不到的圆点不参与反馈（否则又变成"有反馈、没效果"）。 */
 +            const baseX = side === "left" ? geo.left - DOT_R - 3 : geo.left + geo.width + DOT_R + 3;
 +            if (baseX < geo.container.left + DOT_R || baseX > geo.container.left + geo.container.width - DOT_R) {
@@ -81683,8 +81885,6 @@ index 00000000..d3efb358
 +                mode: "none",
 +                dragging: false,
 +            });
-+            /* 「按下控制点后隐藏临时的常用功能菜单」：浮条自己监听这个事件把当前块收起。 */
-+            window.dispatchEvent(new CustomEvent("hs-hide-clip-actions"));
 +        };
 +        const onMove = (e: PointerEvent) => {
 +            setGrab((prev) => {
@@ -81711,7 +81911,12 @@ index 00000000..d3efb358
 +                return { ...prev, x: e.clientX, y: e.clientY, mode, dragging };
 +            });
 +        };
-+        const onUp = () => setGrab(null);
++        const onUp = () => {
++            /* 整段控制点手势结束 ⇒ 通知浮条"可以恢复按常理判断了"
++               （它靠这个把 `grabActive` 放下，见 `ClipQuickActions`）。 */
++            window.dispatchEvent(new CustomEvent("hs-control-point-grab-end"));
++            setGrab(null);
++        };
 +        window.addEventListener("pointerdown", onDown, true);
 +        window.addEventListener("pointermove", onMove, true);
 +        window.addEventListener("pointerup", onUp, true);
@@ -81979,10 +82184,10 @@ index 00000000..c51ea7f9
 +}
 diff --git a/frontend/src/components/mobile/ClipQuickActions.tsx b/frontend/src/components/mobile/ClipQuickActions.tsx
 new file mode 100644
-index 00000000..af1e2392
+index 00000000..6044163a
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipQuickActions.tsx
-@@ -0,0 +1,371 @@
+@@ -0,0 +1,389 @@
 +/**
 + * 音频块「常用操作」浮动条 —— 规格 `docs/15` 音频块·单击：
 + * 「选中并显示常用操作与左右控制点（参考 flm1.png）」。
@@ -82137,8 +82342,10 @@ index 00000000..af1e2392
 +            if (t.closest('[data-hs-timeline-kernel="1"]')) {
 +                /* 回到时间线 = 用户又去操作块了 ⇒ 清掉"已收起"，让选中逻辑重新决定。
 +                   ⚠️ 但"刚抓过控制点"这一下不算 —— 那次 pointerdown 的 target 也只能是内核
-+                   （圆点 pointer-events:none），若在这里放回来就等于控制点永远收不起浮条。 */
-+                if (performance.now() - lastHideAt < HIDE_SETTLE_MS) return;
++                   （圆点 pointer-events:none），若在这里放回来就等于控制点永远收不起浮条。
++                   两道闸：① 整段控制点手势期间（`grabActive`，长按拖动可达数秒）；
++                          ② 同一次按下的时间窗（兜住"手势结束事件没到"的边缘情况）。 */
++                if (grabActive || performance.now() - lastHideAt < HIDE_SETTLE_MS) return;
 +                setHiddenForClipId(null);
 +                return;
 +            }
@@ -82157,17 +82364,33 @@ index 00000000..af1e2392
 +           —— 用户报的「触摸到控制点后常用功能临时菜单就应该隐藏了」就是这么失效的。
 +           记一个时间戳，让"同一次按下"里的那条分支不生效。 */
 +        let lastHideAt = 0;
++        /**
++         * 「控制点手势进行中」（2026-10-03 第二次修正）。
++         *
++         * 用户**第二次**报同一条 ⇒ 时间窗不够：控制点的两段式手势（长按 700ms + 上/下划）
++         * 是**秒级**的，而 `HIDE_SETTLE_MS` 只有 400ms —— 手势中途只要再来一次落在内核上的
++         * `pointerdown`（多指 / 笔 / 系统补发），浮条就会被放回来。
++         * ⇒ 改成**手势作用域**的闸门：按下控制点置位，松手（`hs-control-point-grab-end`）复位，
++         * 这期间**任何**路径都不许把浮条放回来。
++         */
++        let grabActive = false;
 +        const onHide = () => {
++            grabActive = true;
 +            const id = selectedClipIdRef.current;
 +            if (id !== null) {
 +                setHiddenForClipId(id);
 +                lastHideAt = performance.now();
 +            }
 +        };
++        const onGrabEnd = () => {
++            grabActive = false;
++        };
 +        window.addEventListener("hs-hide-clip-actions", onHide);
++        window.addEventListener("hs-control-point-grab-end", onGrabEnd);
 +        return () => {
 +            document.removeEventListener("pointerdown", onDown, true);
 +            window.removeEventListener("hs-hide-clip-actions", onHide);
++            window.removeEventListener("hs-control-point-grab-end", onGrabEnd);
 +        };
 +    }, []);
 +
@@ -82356,10 +82579,10 @@ index 00000000..af1e2392
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..27456828
+index 00000000..00768768
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1986 @@
+@@ -0,0 +1,1994 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -84134,18 +84357,26 @@ index 00000000..27456828
 +        }, 400);
 +    };
 +
-+    const onPencilClick = (e: React.MouseEvent<HTMLButtonElement>) => {
++    const onPencilClick = (_e: React.MouseEvent<HTMLButtonElement>) => {
 +        clearDrawLongPress();
 +        if (drawLongFiredRef.current) {
 +            // 长按已经开过菜单，抬手补发的 click 不再切换工具
 +            drawLongFiredRef.current = false;
 +            return;
 +        }
-+        // 点击落在右下角三角命中区（按钮右下 18×18）→ 开子菜单；否则切工具
-+        const r = e.currentTarget.getBoundingClientRect();
-+        const inCorner = e.clientX >= r.right - 18 && e.clientY >= r.bottom - 18;
-+        /* E24-①：与「选择」同规 —— 角标 或 **已选中** 都表示"我要菜单"，否则才切换工具。 */
-+        if (inCorner || s.toolModeGroup === "draw") {
++        /* 🔴 2026-10-03 用户口径（原话）：「点击**未选择**的工具后直接切换，点击**选择中**的工具
++           展开工具菜单（例如现在的模式是拖动，未点开任何弹出，现在点击绘制，正确的情况是
++           直接切换到绘制，而不是打开绘制/颤音/还原的菜单）」。
++
++           这里原有一句**几何式角标判定**：
++               const inCorner = e.clientX >= r.right - 18 && e.clientY >= r.bottom - 18;
++           本意是"点右下角那个小三角 = 我要菜单"，但工具栏按钮本身只有 ~32px 高
++           ⇒ 「右下 18×18」已经吃掉整个按钮的右下角一大块：用户点在图标上稍偏右下
++           就被判成"点角标" ⇒ 菜单抢在切换之前弹出，正是用户报的现象。
++           ⇒ **删掉几何判定**。角标有它自己的元素（`data-hs-draw-corner`，14×14 且
++             `stopPropagation`），"我要菜单"由那个元素负责，按钮本体不再抢。
++           剩下的规则与「选择」完全同规（E24-①）：**已激活 ⇒ 开菜单，否则 ⇒ 直接切换**。 */
++        if (s.toolModeGroup === "draw") {
 +            openDrawMenu();
 +            return;
 +        }
@@ -84348,10 +84579,10 @@ index 00000000..27456828
 +}
 diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
 new file mode 100644
-index 00000000..e6c9182d
+index 00000000..271be5e9
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileTopBar.tsx
-@@ -0,0 +1,982 @@
+@@ -0,0 +1,1001 @@
 +/**
 + * MobileTopBar — 触摸形态顶部**横向菜单栏**（按 PS 设计稿 ps1.png）。
 + *
@@ -84449,7 +84680,24 @@ index 00000000..e6c9182d
 +    notebookVisible?: boolean;
 +}
 +
-+export const MOBILE_TOP_BAR_HEIGHT = 40;
++/**
++ * 顶栏**视觉**高度（CSS px）。
++ *
++ * 🔴 2026-10-03 用户口径：「菜单栏可以稍微往上挪一些，离系统状态栏有点远了……
++ * 指的是 文件、编辑、轨道、视图… 距离 系统界面的时间、信号强度、摄像头留空等的距离」。
++ *
++ * 实测（真机 221deeb，应用 density = 3.0）：
++ *   · 系统状态栏 `frame=[0,0][1080,120]` ⇒ 40 CSS；
++ *   · 摄像头挖孔**比状态栏更深**：`displayCutout.insets.top = 140 设备 px`，而原生侧
++ *     的 padding 取 `max(状态栏, 导航栏, 刘海, ime)` ⇒ 实际垫 **140 设备 px ≈ 46.7 CSS**
++ *     （多垫 6.7 CSS，见 `setup-gen-android.sh` 的 `applySafeAreaInsets`）。
++ *   · 页面这边原先 `minHeight: 40` + 按钮命中区 44 ⇒ **文字上沿离 WebView 顶约 12 CSS**。
++ *   三段叠起来就是用户看到的"离状态栏太远"。
++ *
++ * ⇒ 顶栏与按钮的**视觉**高度都收到 32（文字上沿 ≈ 5px）；**命中区不缩**：
++ * `hs-menubar-btn` 用 `::after` 上下各外扩 6px，触控高度仍是 44（原审计要求）。
++ */
++export const MOBILE_TOP_BAR_HEIGHT = 32;
 +/** 触摸目标下限（Material 48dp，这里取 44px 与 docs/04 §5 一致）。 */
 +const TOUCH = 44;
 +
@@ -85150,11 +85398,13 @@ index 00000000..e6c9182d
 +                        setOpenMenu((v) => (v === name ? null : name));
 +                    }}
 +                    aria-expanded={openMenu === name}
-+                    className="bg-transparent border-0 cursor-pointer"
++                    className="hs-menubar-btn bg-transparent border-0 cursor-pointer"
 +                    style={{
-+                        // 命中区 44px（原 36px 被排版审计判 tooSmall）；
-+                        // 顶栏自身 40px + 顶部安全区，44 会让栏高长到 44，可接受。
-+                        minHeight: TOUCH,
++                        /* 视觉高度 = 顶栏高（32）；**命中区仍是 44** ——
++                           靠 `hs-menubar-btn::after` 上下外扩 6px 实现（见 index.css）。
++                           原先是 `minHeight: 44`，把整条栏顶高了 12px、文字被推到离
++                           系统状态栏很远的地方（用户 2026-10-03 报的正是这个）。 */
++                        minHeight: MOBILE_TOP_BAR_HEIGHT,
 +                        padding: "0 9px",
 +                        fontSize: 14,
 +                        fontWeight: openMenu === name ? 600 : 400,
@@ -100410,7 +100660,7 @@ index 176638e2..19486b79 100644
 +    menu_view_panel_notes: "記事本",
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..cc4a4df0 100644
+index d42792c8..46fa0ec7 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
 @@ -128,6 +128,22 @@ body,
@@ -100512,7 +100762,7 @@ index d42792c8..cc4a4df0 100644
  }
  
  .rt-DialogContent,
-@@ -469,3 +519,1044 @@ textarea {
+@@ -469,3 +519,1064 @@ textarea {
      max-width: 400px;
      tab-size: 4;
  }
@@ -101277,6 +101527,26 @@ index d42792c8..cc4a4df0 100644
 +body[data-hs-paramsync="on"] [data-hs-params-tempo-map] {
 +    display: none !important;
 +}
++
++/* ── 手机顶栏菜单按钮：**视觉 32px、命中区仍 44px**（2026-10-03，用户口径）──────
++   用户报「菜单栏离系统状态栏有点远」。实测三段叠加：系统状态栏 40 CSS + 原生侧多垫
++   刘海差 6.7 CSS + 页面这边"44px 命中区把文字顶到离顶 12px"（见 MobileTopBar 的
++   `MOBILE_TOP_BAR_HEIGHT` 注释）。前两段不是这里的事 ⇒ 把视觉高度收到 32，
++   **但触控高度不能跟着缩**（原审计就是判 36px 太小），于是用伪元素把命中区补回来：
++   上下各外扩 6px ⇒ 32 + 12 = 44。 */
++.hs-menubar-btn {
++    position: relative;
++}
++.hs-menubar-btn::after {
++    content: "";
++    position: absolute;
++    left: 0;
++    right: 0;
++    /* 上下各 6px ⇒ 命中高度 44（= 原来的 TOUCH 常量） */
++    top: -6px;
++    bottom: -6px;
++}
++
 +/* ── 手机端分屏的两块（C5/C6）───────────────────────────────────────────────
 +   `flex-basis: 0` **必须走类、不能只写内联样式**：
 +   实测（真机 221deeb，2026-09-30）内联的 `flexBasis` 会在 React 的 style diff 里被漏写

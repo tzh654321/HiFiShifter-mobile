@@ -171,6 +171,16 @@ async function main() {
         results.push({ name, ok });
         console.log(`${ok ? '✅' : '🔴'} ${name}\n     ${detail}`);
     };
+    /**
+     * 前置不成立时**如实标"不可判"**，不要 throw —— 探针纪律：宁可标不可判，也不造假红。
+     * 典型场景：块贴容器左缘时左圆点按 `dotPressable` 规则**根本不画**（规格如此），
+     * 于是"按左圆点"这条判据在**当前视口**下无法执行（移动视图后可以）。
+     */
+    const skipped = [];
+    const skip = (name, why) => {
+        skipped.push(name);
+        console.log(`⬜ ${name}\n     不可判：${why}`);
+    };
     const d = (a, b, k) => +((b[k] ?? 0) - (a[k] ?? 0)).toFixed(5);
     const isMove = (a, b) => Math.abs(d(a, b, "startSec")) > 1e-4 && Math.abs(d(a, b, "sourceStartSec")) < 1e-4;
     const isTrim = (a, b) => Math.abs(d(a, b, "sourceStartSec")) > 1e-4;
@@ -180,23 +190,37 @@ async function main() {
     let s = await fitTo(0.5);
     s = await selectClip();
     check(
-        'CP0 前置：选中块后**看得见**可点的控制点圆点（右侧必在；左侧贴边界按不到⇒不画）',
-        s.dotRight !== null,
+        'CP0 前置：选中块后**看得见**可点的控制点圆点（左右任一即可；贴边界那一侧按规格不画）',
+        s.dotRight !== null || s.dotLeft !== null,
         `dotLeft=${JSON.stringify(s.dotLeft)} dotRight=${JSON.stringify(s.dotRight)} clips=${s.clips}`,
     );
-    if (s.dotRight === null) {
-        console.log('\n（圆点没渲染出来 ⇒ 后面三条无法判定，先修渲染）');
+    if (s.dotRight === null && s.dotLeft === null) {
+        console.log('\n（两侧圆点都没渲染 ⇒ 后面几条无法判定，先修渲染）');
         cdp.close();
         process.exit(1);
     }
 
-    /** 通用：按"看得见的圆点中心"起手做一次手势。 */
-    async function gestureOnDot(stage, dx, dy, side = "right") {
+    /** 通用：按"看得见的圆点中心"起手做一次手势。`side='auto'` = 有哪个用哪个（右优先）。 */
+    async function gestureOnDot(stage, dx, dy, side = "auto") {
         const g = await snap();
-        const dot = side === "right" ? g.dotRight : g.dotLeft;
-        if (dot === null) throw new Error(`圆点 ${side} 不在屏幕上`);
+        const useSide = side === "auto" ? (g.dotRight !== null ? "right" : "left") : side;
+        const dot = useSide === "right" ? g.dotRight : g.dotLeft;
+        /* 圆点不在可点范围内（`dotPressable` 不为真 ⇒ 浮层**不画**）⇒ 返回 null，
+           由调用方标"不可判"。原来是 `throw` ⇒ 整条探针中断，后面几条根本没跑。 */
+        if (dot === null) return null;
         const before = g.clip;
+        /* E37：按下前的常用功能浮条在不在（用户口径：「触摸到控制点后常用功能临时菜单
+           就应该隐藏了」）—— 这条只能靠"按下前有 / 按下后没了"两个时刻比。 */
+        const actionsBefore = await cdp.call(() =>
+            Boolean(document.querySelector('[data-hs-clip-actions]')),
+        );
         await touch('touchStart', [{ x: dot.x, y: dot.y }]);
+        await sleep(120);
+        const actionsAfterDown = await cdp.call(() =>
+            Boolean(document.querySelector('[data-hs-clip-actions]')),
+        );
+        /* 圆点自己带 `data-hs-control-mode`（none/fade/rate）—— 它就是"图标变没变"的 DOM 真值。 */
+        let modeDuring = null;
         if (stage) {
             await sleep(o.hold);
             const steps = 4;
@@ -208,6 +232,10 @@ async function main() {
                 await touch('touchMove', [{ x: dot.x + (dx * i) / steps, y: dot.y + dy }]);
                 await sleep(45);
             }
+            modeDuring = await cdp.call((sd) => {
+                const d = document.querySelector(`[data-hs-clip-control-point="${sd}"]`);
+                return d ? d.getAttribute('data-hs-control-mode') : null;
+            }, useSide);
         } else {
             const steps = 5;
             for (let i = 1; i <= steps; i++) {
@@ -218,63 +246,113 @@ async function main() {
         await touch('touchEnd', []);
         await sleep(900);
         const after = await snap();
-        return { before, after: after.clip, dot };
+        return { before, after: after.clip, dot, modeDuring, actionsBefore, actionsAfterDown, side: useSide };
     }
 
     /* ── CP1 按**块外圆点**横拖 ⇒ 必须是"边缘/裁切"，而不是"移动块" ──────── */
     {
-        const { before, after, dot } = await gestureOnDot(false, o.dx, 0, "right");
-        check(
-            'CP1 按块外**右**控制点横拖 ⇒ 边缘语义（长度变），**不是**移动块',
-            Math.abs(d(before, after, "lengthSec")) > 1e-4 && Math.abs(d(before, after, "startSec")) < 1e-4,
-            `圆点=${JSON.stringify(dot)}  Δ=${JSON.stringify({
-                startSec: d(before, after, "startSec"),
-                lengthSec: d(before, after, "lengthSec"),
-                sourceStartSec: d(before, after, "sourceStartSec"),
-            })}  before=${JSON.stringify(before)}  after=${JSON.stringify(after)}`,
-        );
+        const r = await gestureOnDot(false, o.dx, 0, "right");
+        if (r === null) {
+            skip('CP1 按块外**右**控制点横拖 ⇒ 边缘语义（长度变），**不是**移动块', '右圆点不在可点范围内');
+        } else {
+            const { before, after, dot } = r;
+            check(
+                'CP1 按块外**右**控制点横拖 ⇒ 边缘语义（长度变），**不是**移动块',
+                Math.abs(d(before, after, "lengthSec")) > 1e-4 && Math.abs(d(before, after, "startSec")) < 1e-4,
+                `圆点=${JSON.stringify(dot)}  Δ=${JSON.stringify({
+                    startSec: d(before, after, "startSec"),
+                    lengthSec: d(before, after, "lengthSec"),
+                    sourceStartSec: d(before, after, "sourceStartSec"),
+                })}  before=${JSON.stringify(before)}  after=${JSON.stringify(after)}`,
+            );
+        }
     }
 
-    /* ── CP1b 按**左**圆点横拖 ⇒ 改的是「起始位置」（`startSec` 变）──────── */
+    /* ── CP1b 按**左**圆点横拖 ⇒ 改的是「起始位置」（`startSec` 变）────────
+       前置：CP1 把块拉长之后，左圆点很可能已经跑到容器左缘之外（那里按 `dotPressable`
+       **不画**）⇒ 先重新居中视图，否则拿到 `dotLeft=null`（同上一轮"点了个空"的假象）。 */
     {
-        const { before, after, dot } = await gestureOnDot(false, o.dx, 0, "left");
-        check(
-            'CP1b 按块外**左**控制点横拖 ⇒ 改动音频块**起始位置**（startSec 变）',
-            Math.abs(d(before, after, "startSec")) > 1e-4,
-            `圆点=${JSON.stringify(dot)}  Δ=${JSON.stringify({
-                startSec: d(before, after, "startSec"),
-                lengthSec: d(before, after, "lengthSec"),
-            })}`,
-        );
+        await fitTo(0.5);
+        await selectClip();
+        const r = await gestureOnDot(false, o.dx, 0, "left");
+        if (r === null) {
+            skip('CP1b 按块外**左**控制点横拖 ⇒ 改动音频块**起始位置**（startSec 变）', '左圆点不在可点范围内（贴容器左缘 ⇒ 按不中，规格即"按不到就不画"）');
+        } else {
+            const { before, after, dot } = r;
+            check(
+                'CP1b 按块外**左**控制点横拖 ⇒ 改动音频块**起始位置**（startSec 变）',
+                Math.abs(d(before, after, "startSec")) > 1e-4,
+                `圆点=${JSON.stringify(dot)}  Δ=${JSON.stringify({
+                    startSec: d(before, after, "startSec"),
+                    lengthSec: d(before, after, "lengthSec"),
+                })}`,
+            );
+        }
     }
 
     /* ── CP2 圆点长按 + **上划** ⇒ 淡入时长变 ───────────────────────────── */
     {
         await fitTo(0.5);
-        const { before, after, dot } = await gestureOnDot(true, -o.dx, -o.dy, "right");
-        check(
-            'CP2 圆点长按 700ms + 上划 ⇒ 淡入淡出时长变化',
-            Math.abs(d(before, after, "fadeInSec")) > 1e-4 || Math.abs(d(before, after, "fadeOutSec")) > 1e-4,
-            `圆点=${JSON.stringify(dot)}  ΔfadeIn=${d(before, after, "fadeInSec")}  before=${JSON.stringify(before)}  after=${JSON.stringify(after)}`,
-        );
+        await selectClip();
+        const r = await gestureOnDot(true, -o.dx, -o.dy, "auto");
+        if (r === null) {
+            skip('CP2 圆点长按 700ms + 上划 ⇒ 淡入淡出时长变化', '右圆点不在可点范围内');
+        } else {
+            const { before, after, dot } = r;
+            check(
+                'CP2 圆点长按 700ms + 上划 ⇒ 淡入淡出时长变化',
+                Math.abs(d(before, after, "fadeInSec")) > 1e-4 || Math.abs(d(before, after, "fadeOutSec")) > 1e-4,
+                `圆点=${JSON.stringify(dot)}  ΔfadeIn=${d(before, after, "fadeInSec")}  before=${JSON.stringify(before)}  after=${JSON.stringify(after)}`,
+            );
+            /* E37（用户口径：「之前版本做的控制点的**图标变化**没了」）：
+               图标由 `data-hs-control-mode` 驱动（fade⇒淡变楔形 / rate⇒双箭头），
+               所以这一格读的就是"图标到底换没换"。 */
+            check(
+                'CP2b 上划期间圆点**图标态 = fade**（`data-hs-control-mode`）',
+                r.modeDuring === 'fade',
+                `side=${r.side} modeDuring=${JSON.stringify(r.modeDuring)}（期望 fade）`,
+            );
+            /* E37（用户口径：「触摸到控制点后**常用功能临时菜单**就应该隐藏了」）。 */
+            if (r.actionsBefore === false) {
+                skip('CP2c 按下控制点后常用功能浮条被收起', '按下前浮条就没显示（本状态不可判）');
+            } else {
+                check(
+                    'CP2c 按下控制点后**常用功能浮条被收起**',
+                    r.actionsAfterDown === false,
+                    `按下前浮条=${r.actionsBefore} → 按下后=${r.actionsAfterDown}`,
+                );
+            }
+        }
     }
 
     /* ── CP3 圆点长按 + **下划** ⇒ 变速（拉伸）─────────────────────────── */
     {
         await fitTo(0.5);
-        const { before, after, dot } = await gestureOnDot(true, -o.dx, o.dy, "right");
-        const rateChanged = Math.abs((after.rate ?? 1) - (before.rate ?? 1)) > 1e-3;
-        const lenChanged = Math.abs(d(before, after, "lengthSec")) > 1e-3;
-        check(
-            'CP3 圆点长按 700ms + 下划 ⇒ 变速拉伸（速率或长度变）',
-            rateChanged || lenChanged,
-            `圆点=${JSON.stringify(dot)}  rate ${before.rate}→${after.rate}  Δlen=${d(before, after, "lengthSec")}  before=${JSON.stringify(before)}  after=${JSON.stringify(after)}`,
-        );
+        await selectClip();
+        const r = await gestureOnDot(true, -o.dx, o.dy, "auto");
+        if (r === null) {
+            skip('CP3 圆点长按 700ms + 下划 ⇒ 变速拉伸（速率或长度变）', '右圆点不在可点范围内');
+        } else {
+            const { before, after, dot } = r;
+            const rateChanged = Math.abs((after.rate ?? 1) - (before.rate ?? 1)) > 1e-3;
+            const lenChanged = Math.abs(d(before, after, "lengthSec")) > 1e-3;
+            check(
+                'CP3 圆点长按 700ms + 下划 ⇒ 变速拉伸（速率或长度变）',
+                rateChanged || lenChanged,
+                `圆点=${JSON.stringify(dot)}  rate ${before.rate}→${after.rate}  Δlen=${d(before, after, "lengthSec")}  before=${JSON.stringify(before)}  after=${JSON.stringify(after)}`,
+            );
+            check(
+                'CP3b 下划期间圆点**图标态 = rate**（`data-hs-control-mode`）',
+                r.modeDuring === 'rate',
+                `side=${r.side} modeDuring=${JSON.stringify(r.modeDuring)}（期望 rate）`,
+            );
+        }
     }
 
     const pass = results.filter((r) => r.ok).length;
-    console.log(`\n=== 控制点探针：通过 ${pass} / ${results.length} ===`);
+    console.log(`\n=== 控制点探针：通过 ${pass} / ${results.length}（另有 ${skipped.length} 条不可判）===`);
     for (const r of results) console.log(`${r.ok ? '✅' : '🔴'} ${r.name}`);
+    for (const n of skipped) console.log(`⬜ ${n}`);
     cdp.close();
     process.exit(pass === results.length ? 0 : 1);
 }
