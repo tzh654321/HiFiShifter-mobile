@@ -68869,10 +68869,10 @@ index 226da0e7..ec0be5bc 100644
 +};
 \ No newline at end of file
 diff --git a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-index a2ae3b60..c2da4b2d 100644
+index a2ae3b60..9cf1e45b 100644
 --- a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
 +++ b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-@@ -1,5487 +1,6193 @@
+@@ -1,5487 +1,6229 @@
 -/**
 - * 时间轴渲染内核 · 命令式宿主
 - *
@@ -78756,7 +78756,32 @@ index a2ae3b60..c2da4b2d 100644
 +                    }
 +                } else {
 +                    const dyEdge = event.clientY - gesture.startClientY;
-+                    if (Math.abs(dyEdge) < EDGE_KIND_LOCK_PX) return; // 等纵向定型
++                    if (Math.abs(dyEdge) < EDGE_KIND_LOCK_PX) {
++                        /* 🔴 2026-10-03（用户口径：「拖控制点调倍速/淡入出失效了」）：
++                           长按成立之后、纵向还没定型时，旧实现是**无条件 `return`** —— 于是
++                           "按住 → 横向拖"的每一个 move 都被吞掉：内核永远停在
++                           `pending-select`，既不裁切也不移动，用户看到的就是"死住"。
++
++                           真机实测（窄块 29px、按住 600ms 后横拖 50px）：内核 cursor 全程
++                           `(none)`、块长度 0 变化；**同一动作不按满 500ms（立即拖）则正常
++                           裁切** —— 现象与"按住多久"直接相关，这就是回归点。
++                           （探针 `_probe-control-point.mjs` 的 CP1 时红时绿同源：
++                           touchStart 与第一个 move 之间夹了一次 CDP 往返，偶尔跨过 500ms。）
++
++                           ⇒ 补一条：纵向不足但**横向已过阈值**就按"用户在拖边缘"处理
++                             （作废长按候选 + 收掉提示图标），落到下面的常规升级路径
++                             （`region → trim`）；只有纵横都不足时才继续等纵向定型。 */
++                        const dxLock = event.clientX - gesture.startClientX;
++                        if (Math.abs(dxLock) < DRAG_THRESHOLD_PX) {
++                            return; // 纵横都没动：继续等纵向定型
++                        }
++                        if (edge.timer !== null) {
++                            window.clearTimeout(edge.timer);
++                            edge.timer = null;
++                        }
++                        gesture.edgeLongPress = undefined;
++                        interactions?.onClipEdgeLongPressHint?.(null);
++                    } else {
 +                    /* 🔴 2026-10-02 **不再在定型这一刻收起提示**（用户口径：「长按控制点，
 +                       上方出现淡入/淡出图标、下方出现变速缩放图标 —— 这两个图标**闪一下就
 +                       消失了**」）。原来的实现就是在这一行收的，理由是"图标会挡住波形"；
@@ -78813,6 +78838,7 @@ index a2ae3b60..c2da4b2d 100644
 +                        applyTrimPreview(event);
 +                    }
 +                    return;
++                    } // 关闭上面新加的 `else`（纵向已定型 ⇒ 走 fade / stretch）
 +                }
 +            }
 +            const dx = event.clientX - gesture.startClientX;
@@ -78879,6 +78905,16 @@ index a2ae3b60..c2da4b2d 100644
 +            // 其余 → 拖拽移动。淡变角与边缘在水平方向重叠，命中层已按竖直方向
 +            // 切分（见 hitTest 的 ClipHitRegion 注释），这里只需按 region 分派。
 +            if (gesture.region === "fade-in-corner" || gesture.region === "fade-out-corner") {
++                /* 🔴 2026-10-03（用户口径）：「可以删除**直接拖动淡入淡出部分**调整过渡
++                   时长的手势了（因为有控制点操作替代）」。
++                   触屏下这里**不再发动 `clip-fade`**：调淡变时长改走"块外控制点上划"
++                   那条路（内核 `edgeLongPress` 分支，见上面 `if (gesture.edgeLongPress)`）。
++                   直接 `return` ⇒ 手势保持 `pending-select`，抬手仍按"单击 = 选中"处理，
++                   **不产生任何副作用**（既不改时长，也不会掉到下面变成"拖动块"——
++                   用户没有要求那个，凭空多出来的语义比没有更糟）。
++                   桌面（鼠标 / 笔）保留原行为：桌面没有块外控制点，拖淡变角仍是主路径。
++                   双击重置曲率（`noteFadeLinePointerDown`）不受影响，那走的是按下分支。 */
++                if (gesture.fromTouch) return;
 +                gesture = {
 +                    kind: "clip-fade",
 +                    clipId: gesture.clipId,
@@ -82579,10 +82615,10 @@ index 00000000..6044163a
 +}
 diff --git a/frontend/src/components/mobile/MobileBottomBar.tsx b/frontend/src/components/mobile/MobileBottomBar.tsx
 new file mode 100644
-index 00000000..00768768
+index 00000000..2ec1373a
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileBottomBar.tsx
-@@ -0,0 +1,1994 @@
+@@ -0,0 +1,2084 @@
 +/**
 + * MobileBottomBar — 手机底部**单行**工具条（PS 设计稿 ps1.png）。
 + *
@@ -83086,12 +83122,30 @@ index 00000000..00768768
 +function IconPencilWithCorner({
 +    vibrato,
 +    onCornerClick,
++    boxPx = 16,
++    cornerEnabled = true,
 +}: {
 +    vibrato?: boolean;
 +    onCornerClick?: () => void;
++    /**
++     * 外层盒子的边长（px）。**必须传按钮尺寸**（`BTN_BOX`）——
++     * 角标是按这个盒子定位的，传 16 会让它盖住按钮中心（见角标处的注释）。
++     */
++    boxPx?: number;
++    /**
++     * 角标是否**可点**。
++     *
++     * 🔴 2026-10-03（用户口径「点**未选中**的工具后直接切换」）：未激活时必须传 `false`
++     * ⇒ 角标 `pointer-events: none`。原因：Chrome 的**触摸目标调整**会把触点**附近**的
++     * 可点元素算进来 —— 即使角标已经挪到右下角外侧（距按钮中心 19.8px），点在
++     * "中心偏右下 9px"处**仍会被判给角标**（真机实测 `pointerdown` 的 target
++     * 就是 `data-hs-draw-corner`，于是 `openDrawMenu` 抢在切换之前）。
++     * 未激活时用户要的是"切换"，角标退出命中 ⇒ 按钮本体必然拿到事件。
++     */
++    cornerEnabled?: boolean;
 +}) {
 +    return (
-+        <span style={{ position: "relative", width: 16, height: 16, display: "block" }}>
++        <span style={{ position: "relative", width: boxPx, height: boxPx, display: "block" }}>
 +            <span
 +                style={{
 +                    position: "absolute",
@@ -83115,12 +83169,26 @@ index 00000000..00768768
 +                onPointerDown={(ev) => ev.stopPropagation()}
 +                style={{
 +                    position: "absolute",
++                    /* 🔴 2026-10-03（用户第二次报「点未选中的工具却弹菜单」，实测未通过）：
++                       角标原来按 **16×16 图标**定位（`right:-4/bottom:-4`），命中区落在按钮
++                       `[18,32]²` —— **把按钮正中心 (20,20) 也盖住**；改成按钮尺寸后落在
++                       `[28,42]²`，但真机实测**仍然**被命中：同一次会话里
++                       `elementFromPoint(中心)` 给的是图标、而真实触摸 `pointerdown` 的
++                       target 却是角标（中心到角标最近点只有 11px，Chrome 的触摸目标调整
++                       会把这么近的可点元素算进去）⇒ 光靠 `elementFromPoint` 会误判。
++                       ⇒ 再挪远一档并收小：**10×10 / right:-4 / bottom:-4** ⇒ 命中区
++                         `[34,44]²`，到按钮中心最近 19.8px（> 触点半径）。
++                       图形仍只画 6×6。判据必须用**真实触摸的 `pointerdown` target**
++                         查，不能用 `elementFromPoint`。 */
 +                    right: -4,
 +                    bottom: -4,
-+                    width: 14,
-+                    height: 14,
++                    width: 10,
++                    height: 10,
 +                    opacity: 0.9,
 +                    cursor: "pointer",
++                    /* 未激活时角标**退出命中**（见 `cornerEnabled` 的注释）：
++                       否则 Chrome 的触摸目标调整会把"点按钮偏右下"判给角标。 */
++                    pointerEvents: cornerEnabled ? "auto" : "none",
 +                    /* 命中区比图形大一圈，手指够得着（图形仍只画 6×6） */
 +                    display: "flex",
 +                    alignItems: "flex-end",
@@ -83278,9 +83346,21 @@ index 00000000..00768768
 +}
 +
 +/** 选择工具图标 + 右下角标（与 `IconPencilWithCorner` 同款 6×6 三角，语义=「还有别的工具」）。 */
-+function IconCursorWithCorner({ drag, onCornerClick }: { drag?: boolean; onCornerClick?: () => void }) {
++function IconCursorWithCorner({
++    drag,
++    onCornerClick,
++    boxPx = 16,
++    cornerEnabled = true,
++}: {
++    drag?: boolean;
++    onCornerClick?: () => void;
++    /** 外层盒子边长（px）；**必须传按钮尺寸**（`BTN_BOX`），理由同绘制角标。 */
++    boxPx?: number;
++    /** 角标是否可点；未激活必须传 `false`（理由见绘制角标那段注释）。 */
++    cornerEnabled?: boolean;
++}) {
 +    return (
-+        <span style={{ position: "relative", width: 16, height: 16, display: "block" }}>
++        <span style={{ position: "relative", width: boxPx, height: boxPx, display: "block" }}>
 +            <span
 +                style={{
 +                    position: "absolute",
@@ -83304,12 +83384,26 @@ index 00000000..00768768
 +                onPointerDown={(ev) => ev.stopPropagation()}
 +                style={{
 +                    position: "absolute",
++                    /* 🔴 2026-10-03（用户第二次报「点未选中的工具却弹菜单」，实测未通过）：
++                       角标原来按 **16×16 图标**定位（`right:-4/bottom:-4`），命中区落在按钮
++                       `[18,32]²` —— **把按钮正中心 (20,20) 也盖住**；改成按钮尺寸后落在
++                       `[28,42]²`，但真机实测**仍然**被命中：同一次会话里
++                       `elementFromPoint(中心)` 给的是图标、而真实触摸 `pointerdown` 的
++                       target 却是角标（中心到角标最近点只有 11px，Chrome 的触摸目标调整
++                       会把这么近的可点元素算进去）⇒ 光靠 `elementFromPoint` 会误判。
++                       ⇒ 再挪远一档并收小：**10×10 / right:-4 / bottom:-4** ⇒ 命中区
++                         `[34,44]²`，到按钮中心最近 19.8px（> 触点半径）。
++                       图形仍只画 6×6。判据必须用**真实触摸的 `pointerdown` target**
++                         查，不能用 `elementFromPoint`。 */
 +                    right: -4,
 +                    bottom: -4,
-+                    width: 14,
-+                    height: 14,
++                    width: 10,
++                    height: 10,
 +                    opacity: 0.9,
 +                    cursor: "pointer",
++                    /* 未激活时角标**退出命中**（见 `cornerEnabled` 的注释）：
++                       否则 Chrome 的触摸目标调整会把"点按钮偏右下"判给角标。 */
++                    pointerEvents: cornerEnabled ? "auto" : "none",
 +                    /* 命中区比图形大一圈，手指够得着（图形仍只画 6×6） */
 +                    display: "flex",
 +                    alignItems: "flex-end",
@@ -84201,6 +84295,13 @@ index 00000000..00768768
 +    }, [vOpen]);
 +
 +    /** 铅笔长按/点角标 → 工具子菜单（原版右键菜单的触屏等价物）。 */
++    /**
++     * 工具按钮的**长按开菜单**门槛（ms）。
++     *
++     * 🔴 2026-10-03：原为 400，短于 Android 系统长按（500ms）⇒ 稍微按重一点的**点击**
++     * 就会先触发长按。现与内核触屏长按（`TOUCH_EDGE_HOLD_MS = 500`）对齐。
++     */
++    const TOOL_LONG_PRESS_MS = 500;
 +    const drawLongPressRef = React.useRef<number | null>(null);
 +    const drawLongFiredRef = React.useRef(false);
 +    const clearDrawLongPress = () => {
@@ -84317,14 +84418,23 @@ index 00000000..00768768
 +        setDrawMenuOpen(false);
 +        setSelectMenuOpen(true);
 +    };
++    /** 「选择」工具是否处于激活态（select / drag 同组 —— 与按钮 `active` 同一条件）。 */
++    const isSelectActive = s.toolModeGroup === "select" || s.toolModeGroup === "drag";
 +    const onSelectPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
 +        if (e.pointerType === "mouse") return;
++        /* 🔴 2026-10-03（用户口径：「点击**未选择**的工具后直接切换……此条实测未通过」）：
++           **未激活时不起长按候选** —— 否则"按住稍久一点的点击"会在门槛时刻触发
++           `openSelectMenu`，菜单抢在 click 之前弹出，用户看到的就是"点了未选中的工具
++           却弹菜单"（真机实测：从拖动/绘制态点另一个工具、按住 ≥ 门槛即复现）。
++           未激活 ⇒ 点击与长按都走 `onSelectClick` 的"直接切换"；长按开菜单只对
++           **已激活**的工具保留（那时用户确实是在"要菜单"）。 */
++        if (!isSelectActive) return;
 +        clearSelectLongPress();
 +        selectLongFiredRef.current = false;
 +        selectLongPressRef.current = window.setTimeout(() => {
 +            selectLongFiredRef.current = true;
 +            openSelectMenu();
-+        }, 400);
++        }, TOOL_LONG_PRESS_MS);
 +    };
 +    const onSelectClick = (e: React.MouseEvent<HTMLButtonElement>) => {
 +        clearSelectLongPress();
@@ -84338,7 +84448,7 @@ index 00000000..00768768
 +           永远是切换 ⇒ 用户描述成"点击未选择的工具直接切换而非打开菜单"。
 +           判定用**按钮是否处于激活态**（与 `visual/active` 同一条件，含 drag 同组的情况）：
 +           激活 ⇒ 开菜单；否则 ⇒ 切换。角标那条路保留（明确的"我要菜单"手势）。 */
-+        const activeGroup = s.toolModeGroup === "select" || s.toolModeGroup === "drag";
++        const activeGroup = isSelectActive;
 +        if (activeGroup) {
 +            openSelectMenu();
 +            return;
@@ -84347,14 +84457,19 @@ index 00000000..00768768
 +        dispatch(setToolMode("select"));
 +    };
 +
++    /** 「绘制」工具是否处于激活态（draw 组）。 */
++    const isDrawActive = s.toolModeGroup === "draw";
 +    const onPencilPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
 +        if (e.pointerType === "mouse") return;
++        /* 未激活 ⇒ 不起长按候选（理由同 `onSelectPointerDown`）：否则"按住稍久的点击"
++           会先弹绘制菜单，用户报的"点未选中的工具却弹菜单"就是这么来的。 */
++        if (!isDrawActive) return;
 +        clearDrawLongPress();
 +        drawLongFiredRef.current = false;
 +        drawLongPressRef.current = window.setTimeout(() => {
 +            drawLongFiredRef.current = true;
 +            openDrawMenu();
-+        }, 400);
++        }, TOOL_LONG_PRESS_MS);
 +    };
 +
 +    const onPencilClick = (_e: React.MouseEvent<HTMLButtonElement>) => {
@@ -84376,7 +84491,7 @@ index 00000000..00768768
 +           ⇒ **删掉几何判定**。角标有它自己的元素（`data-hs-draw-corner`，14×14 且
 +             `stopPropagation`），"我要菜单"由那个元素负责，按钮本体不再抢。
 +           剩下的规则与「选择」完全同规（E24-①）：**已激活 ⇒ 开菜单，否则 ⇒ 直接切换**。 */
-+        if (s.toolModeGroup === "draw") {
++        if (isDrawActive) {
 +            openDrawMenu();
 +            return;
 +        }
@@ -84409,7 +84524,13 @@ index 00000000..00768768
 +                    onPointerLeave={clearSelectLongPress}
 +                    style={{ display: "flex", alignItems: "center", justifyContent: "center" }}
 +                >
-+                    <IconCursorWithCorner drag={s.toolModeGroup === "drag"} onCornerClick={openSelectMenu} />
++                    <IconCursorWithCorner
++                        drag={s.toolModeGroup === "drag"}
++                        onCornerClick={openSelectMenu}
++                        /* 外层盒子按按钮尺寸 + 未激活时角标退出命中（同绘制按钮）。 */
++                        boxPx={BTN_BOX}
++                        cornerEnabled={isSelectActive}
++                    />
 +                </span>
 +            </BarButton>
 +            <BarButton
@@ -84438,6 +84559,11 @@ index 00000000..00768768
 +                            /* A5：点角标 = 开绘制工具子菜单，与「选择」同一套交互
 +                               （长按那条路仍在，两者都调同一个 `openDrawMenu`）。 */
 +                            onCornerClick={openDrawMenu}
++                            /* 外层盒子必须按**按钮**尺寸，否则角标会盖住按钮中心
++                               （见 `IconPencilWithCorner` 里角标的注释）。 */
++                            boxPx={BTN_BOX}
++                            /* 未激活 ⇒ 角标退出命中，保证"点未选中的工具 = 直接切换"。 */
++                            cornerEnabled={isDrawActive}
 +                        />
 +                    )}
 +                </span>

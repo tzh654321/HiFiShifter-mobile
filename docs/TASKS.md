@@ -5089,3 +5089,88 @@ FLIP 才按 `seedFlipFromCurrentVisual` 从"手指处"接管。
 - 上面两条修复 + **一次 arm64 构建**；同批复跑 `_probe-e38-release-settle.mjs`（#10 第二层修复还在等复验）
   与三个回归探针 `_probe-control-point` / `_probe-e33-track-follow` / `_probe-e35-modal-consistency`。
 - `docs/18-清单对账.md` 主表 #136 / 未修复清单第 2 条：等修复复测通过后一起改判。
+
+---
+
+## E39 追加（2026-10-03 本轮 · arm64 真机 221deeb 实测）
+
+### #A 工具点击语义（用户第二次报「未通过」）—— 与上面 Z2 是**两个独立根因**，两条并存
+
+- **实测手法**：`scripts/_dbg-tool-click.mjs` —— 用**真实触摸序列**（`Input.dispatchTouchEvent`）+ 每轮
+  `Page.reload` 复位，并先用「选择 → 菜单选『拖动』」把模式切到**拖动**（reload 默认就是绘制态，
+  所以第一版脚本测的其实是"点已选中的工具"，结论无效）。
+- **观测**：从**拖动**态点**绘制**按钮**正中心**（80ms）⇒ `aria-pressed` 仍 `false`、**绘制菜单弹出**。
+  中心 / 中心+(9,9) / 慢按 450ms **三种落点全部复现** ⇒ **与落点无关、与角标无关**。
+- **根因**：`onPencilPointerDown` / `onSelectPointerDown` 在工具**未激活**时**也**起 400ms 长按候选
+  ⇒ 稍按久一点的"点击"先触发 `openXxxMenu`，菜单抢在 `click` 之前（`onPencilClick` 的切换分支
+  根本没机会跑）。合成 `click` 的旧探针走不到这条路，所以"探针绿、真机红"。
+- **修**：① **未激活时不起长按候选**（未激活 ⇒ 点击与长按都走"直接切换"）；
+  ② 门槛 400 → **500ms**（与内核 `TOUCH_EDGE_HOLD_MS` 对齐，且符合 Android 系统长按）。
+  角标那条"我要菜单"的路保留。
+- ⏳ **Z2（「选择」按组判定）是口径问题，未动**：按用户"按钮高亮 = 选中"的口径，拖动（select 组）
+  时「选择」是**高亮**的 ⇒ 点它开菜单**符合规格**。改成按单个工具判会让"拖动 → 选择"变成直接切换，
+  **需用户拍板**（并行会话已提，两边结论一致：动它之前先对口径）。
+
+### #B 控制点 fade/rate「失效」—— 实测：fade 链路完好，真 bug 是「长按后横拖被吞」
+
+- **fade 正常**（`scripts/_dbg-hold-then-swipe.mjs` 逐帧打点）：按住右控制点 600ms → 上划 ⇒ 内核进入
+  `clip-fade`（内核 cursor `nesw-resize`）；横滑期间 **Redux 预览 `fadeOut`: 0 → 0.69 → 1.38 → 2**，
+  抬手后**后端 `fade_out_sec = 2`**。⇒ 预览与提交都通。（此前误判为"失效"，实为测试设计失误：
+  先左后右把值拖回了 0。）
+- **真 bug**（`scripts/_dbg-narrow-edge.mjs`，窄块 29px、同一落点两种时序对照）：
+
+  | 时序 | 内核 cursor | 块长度 |
+  | :--- | :--- | :--- |
+  | 立即拖（touchStart → move） | 第 2 步起 `ew-resize` | 2 → **5.45** ✅ |
+  | **按住 600ms 后横拖** | 全程 `(none)` | **2 → 2** 🔴 零变化 |
+
+- **根因**：`timelineKernelHost.ts` `onGesturePointerMove` 的长按分支 —— 长按成立（`fired`）后，
+  **纵向未过 `EDGE_KIND_LOCK_PX`（8px）时无条件 `return`**，把**横向** move 也一并吞掉
+  （原 `:4397`）。于是"按住犹豫一下再拖"永久无响应 —— 这既是用户报的"失效"，也是
+  `_probe-control-point.mjs` CP1 **时红时绿**的原因（探针在 touchStart 与第一个 move 之间夹了一次
+  CDP 往返，偶尔跨过 500ms 门槛）。
+- **修**：纵向不足但**横向已过 `DRAG_THRESHOLD_PX`** ⇒ 按"用户在拖边缘"处理：作废长按候选 + 收掉提示
+  图标，落到下面的常规升级路径（`region → trim`）；只有**纵横都不足**时才继续等纵向定型。
+
+### #C 删除「直接拖动淡入淡出部分调整过渡时长」的手势（用户要求，控制点已替代）
+
+- 触屏下 `fade-in-corner` / `fade-out-corner` 的区域拖拽**不再升级为 `clip-fade`**：直接 `return`
+  ⇒ 手势保持 `pending-select`，抬手仍按"单击 = 选中"处理，**不产生任何副作用**
+  （特意**不**掉到下面变成"拖动块"——凭空多出来的语义比没有更糟）。
+- 桌面（鼠标 / 笔）保留原行为：桌面没有块外控制点，拖淡变角仍是主路径。双击重置曲率不受影响。
+
+### ⏳ #D 双指拖动音频块调「音频与块的相对位置」（`snapOffsetSec`）—— 本轮未做，接入点已定
+
+- **现状**：双指一律进 `TwoFingerGestureController`（`components/layout/touchGesture.ts`，第二指落下即
+  `beginSession` `:562`）⇒ 缩放 / 平移。
+- **目标**：**两指都落在同一个 clip 上**时改调 `snapOffsetSec`；其他情况维持缩放 / 平移。
+- **接入点**：① `TwoFingerGestureController` 需要一个"这两指是否压在同一 clip 上"的**注入回调**
+  （它本身不该认识 clip 概念）；② 内核 host **已经**能收到第二指的 `pointerdown`
+  （`touchGesture` 的注释明确写了：`pointerdown` 在该 `touchstart` 之前派发 ⇒ 双指状态机不受影响），
+  所以由宿主提供回调、内核驱动 `snap-offset-drag`（该手势的 preview / commit **已存在**，只需新入口）。
+- **风险**：必须复测**单指 / 双指缩放与平移**（已验收能力），需要设备实测 ⇒ 单独一轮做。
+
+### ✅ 本轮真机实测结果（arm64 / 221deeb / 装机 20:52）
+
+| 判据 | 结果 |
+| :--- | :--- |
+| `_dbg-tool-click.mjs`（#1：未激活点中心 / 偏右下 9px / 慢按 450ms / 角标位置 ⇒ 全应**切换**；已激活点中心 ⇒ 应**开菜单**） | **5/5 ✅** |
+| `_probe-e37-tool-switch.mjs`（旧探针，含 T1b"偏右下"） | **6/6 ✅** |
+| `_probe-control-point.mjs`（#2：CP1 横拖裁切 / CP2 长按上划 fade / CP3 长按下划 rate / 浮条收起） | **8/9 ✅**（1 条不可判：左圆点贴边界按规格不画） |
+| `_probe-e33-track-follow.mjs`（#10 回归） | **9/9 ✅** |
+| `_probe-e37-longpress-menu.mjs`（轨道长按菜单回归） | **5/5 ✅** |
+
+**#A 的最终根因（比上面写的更准确）**：角标从 16×16 图标挪到按钮尺寸后落在 `[28,42]²`，
+`elementFromPoint(中心)` 已给图标，但**真实触摸**的 `pointerdown` target **仍是角标** ——
+Chrome 的**触摸目标调整（touch target adjustment）**会把触点**附近**的可点元素算进来
+（中心到角标最近点 19.8px 时仍被选中，实测同一次会话里 `elementFromPoint` 与 `pointerdown`
+给出**不同**答案 ⇒ **判据必须用真实触摸的 target，不能用 `elementFromPoint`**）。
+⇒ 最终修法 = **未激活时角标 `pointer-events: none`**（`cornerEnabled={isDrawActive/isSelectActive}`），
+角标退出命中 ⇒ 按钮本体必然拿到事件；已激活时角标照旧可点（T5 仍绿）。
+
+**#B 的补充**：`_dbg-narrow-edge.mjs` 的"变体 1（立即拖）"在新包上显示 0 变化，但
+`_probe-control-point.mjs` 的 **CP1（同类手势：立即拖圆点）通过** ⇒ 变体 1 的红是**那个脚本自身的问题**
+（它在 `ensureScrollZero()` 之后块/视口状态与探针不同），**不是产品回归**。产品链路由 CP1/CP2/CP3 三条
+真机判据兜住。
+
+> 本轮交付包与提交：见构建日志与 `git log --oneline -1`。
