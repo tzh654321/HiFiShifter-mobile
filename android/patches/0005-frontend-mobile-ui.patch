@@ -84109,10 +84109,26 @@ index 00000000..d1faffae
 +    }, [s, vp, isPhone]);
 +}
 diff --git a/frontend/src/features/fileBrowser/audioPreview.ts b/frontend/src/features/fileBrowser/audioPreview.ts
-index a89df9b9..7e420609 100644
+index a89df9b9..966c2224 100644
 --- a/frontend/src/features/fileBrowser/audioPreview.ts
 +++ b/frontend/src/features/fileBrowser/audioPreview.ts
-@@ -135,3 +135,20 @@ class AudioPreviewEngine {
+@@ -72,6 +72,15 @@ class AudioPreviewEngine {
+ 
+     /** 停止当前播放 */
+     stop(): void {
++        /* 🔴 2026-10-03（用户口径：「文件管理音乐停不掉……**点击停止时又从头播了一遍**」）：
++           `play()` 里有一步 `await fileBrowserApi.readAudioPreview(...)`（读 PCM，大文件要几百 ms），
++           它靠 `currentSession !== this.playSessionId` 判断"期间用户换了别的音频 ⇒ 放弃本次"。
++           但 `stop()` **从来不推进 `playSessionId`** ⇒ 停止之后，那次仍在 await 里的 `play()`
++           醒来时 sessionId 仍然相等 ⇒ **照旧 `source.start()`** —— 声音**从头响起**，
++           表现正是"按了停止却重播一遍"（真机实测：点文件后 `playing=false`，
++           点停止后反而变 `true`）。
++           ⇒ 停的时候一并作废所有在途会话（与"换文件"共用同一套取消机制，一处收口）。 */
++        this.playSessionId += 1;
+         if (this.source) {
+             try {
+                 this.source.stop();
+@@ -135,3 +144,20 @@ class AudioPreviewEngine {
  
  /** 全局单例 */
  export const audioPreview = new AudioPreviewEngine();

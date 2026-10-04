@@ -5247,3 +5247,21 @@ Chrome 的**触摸目标调整（touch target adjustment）**会把触点**附�
   （停试听 + 清标记），**不顺带起播工程**。
 
 > 判据脚本：`scripts/_dbg-trackmenu-width.mjs`（②，实测两轨道的菜单宽度）。
+
+### E40b · 四条的端到端复验（arm64 真机 221deeb，装机 10-04 10:50）
+
+包：`main-BKTi3y9p`（`/d/hifishifter-out/hifishifter-arm64-v8a-debug.apk`，构建 10-03 23:52）。
+
+| # | 判据 | 结果 |
+| :--- | :--- | :--- |
+| ① 浮层不被轨道头/拍数栏盖住 | `_dbg-layers-z`：层叠上下文链 = `div(60)→div(0)`，**`经过pane=False`** | ✅ 三个浮层 z=60 且已脱离 `[data-hs-pane]` |
+| ② 合成轨菜单宽度 | `_dbg-trackmenu-width`：默认轨 **152px** · 合成轨 **152px** | ✅ 严格同宽（原 292px） |
+| ③ 点"停止"不再从头播 | `_dbg-fb-preview-stop`：点停止后 `playing=false`，**3 秒后仍 false** | ✅ |
+| ④ 试听时按播放键 = 只停试听 | 同上：按播放键后 `playing=false`、标记行 `null`、**工程播放 false** | ✅ |
+
+**③④ 的真根因（上一轮修得不够深）**：`audioPreview.stop()` 只 `source.stop()` 而
+**从不递增 `playSessionId`**。而 `play()` 开头要 `await readAudioPreview`（整段 PCM，
+大文件数百 ms）—— 停止发生在 await 期间时，那次 `play()` 恢复后**照样 `source.start()`**
+⇒ 声音**从头响起**。读数是"点文件后 false、点停止后才 true"就是它。
+⇒ **修**：`stop()` 里 `this.playSessionId += 1`（与 `play()` 的 session 校验对齐）。
+🕳️ 探针纪律：试听要先轮询等它**真响**（`waitPlaying`），否则读数**错位一拍**会误判。
