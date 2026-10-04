@@ -58,6 +58,15 @@ $env:NDK_HOME = $NdkHome
 $env:ANDROID_NDK_HOME = $NdkHome
 $env:RUSTUP_TOOLCHAIN = if ($env:RUSTUP_TOOLCHAIN) { $env:RUSTUP_TOOLCHAIN } else { 'stable' }
 
+# tauri-cli 探测 Android 环境时要读 `ProgramData`（它去那里找 SDK 的注册信息）。
+# DSH 这类受限会话会把这个变量从环境里剥掉 ⇒ 报
+# `failed to setup Android environment: The ProgramData environment variable isn't set`
+# （实测：一条构建都没跑就退出）。补一个标准值即可，不依赖它在不在。
+if (-not $env:ProgramData) {
+    $env:ProgramData = 'C:\ProgramData'
+    Write-Host "▸ 已补 ProgramData=$($env:ProgramData)（tauri-cli 需要）"
+}
+
 # PATH：cmake（android.toolchain.cmake 要真 cmake）/ JDK17 / platform-tools / build-tools /
 #       cargo / node。node 是给 tauri-cli 与前端构建用的。
 $env:PATH = @(

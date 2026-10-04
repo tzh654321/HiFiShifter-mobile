@@ -5281,3 +5281,667 @@ Chrome 的**触摸目标调整（touch target adjustment）**会把触点**附�
 3. 🔴 **视口（`scrollLeft` / `pxPerSec`）跨进程持久化**（存进 UI 设置，重装 APK 也在）
    ⇒ 探针改了视野**必须复位**（`_dbg-layer-restore.mjs`）。单指在空白区横拖会撞上块 /
    "添加轨道"按钮 ⇒ 平移一律用**双指**。
+
+---
+
+# §E41（2026-10-04）：用户 6 条 —— 横屏口径 / 浮层越界 / 顶栏菜单 / 多选批量 / 双指调偏移
+
+**用户口径（先纠一处）**：用户消息里那句「浮层…；1.不用，保持现状；2.能看到」是**给上一个 AI 的遗留、忘改了**；
+真实口径 = **控制点圆点也要能盖过轨道头列 / 拍数栏**。
+
+## ✅ 已改（3 条，`tsc -b` 0 错 + 补丁 regen/verify 114 文件逐字节一致）
+
+| 条 | 根因 | 改法 |
+| :--- | :--- | :--- |
+| **#5** 横屏菜单过短 | `mobile/MobileTopBar.tsx` 原 `maxHeight: calc(100vh - 160px)`；横屏 `100vh≈360` ⇒ 只给 ~200px，而菜单是 `absolute; top:100%` 挂在顶栏下沿，可用高度本应是「视口底 − 面板顶」 | 复用那个已在量**宽度**的 `useLayoutEffect`，顺手量**面板顶** ⇒ `maxHeight = 视口底 − 面板顶 − 8`（实测值，首帧退回 `calc(100dvh - var(--hs-modal-top) - 16px)`） |
+| **#4** 横屏浮层/双击失效 | 手机专属逻辑**各自写死 `< 600px`**，而横屏手机宽 ≈800 ⇒ 全不成立；但形态判定是 `w < 1280 ⇒ phone`（横屏仍是 phone） | 新增 `utils/layoutMode.isMobileShell()`；四处改走它：`ClipQuickActions`（初值 + rAF tick）· `ClipEdgeLongPressHint`（早退）· `useClipOverlayGeometry`（初值 + resize/orientationchange）· `TimelinePanel`（双击泳道早退 + `isPhoneLike`） |
+| **#1** 浮层/圆点被夹住 | `ClipQuickActions` 把 `centerX`/`barTop` 夹在**时间线容器**内；`ClipControlPoints.dotPressable` + 跟手夹取也按**容器**判 ⇒ 永远出不了轨道区（用户猜的"自动避让"**完全正确**） | ① `ClipQuickActions`：夹取**容器 → 视口**，`barTop` 上界 `c.top+4 → 4`（可压拍数栏），可见性判改视口；② `ClipControlPoints`：`dotPressable` + 跟手上下界**容器 → 视口**；③ `useClipOverlayGeometry.horizontallyVisible` 改视口 |
+
+> 🔑 依据：E40 已把三个浮层搬到 **App 根层**（在面板块之上）⇒ 压在轨道头列上也收得到 `pointerdown`
+> ⇒「按不到就不画」的旧前提**不再成立**，这才是能放开夹取的前提。
+
+**新判据** `scripts/_probe-e41-landscape-layers.mjs`（7 条）：
+P1 竖屏基线（浮条/圆点在場）· P2 左圆点 `cx < 容器左`（压到轨道头列）· P3 横屏前置（`600 ≤ innerW < 1280`）·
+P4 横屏浮条/圆点仍在場 · P5 横屏双击泳道开出参数面板 · P6 横屏顶栏菜单底边贴视口底 · P7 收尾转回竖屏。
+⚠️ 用 `settings user_rotation` 旋转 ⇒ **收尾必须转回竖屏**，否则后面探针读数全脏。
+
+### ✅ 真机实测（arm64 / 221deeb / 装机 10-04 13:39，包 13:38）—— **8 / 8**
+
+| 判据 | 实测 |
+| :--- | :--- |
+| P1 竖屏基线（浮条 + 圆点在場） | ✅ `actions=true dots=2` |
+| **P2（#1）左圆点压在轨道头列上** | ✅ 左圆点 `cx=122` **< 容器左 132**（修复前 `dotPressable` 按容器判 ⇒ **这个点根本不画**） |
+| P3 横屏前置 | ✅ `innerW=752 innerH=360`（≥600 且 <1280 ⇒ 仍是手机外壳） |
+| **P4（#4）横屏下浮条 + 圆点仍在場** | ✅ `actions=true dots=2`（修复前 `<600` 门控 ⇒ 应为 `false/0`） |
+| P5a 前置：双击前参数面板确实关着 | ✅ `params=false` |
+| **P5（#4）横屏双击泳道开参数面板** | ✅ `params=false → true` |
+| **P6（#5）横屏菜单底边贴视口底** | ✅ inline `maxHeight=321px`，底边 353 / 视口 360（差 **7px**）；旧值恒为 `calc(100vh − 160px)`＝200px |
+| P7 收尾转回竖屏 | ✅ `innerW=360` |
+
+**🕳️ 本轮三条探针纪律（都写进脚本注释了）**：
+
+1. **"点空白复位"点在块上了**：素材默认 `pxPerSec` 下块宽 402px > 视口 228px ⇒ 容器里**没有真正的空白**；
+   "先点一下空白"会触发 `hs-hide-clip-actions` ⇒ 浮条此后一直不在 DOM ⇒ **假红**（`actions=false`）。
+   ⇒ 改成**导入后先直接读一次**（导入自带选中），别去点"空白"。
+2. **双击必须用真实输入**：页内 `new MouseEvent("dblclick")` **走不到**挂在 `host.getContainer()` 上的监听器
+   （实测：合成事件恒红，同一落点换 `Input.dispatchMouseEvent` + `clickCount:2` 立刻绿）；落点还必须取
+   **泳道行中心**（点轨道头/工具条收不到 `dblclick` —— E30 的老教训）。
+3. ⚠️ **判据必须带前置**：P5 前两次跑分别是"脏环境假绿"与"本来就 true"的**空转**，
+   补上 `P5a 双击前 params=false` 才暴露真相 —— **"红转绿"之前先确认那次红是真的**。
+
+## ⏳ 未做 3 条 —— 接入点已定到 `文件:行号`
+
+### #6 双指长按块 + 横拖调「音频与块的相对位置」（`snapOffsetSec`）
+
+- **现状**：双指一律进 `components/layout/touchGesture.ts` 的 `TwoFingerGestureController`
+  （`class` 在 `:214`，`constructor(target, viewport, options: TwoFingerGestureOptions)` 在 `:267`，
+  第二指落下即 `beginSession()` `:548`）⇒ 缩放 / 平移。
+- **内核侧已存在**：`kernel/host/timelineKernelHost.ts:4536` 当 `gesture.region === "snap-offset-handle"`
+  ⇒ `kind: "snap-offset-drag"`；preview/commit 在 `:4813` / `:5096` / `:5872`（`dragAutoScroll.ts:129` 也认它）。
+- **要做的两刀**：① `TwoFingerGestureOptions` 加一个**注入回调**（例 `bothFingersOnSameClip?: (a, b) => boolean`），
+  `TwoFingerGestureController` 本身不认识 clip 概念；② 宿主提供该回调（两指落点的 hit-test 是否同一 `clip.id`），
+  命中 ⇒ **不走缩放/平移**，改为驱动 `snap-offset-drag`，并按用户口径补**长按震动**（`navigator.vibrate`）。
+- **硬要求**：必须复测**单指平移 / 双指缩放 / 双指平移**全不回归（E18 那套判据）；
+  验证用**最接近真实触摸**的手法（两指都要落在时间线容器内 —— 见 §E40b 坑 2）。
+
+### #2 多选音频块批量处理（新功能）
+
+- **现状**：`ClipControlPoints.tsx:229` `if (g.multiSelectedCount > 1) return null;`、
+  `ClipQuickActions.tsx:227` 也因 `multiSelectedClipIds.length > 1` 直接 `return null` ⇒ 多选时**两个浮层都不出现**。
+- **几何要推广**：`useClipOverlayGeometry.ts:131-177` 现在只算 `selectedClipId` **单块**。
+  多选需要**选区包围盒**（`left` = min(块左)、`width` = max(块右) − left，供浮条居中），
+  **另外暴露左右两个端点各自的边带**（`leftEdge/rightEdge: { x, bandTop, bandHeight }`）——
+  因为用户口径是「**最左块左侧** + **最右块右侧**」，两端可能不在同一行。
+- **批量动作**：单块走的 editOp 要落到**全部选中块**。已有批接口可复用：
+  `thunks/timelineThunks.ts` 的 `moveClipsRemote`（`TimelinePanel.tsx:122` 已 import）、
+  `hooks/bulkClipRemotePayloads.ts`、`hooks/stretchGroup.ts`（成组拉伸）⇒ 先查它们覆盖面再决定是否新增。
+
+### #3 文件浏览器窗口拖窄时内容盖住状态栏
+
+- **候选**：面板块外壳是 `App.tsx` 的 `className="hs-mobile-split-pane relative flex flex-col"`（**无 `overflow`**），
+  `FileBrowserPanel.tsx` 里多行是 `shrink-0`（`:934 h-8` / `:981` / `:1105 min-h-[28px]` / `:1247`），
+  滚动区若缺 `min-height: 0` ⇒ flex 子项按 `min-height:auto` 撑住、内容溢出且不被裁。
+- **纪律**：**必须先真机复现**（盲加 `overflow:hidden` 可能裁掉钢琴轴/浮层等），再按"溢出方向"决定是裁容器还是给滚动区 `min-height:0`。
+
+## 🆕 #7（用户 2026-10-04 手测新报）：**音频块右键菜单在横屏下显示不完整**（竖屏正常）
+
+**根因**：`components/layout/timeline/ClipContextMenu.tsx` 的视口夹取只有
+`if (rect.bottom > vh) el.style.top = Math.max(0, vh - rect.height)`。
+横屏 `vh ≈ 360`，而这份菜单自然高约 **400px** ⇒ 算出 `top = 0`，菜单**仍旧高出屏幕一截**；
+而且**没有 `max-height` / 滚动兜底** ⇒ 底部那几项**永远看不见也点不到**。
+竖屏 `vh ≈ 708` 够高，所以**只在横屏暴露**（与用户口径一致）。
+
+**修法（已改）**：先给高度上限再夹位置 ——
+
+```ts
+el.style.maxHeight = `${Math.max(80, Math.round(vh - 8))}px`;
+el.style.overflowY = "auto";
+const rect = el.getBoundingClientRect();   // 已是**被夹后**的高度
+if (rect.right > vw) el.style.left = `${Math.max(0, vw - rect.width)}px`;
+if (rect.bottom > vh) el.style.top = `${Math.max(0, vh - rect.height)}px`;
+```
+
+（与顶栏菜单 #5 同款约定：给上限 + 内部滚动 ⇒ "最后一项也点得到"。）
+
+## 🔎 与用户手测的对账（2026-10-04 13:54）
+
+用户口径：「**没列的是成功的**」+「**目前版本上述功能正常，只是长按菜单显示不完整**」：
+
+| 条 | 结论 |
+| :--- | :--- |
+| **#1** 浮层/圆点盖过轨道头·拍数栏 | ✅ **用户手测通过**（与真机 8/8 一致） |
+| **#5** 横屏顶栏菜单过短 | ✅ **用户手测通过** |
+| **#4** 横屏双击进编辑 + 多种浮层 | ✅ **用户手测通过**（先前的"仍失败"是拿旧包记的） |
+| **#7** 横屏下右键菜单不完整 | 🆕 本轮定位并已改（见上），待构建复验 |
+| **#2 / #3 / #6** | ⏳ 仍未做（接入点见上） |
+
+> 🕳️ **探针副作用教训**：`_probe-e41-landscape-layers.mjs` 转屏时会
+> `settings put system accelerometer_rotation 0`（**等于关掉用户手机的自动旋转**），
+> 而收尾只回了 `user_rotation` ⇒ 我把它永久关掉了（用户手机侧已手工恢复）。
+> 脚本已改成**先存原值、收尾逐项还原并打印复核值**。
+> ⇒ **今后凡改系统设置的探针，一律"存原值 → 还原 → 打印复核"。**
+
+---
+
+## E41 第二轮（2026-10-04 15:1x–）：用户 4 条重报 —— 多选批量 / 文件窗窄 / 横屏(已过) / 双指调偏移
+
+用户口径（15:12 原话）：手测仍未成功的四项 = ①多选音频批量处理（新功能）②文件浏览器窗口拖窄时内容盖住状态栏
+③横屏下双击轨道进编辑 / 多种浮层无法渲染 ④双指长按块出现震动后横拖调「音频与音频块相对位置」未生效
+（「注意双指要落在**同一个音频块**上才会触发调偏移，其他情况双指仍会被解析为平移/缩放，
+验证本条应使用**最能模拟用户点击**的探针」）。
+
+> ③ 在 13:54 那轮用户已口头确认「目前版本上述功能正常」⇒ 本轮不重复做。
+> 另外用户补报 **#7 音频块右键菜单横屏不完整**（已改，见上节末）。
+
+### #6 双指长按块 + 横拖调「音频与音频块相对位置」—— **探针 4/4 全绿，复现不了"未生效"**
+
+规格：`docs/15:21`「双指长按并划动 · 音频块 = 调整音频相对于音频块的位置，相当于开了 Alt 拖动」
+= **slip**（A3，2026-09-28 实现、当时模拟器 3/3）。
+
+**本轮实测**（真机 221deeb，包 13:38，`scripts/_probe-e41-twofinger-slip.mjs`）：
+
+| 用例 | 结果 |
+| :--- | :--- |
+| B 两指同块 + **先单击选中**（A3 原判据） | ✅ slip（`ΔsourceStartSec = 0.6192`） |
+| Bp 两指同块 + **不预选**（= 用户自然用法"直接双指长按块"） | ✅ slip（同上，`afterHold.alt = true`） |
+| Bc 两指同块 + **合成 `contextmenu`**（模拟 Android 原生长按，CDP 触摸做不出） | ✅ slip（**菜单确实弹了**：`菜单数=1`，但 slip 照旧成功） |
+| D 两指**不同块** | ✅ 未 slip（当前无门控，alt 照旧点亮 ⇒ 见下"口径不符"） |
+
+⇒ **三条假设逐一被否**：① "不预选所以不生效" —— 否（Bp 绿）；② "原生长按弹出的块菜单吃掉拖动" —— 否
+（Bc 里菜单确实弹出，但指针已被 `TwoFingerGestureController` 的 `setPointerCapture` 锁住，move 照样到
+容器 ⇒ slip 仍成功）；③ "A3 链路坏了" —— 否（B/Bp/Bc 全绿）。**结论：探针复现不了用户的"未生效"。**
+
+**但用户给的门控口径确实未实现 ⇒ 已按口径改**（`components/layout/TimelinePanel.tsx`）：
+
+1. `beginSlip()` 改为**两指都必须 hitTest 命中同一个 clip**（原来只看第一指）；不满足即返回 false
+   ⇒ 长按定时器**不点亮 alt**、不进 slip ⇒ 双指维持平移/缩放
+   （用户口径 + `docs/15:21` 拍数栏列本就是 `-`）。
+2. 新增组件级 `twoFingerActiveRef`：**双指在手就吞掉原生 `contextmenu`**（`handleKernelContextMenu`
+   开头早退）—— 双指在手不可能是"要菜单"（单指长按才是）；顺带消除"震一下 + 菜单冒出来"的观感。
+3. 进入 slip 时 `navigator.vibrate(12)`（与 E12 / 增益旋钮的长按反馈同款）。
+
+> 🕳️ **探针纪律（新增）**：`--only <用例>` 单跑前**必须重启应用** —— 一次 slip 会让**下一次**
+> `buildScene` 的 `split` 失效（实测：B 通过后 Bp 直接红在 `split 后应有 2 个块，实得 1`）。
+> ⇒ 逐条隔离 + 每条前 `am force-stop/start`。
+
+### #2 多选音频块批量处理 —— **内核早已支持批量，缺的只是浮层**
+
+**关键发现（省掉整块内核改造）**：`components/layout/timeline/hooks/kernelEditSet.ts::
+resolveKernelEditParticipants` 已把「锚点 clip 的位移 → **全部参与者**的绝对几何」展开，
+且这四处内核回调**都已调用它**：
+
+| 回调 | 行 | 覆盖 |
+| :--- | ---: | :--- |
+| `handleKernelDragPreview` | `TimelinePanel.tsx:2417` | 批量**移动** |
+| `handleKernelTrimPreview` | `:3212` | 批量**裁剪 / 拉伸**（`participants` + 每块 `editSides` + `baseById`） |
+| `handleKernelFadePreview` | `:4251` | 批量**淡变** |
+| `handleKernelGainDragPreview` | `:4883` | 批量**增益** |
+
+⇒ 数据层**已经通了**（就是桌面版那套实现）⇒ #2 的活只在**浮层几何 + 去掉多选早退**。
+
+**已改**：
+
+- `components/mobile/useClipOverlayGeometry.ts`：几何推广 —— 多选时 `left/top/width/clipHeight`
+  = **选区包围盒**；新增 `multiEndpoints: { left, right }`（`edgeX` = **最左块左缘 / 最右块右缘**，
+  各带**本行**的 `bandTop/bandHeight`，因为两端可能不在同一行）。锚点回退到
+  `multiSelectedClipIds[0]`（🔴 **框选不设 `selectedClipId`**：`handleKernelBoxSelectPreview` 只在
+  「框内恰好 1 个」时才同步它）。
+- `components/mobile/ClipControlPoints.tsx`：去掉 `multiSelectedCount > 1 ⇒ return null`；
+  新增 `endpointOf(side)`（多选取**选区端**、单选取块本身）+ 每侧各自的 `centerY`；
+  `onDown` 的竖直判据**按侧分别判**；baseX 可点判据改走 `dotPressable`（**视口**口径，与 E41-1 一致）
+  —— 多选时最左块常贴容器左缘，按**容器**判会恰好卡掉我们最需要的那个端点。
+- `components/mobile/ClipQuickActions.tsx`：去掉多选早退；多选时按**选区包围盒**定位
+  （单块公式**不动**，避免回归）。
+
+**新建判据** `scripts/_probe-e41-multiselect.mjs`（用 `hifi:timelineEditOp` 的 `selectAll` 造多选）：
+
+| 判据 | 含义 |
+| :--- | :--- |
+| M1 | 多选后**左右各一个**控制点圆点（修复前一个都不画） |
+| M1b | 左圆点圆心 ≈ **最左块左缘**；右圆点圆心 ≈ **最右块右缘** |
+| M2 | 常用功能浮条 `[data-hs-clip-actions]` 在場（修复前多选直接 `return null`） |
+| M3 | 拖**左圆点**（右移）⇒ **两块都被裁切** —— 批量裁剪 |
+| M4 | 拖**右圆点**（左移）⇒ **两块右缘都内收** —— 批量裁剪（另一侧） |
+
+护栏：`tsc -b` **0 错** · `regen-frontend-patch.sh` + `verify-patches.sh` = **114 文件逐字节零漂移**。
+
+### ✅ 真机实测（arm64 / 221deeb / 装机 16:15:04，包 16:13）
+
+| 判据 | 结果 |
+| :--- | :--- |
+| `_probe-e41-multiselect.mjs`（#2） | **5 / 5** ✅ — 左圆点 `cx=187` == 期望 187（最左块左缘 197 − 10）；右圆点 `cx=336` == 期望 336（最右块右缘 326 + 10）；**M3 拖左圆点 / M4 拖右圆点 ⇒ 两块一起被裁**（批量成立） |
+| `_probe-e41-twofinger-slip.mjs` B / Bp / D（#6） | **3 / 3** ✅ — B/Bp 同块 ⇒ slip；**D 两指不同块 ⇒ `alt=false`、不 slip、`scrollLeft 0 → 59.7`（视口照旧平移）** |
+| `_probe-e41-landscape-layers.mjs`（E41-1 回归） | **8 / 8** ✅（竖屏基线 / 左圆点压轨道头列 / 横屏浮层与双击 / 菜单贴底 / 收尾转回竖屏） |
+| `_probe-control-point.mjs`（回归） | **6 / 7 + 1 不可判**（见下：CP2b/CP3b 由红转绿；仅 CP2 仍红，判为**既存**） |
+
+### 🔴 本轮自己引入并修掉的回归：`deps: []` 副作用里复用**渲染作用域闭包** ⇒ 读到首帧值
+
+**症状**：`_probe-control-point.mjs` 从文档记录的 8/9 掉到 **4/7**（CP2 上划 fade / CP2b 图标态 fade /
+CP3b 图标态 rate 三条红；而 CP3 的 rate **编辑**仍生效 ⇒ 坏的是"视觉抓取态"，不是内核手势）。
+
+**定位（`scripts/_dbg-control-grab.mjs`，只读诊断，**不用重建**）**：
+`pointerdown` 确实到了 window（`isPrimary=true`、坐标正确）、`hs-hide-clip-actions` 也派发了
+（`hideCount=1`）⇒ `onDown` 跑到了 hide 那一步；但 `data-hs-control-dragging` 恒 `null`、
+`data-hs-control-mode` 恒 `none` ⇒ **`setGrab` 没执行**。
+
+**根因**：我把 `onDown` 里原来的**容器**判据换成渲染作用域的 `dotPressable(baseX)`，
+而 `onDown` 所在 `useEffect(…, [])` **只注册一次** ⇒ 闭包里的 `dotPressable` 是**首帧**那个，
+`viewW = window.innerWidth` 也是首帧读的（首帧布局未就绪 ⇒ 极小）⇒ `x <= viewW − DOT_R` 恒假 ⇒ 提前 return。
+
+**修**：副作用内**现场读** `window.innerWidth`，不跨作用域复用。（修后诊断：`mode` 在上划第 2 步转 `fade`、
+圆点 `top` 121 → 77 进了上横轨 ⇒ 视觉抓取态恢复。）
+
+> 🕳️ **纪律（可复用）**：`useEffect(…, [])` 的处理器里**不要**调用组件作用域里"靠 render 才新鲜"的
+> 函数/常量（尤其 `window.innerWidth` / `getBoundingClientRect` 这类）。要么现场读，要么放 ref。
+> 渲染路径里用同一个函数是安全的（每次 render 都重建）。
+> 另：**诊断这条根本不用改产品代码重建** —— 一个只做"装 window 捕获监听 + 读 DOM 属性"的小脚本几分钟就定位到了。
+
+### 🆕 #7 精修：夹取量的是**动画缩放态** ⇒ 底边仍溢出 7~12px（已修，第 3 版构建验证）
+
+诊断脚本 `scripts/_probe-e41-clipmenu-landscape.mjs`（**用 CDP 视口覆盖模拟矮视口 `--vh 752x360`**，
+不动设备的自动旋转设置 —— 避免上次那个副作用）。第 2 版构建上的读数：
+
+| 场景 | `top` | `bottom` | `vh` | 溢出 |
+| :--- | ---: | ---: | ---: | ---: |
+| 竖屏（`max-height=700`） | 143 | 720 | 708 | **12px** |
+| 矮视口（`max-height=352`） | 15 | 367 | 360 | **7px** |
+
+**根因**：夹取用 `getBoundingClientRect()`，而**入场动画 `hs-fade-in` 带 `scale(0.98)`**，
+`getBoundingClientRect()` **包含 transform** ⇒ 量到的是**缩放态**高度：
+`352 × 0.98 = 345 ⇒ top = 360 − 345 = 15`；`577 × 0.98 = 565 ⇒ top = 708 − 565 = 143` —— **两个数都对得上**。
+
+**修**：改量**布局盒** `el.offsetWidth / el.offsetHeight`（与 transform 无关）。
+
+**第 3 版构建实测**（arm64 / 221deeb / 装机 16:46:03，包 16:40）：`_probe-e41-clipmenu-landscape.mjs --vh 752x360`
+→ **4 / 4** ✅：`top=8 · bottom=360（= 视口底，零溢出）· height=352 = vh−8 · maxHeight=352px · overflowY=auto ·
+scrollH 575 > clientH 350`（超出的菜单项由内部滚动承接 ⇒ **最后一项也点得到**）。
+
+> ⚠️ 探针也踩了一个坑：**视口覆盖必须在"打开菜单之前"生效** —— 菜单若是在旧视口下挂载的，
+> `useLayoutEffect([x, y])` **不会因视口变化重跑** ⇒ `max-height` 停在旧值（第一版探针就是这么误判成"红"的）。
+> 现已改成 `--vh` 在启动时就覆盖。
+
+### ⏳ CP2 遗留（**判为既存，非本轮引入**，待下一轮）
+
+`CP2 圆点长按 700ms + **上划** ⇒ 淡入淡出时长变化` 在本轮**两次构建里都红**（`ΔfadeIn=0`）。
+判据：① 本轮所有改动只碰 **DOM 覆盖层**（几何 / 门控 / 抓取态），**不碰内核手势**；② CP2b（图标态=fade）
+修后已转绿、CP3（下划 ⇒ rate）一直绿 ⇒ 上/下划的通路本身是通的；③ 文档记录的 8/9 出自 **10-03 20:52** 那个包，
+此后 E40 / E40b / E41-1 都改过 `ClipControlPoints`。
+**已排除"方向"嫌疑**：用左圆点上划进 fade 轨后**向右**（往块内）拖满 60px ⇒ 圆点 `dragging=1`、`mode=fade`，
+但提交后 `fadeInSec` 仍为 0 ⇒ **不是"从 0 往负方向拖被钳"**，是真的没提交。
+下一轮第一步：在**旧包**上复跑同一条，确认它是从哪一轮开始红的（先别改产品）。
+
+> 🕳️ **探针自身两个 bug（都先红后修，别急着改产品）**：
+> ① `_probe-e41-multiselect.mjs` 的 `rightMost` 排序方向取反（`sort((a,b)=>a.right−b.right)[0]` 拿到的是**最左**块）
+>    ⇒ 误报"右圆点位置错"；且圆点按设计本就外移 `DOT_R+3=10px`，期望值要带上。
+> ② `_probe-e41-twofinger-slip.mjs` 的 D 用例平移方向选反（起始 `scrollLeft=0`，**向右**拖被钳住 ⇒ 假红）；
+>    改**向左**拖立刻绿。
+
+### #3 文件浏览器窗口拖窄时内容盖住状态栏 —— 已定位，**待复现后改**
+
+- **状态栏** = App 根列里的那条（`App.tsx:4894`，`h-6`＝24px 固定高，位于 `MobileBottomBar` 之后）。
+- **根因（静态分析）**：文件浏览器所在的面板块 `[data-hs-pane="files"]`（`App.tsx:4793`）是
+  `flex-1 min-h-0 relative`（**无 `overflow`**），而 `FileBrowserPanel` 的根（`:925`）是
+  `flex-col h-full`，内部有**多条 `shrink-0` 固定行**（表头 `h-8` `:934`、`:981`、`:1105 min-h-[28px]`、
+  页脚 `:1247`）。被拖矮到**低于这些固定行之和**时，`min-h-0` 只让中间那个 `ScrollArea`（`:1128`）
+  缩到 0，固定行仍撑住内容盒 ⇒ 内容**向下溢出**面板、画到状态栏上。
+- **改法（下一轮）**：给面板块加 `overflow: hidden`（Radix 弹层是 portal 到 body 的，不会被裁）。
+  ⚠️ 纪律：**先真机复现**（`hifishifter.mobileLowerWeights` 可把 files 权重压到很小时重建面板；
+  注意取值必须 `> 0.05`），再决定是裁面板块还是给 `ScrollArea` 外层加 `min-h-0`。
+- **注意**：#3 需要**再一次构建**（本轮构建已过 vite 阶段）—— ✅ **已在第三轮做完，见下**。
+
+---
+
+## E41 第三轮（2026-10-04 17:28–）：用户 4 条 —— 多选控制点 / #6 / 文件窗 / 横屏叉
+
+用户口径：①「**多选音频块批量处理的控制点用不了**」②「**#6 实测失败（始终平移）**」
+③「文件浏览器窗口拖到很窄时，内容会盖在状态栏上」④「**横屏下参数界面左上角没有叉**」。
+
+### ④ 横屏叉 —— CSS 媒体查询漏改（上一轮只审了 JS 的 `<600`，这是**同源遗漏**）
+
+`index.css` 有两处写死 600 的断点，而形态判定是 `resolveLayoutMode(w) = (w < 1280 ⇒ phone)`：
+
+| 选择器 | 原写法 | 横屏（≈752）后果 |
+| :--- | :--- | :--- |
+| `.hs-param-close`（**参数界面左上角的叉**） | `@media (max-width: 599px){display:inline-flex}` | 条件不成立 ⇒ **叉被隐藏**（用户报的就是它） |
+| `.hs-panel-close`（分屏四块各自的叉） | `@media (min-width: 600px){display:none}` | 被判成"桌面" ⇒ 四块的叉一起消失 |
+| `.hs-menu-shortcut`（快捷键提示） | 在 `max-width:599` 里 `display:none !important` | 横屏反而**显示**出来（D1 的横屏回归） |
+
+⇒ 断点统一改 `1279px` / `1280px`，与 `isMobileShell()` **同一个口径**。
+
+**判据** `scripts/_probe-e41-shell-breakpoint.mjs`：往 body 注入同 class 元素读 `computed display`，
+在 360 / 752 / 1400 三种宽度下断言（**用 CDP 视口覆盖，不动设备旋转**）。
+
+| | 修复前（包 16:46） | **修复后（包 18:18）** |
+| :--- | :--- | :--- |
+| 横屏 752：参数叉 / 面板叉 | `display:none` / `display:none` ⇒ 🔴 | `inline-flex` / `flex` ⇒ ✅ |
+| 横屏 752：快捷键提示 | `inline`（该隐藏却显示）⇒ 🔴 | `none` ⇒ ✅ |
+| 竖屏 360 / 桌面 1400 | ✅ | ✅ |
+| **合计** | 3 / 6 | **6 / 6** ✅ |
+
+### ③ 文件窗盖状态栏 —— 面板块缺 `overflow`
+
+`[data-hs-pane]` 原来只有 `animation`、**没有 `overflow`**；面板根是 `flex-col h-full` + 多条
+`shrink-0` 固定行（文件浏览器 4 条）⇒ 被拖矮到低于"固定行之和"时，`min-h-0` 只能让中间滚动区
+缩到 0，固定行仍撑住内容盒 ⇒ **向下溢出画面板**，画到下面的底栏 / 状态栏上。
+**修**：`[data-hs-pane] { overflow: hidden }`（浮层不受影响：Radix 弹层 + 三个块覆盖层都
+portal / 挂在 **App 根层**，不在面板块的裁剪盒里）。
+
+**判据** `scripts/_probe-e41-pane-clip.mjs`：往面板块塞一个 2000px 的绝对定位子元素，
+用 **`elementsFromPoint` 成员判定**看它有没有画到面板底边之下。
+
+| | 修复前 | **修复后** |
+| :--- | :--- | :--- |
+| C1 面板块 `overflow` | `visible/visible` 🔴 | 非 visible ✅ |
+| C3 对照（面板**内**能看到探针） | ✅ | ✅ |
+| C2 面板**底边之下**仍能看到探针 | `belowHasProbe=true` 🔴（= 溢出到状态栏） | `false` ✅ |
+| **合计** | 1 / 3 | **3 / 3** ✅ |
+
+> 🕳️ 判据自身的坑：`elementFromPoint` 只给**最顶层**元素，而面板块自己的内容画在探针之上
+> ⇒ 拿不到探针、"对照"永远红。必须用 **`elementsFromPoint`**（成员判定，且它**尊重裁剪**）。
+
+### ① 多选控制点"用不了" —— 圆点画在容器之外 ⇒ 触摸到不了内核 canvas
+
+`_probe-e41-multiselect.mjs --at 0`（最左块贴容器左缘）实测：左圆点 `cx=122`
+（**容器左 132 之外 = 压在轨道头列上**），拖它 ⇒ **两块都没变**（`变化块数=0`）；
+同一判据在 `--at 1.0` 时 **5/5 全绿**。⇒ 与用户"用不了"完全对上。
+
+**根因**：E41-1 把 `dotPressable` 放宽到视口，圆点**画得出来**了，但**交互仍走内核 canvas**，
+`x < 容器左` 的触摸被**轨道头**接收、内核根本收不到 ⇒ "看得见、按不到"
+（违反项目自己的约定「浮层看得见就按得中 / 按不到就干脆不画」）。
+
+**修法（最小侵入，不需自实现拖拽语义）**：只给"画在容器之外"的圆点加一层**自己的命中区**
+（44×44、`touch-action:none`），起手时把这一下 `pointerdown` **转发**给内核容器
+（`[data-hs-fade-tooltip-anchor]`，host 自己打的标记）。只需转发**起手**的理由：
+内核的 `pointermove/pointerup/pointercancel` 本来就绑在 **window** 上，且它会在自己的
+`onPointerDown` 里 `container.setPointerCapture(pointerId)`（抓的是**真实指针 id**）
+⇒ 之后真实移动自动回到内核手里。
+
+| 场景 | 修复前 | **修复后** |
+| :--- | :--- | :--- |
+| `--at 1.0`（块不在左缘） | 5 / 5 ✅ | **5 / 5** ✅ |
+| `--at 0`（块贴容器左缘，左圆点在轨道头列上） | 4 / 5 🔴（M3 变化块数 0） | **5 / 5** ✅ |
+
+### ② #6「始终平移」—— A3 监听只挂容器 ⇒ 收不到第二指（且收到了合成 cancel）
+
+`scripts/_dbg-twofinger-gate.mjs` 扫描（块 404px 宽、两指相距 20px、y 固定；容器 `left=132 width=228`）：
+
+```
+修复前：        x=140:P 156:P … 316:P 332:. 348:.   ⇒ 放行 [140,316]
+（改动中间态）：x=140:. … 316:. 332:P 348:.          ⇒ 只放行 [332]   ← 见下面"合成事件"
+修复后：        x=140:. 156:P 172:P … 316:P 332:P   ⇒ 放行 [156,332]（覆盖整块 + 右侧越界带）
+```
+
+**两层根因**：
+
+1. **收不到第二指**：第二指常落在**容器右侧的兄弟元素**上，而 A3 的监听只挂**容器**
+   ⇒ `tapIds` 永远到不了 2 ⇒ 长按不成立 ⇒ **始终平移**。
+   （`elementFromPoint(324,105)` 的顶层恰好是容器本身，是"事件到了"的**假象** —— 只有第一指到了。）
+   ⇒ 监听**改挂 `window` + 捕获阶段**（必须捕获：`TwoFingerGestureController` 在第二指落下时
+   `stopPropagation()`，冒泡到不了 window）；范围由 `onTwoDown` 里
+   `closest('[data-hs-pane="timeline"]')` 收窄。这正是 `touchGesture.attachSurface` 注释里那条
+   教训（"两套独立监听各只看到一个指针 ⇒ 什么都判不出"）。
+2. **改挂 window 后收到了"合成事件"**：`TwoFingerGestureController.abortPointer`（1→2 指过渡，
+   `docs/08 §4.1`）会在 window 上派发**合成的 `pointercancel` + `pointerup`**
+   ⇒ 第一指被剔出 `tapIds` ⇒ 长按永不成立（上面"中间态"只有 332 放行就是它）。
+   ⇒ `onTwoUp` / `onTwoCancel` **忽略 `!e.isTrusted`**。
+   ⚠️ 同一过滤也必须加在 `onTwoDown`：**#2 的"转发"正是派发合成 `pointerdown`**
+   ⇒ 否则同一个 pointerId 会被记两次、伪造出"双指"、把单指拖控制点劫持成调偏移。
+
+另：门控**放宽**为 **【至少一指命中块】且【两指不分别命中两个不同的块】**（原来要求"两指严格同块"，
+对手指太苛刻：块可能只有几十 px 宽 —— 用户实测就卡在这）。
+
+| 判据 | 结果 |
+| :--- | :--- |
+| `_dbg-twofinger-gate` 落点扫描 | 放行区间 **[156,332]** ✅（修复前 `[140,316]`） |
+| `_probe-e41-twofinger-slip` **D 对照**（两指**不同块**） | ✅ 不 slip、不点 alt、`scrollLeft 0→59.7` **视口仍平移**（放宽门控没把正常缩放/平移吞掉） |
+
+### ✅ 第三轮真机汇总（arm64 / 221deeb / 装机 18:19:09，包 18:18）
+
+| 条 | 判据 | 结果 |
+| :--- | :--- | :--- |
+| ④ 横屏叉 | `_probe-e41-shell-breakpoint` | **6 / 6** ✅ |
+| ③ 文件窗画到状态栏 | `_probe-e41-pane-clip` | **3 / 3** ✅ |
+| ① 多选控制点 | `_probe-e41-multiselect`（`--at 1.0` 与 `--at 0`） | **5 / 5** + **5 / 5** ✅ |
+| ② #6 始终平移 | `_dbg-twofinger-gate` 扫描 + `_probe-e41-twofinger-slip --only D` | 放行 **[156,332]**；D ✅ |
+
+护栏：`tsc -b` **0 错** · regen + verify = **114 文件逐字节零漂移**（每版都跑）。
+
+---
+
+## E41 第四轮（2026-10-04 18:33–）：控制点"迅速下划"仍裁剪 + #6 真机专属根因
+
+用户口径：①「**按控制点迅速下划，图标会变、但模式仍是裁剪而非拉伸**」，
+并给出修法：「**修改长按控制点的时间阈值为 0**」；②「#6 我测试依旧失败」。
+
+### ① 迅速下划 = 裁剪（不是拉伸）—— 内核两段式的等待门与浮层图标口径不一致
+
+**内核侧**（`kernel/host/timelineKernelHost.ts`）：触屏按下在 `left-edge`/`right-edge` 上时
+启动"两段式"候选；`TOUCH_EDGE_HOLD_MS`（原 **200**）**没到点之前**只要位移超过
+`DRAG_THRESHOLD_PX` 就**作废长按候选、降级成普通裁剪**（`!edge.fired` 分支）。
+**浮层侧**（`ClipControlPoints`）：图标只看 `dy`（`MODE_THRESHOLD_PX=18`）**没有时间门控**
+⇒ 于是"按下 → 立刻下划"：**图标显示'变速'、内核实际在裁剪** —— 正是用户看到的现象。
+
+**修**（照用户的方案）：`TOUCH_EDGE_HOLD_MS = 200 → **0**`，且阈值 0 时**同步** `fired = true`
+（不走 `setTimeout(…, 0)`：否则"按下→立刻下划"的第一个 move 可能抢在定时器之前到，
+又落回那条降级分支）。防误判的主力本来就是 `EDGE_KIND_LOCK_PX = 8` 的**纵向定型**：
+纯横拖（|dy|<8）仍走裁剪，先竖后横才定型成淡变/拉伸。
+
+**判据** `scripts/_probe-e41-edge-dir.mjs`（区分"改了什么"：拉伸 = **rate 变 + 源窗口不变**；
+裁剪 = **几何/源窗口变 + rate 不变**）：
+
+| 判据 | 修复前（包 18:18） | **修复后（包 18:52）** |
+| :--- | :--- | :--- |
+| **E1 立即下划**（无等待） | 🔴 `rate 1→1`（没变）、源窗口 `0→0.446` ⇒ **实际是裁剪** | ✅ `rate 1→1.245`、源窗口 `0/2→0/2` ⇒ **拉伸** |
+| E2 立即横拖 | ✅ 裁剪 | ✅ 裁剪（没把裁剪弄丢） |
+| E3 立即上划 | — | ✅ `fadeIn 0→0.492`（淡变路径活着） |
+| **合计** | 1 / 2 | **3 / 3** |
+
+### ② #6 真机专属根因：**Android 的原生长按把 touch 序列 cancel 掉**
+
+用户报「#6 测试依旧失败」、且反复提到"**出现震动**" —— 而 **A3 自己没有任何震动代码**。
+⇒ 那次震动是 **Android WebView 自己的长按**（页面没 `preventDefault` touchstart 时，
+按住 ~500ms 它会走原生长按手势）。它会
+ ① 给一次**长按震动**；
+ ② 把这一条 touch 序列 **cancel** ⇒ 之后收不到 `touchmove` ⇒
+    `TwoFingerGestureController` 与内核手势当场死掉，用户看到的就是"**震一下、然后平移**"。
+
+🔴 **CDP 的合成触摸不触发 Android 的原生长按** ⇒ **任何探针都复现不了这条**
+（这正是"探针全绿、真机全红"的来源）。
+
+**修**：与轨道头"长按并划动"同一套办法（那里也是"原生 touch + `passive:false` + `preventDefault`"）——
+`window` 捕获阶段挂 `touchstart`（`passive:false`）：**第一指落在时间线面板内**即武装，
+序列到 **≥2 指**就 `preventDefault()`，抬手复位。只对 ≥2 指生效 ⇒ 单指的一切
+（含长按菜单 / 拖动 / 控制点）完全不受影响。
+
+### 🔧 顺带修掉一条"假红"：`_probe-control-point.mjs` 的 CP2 横滑方向写反
+
+`CP2`（上划 ⇒ 淡变）一整天都红。实测：它的横滑 dx 是**负**的（向块外），而淡变时长从 0 起算
+⇒ **向外拖只会被钳在 0** ⇒ 恒无变化（与之前 #6 的 D 用例、"向右拖看不出平移"是同一类坑）。
+改成"**横滑方向指向块内**"（左端点向右 / 右端点向左）后：
+
+| `_probe-control-point.mjs` | 修复前 | **修复后** |
+| :--- | :--- | :--- |
+| 通过数 | 6 / 7 + 1 不可判（**CP2 红**） | **7 / 7 + 1 不可判** ✅ |
+
+### ✅ 第四轮真机汇总（arm64 / 221deeb / 装机 18:53:25，包 18:52）
+
+| 判据 | 结果 |
+| :--- | :--- |
+| `_probe-e41-edge-dir`（立即下划/横拖/上划） | **3 / 3** ✅ |
+| `_probe-control-point`（控制点全回归） | **7 / 7 + 1 不可判** ✅ |
+| `_probe-e41-multiselect --at 0`（#2 抽验） | **5 / 5** ✅ |
+| `_dbg-twofinger-gate` 扫描（#6 抽验） | 放行 **[156,316]**（块内全覆盖）✅ |
+
+护栏：`tsc -b` **0 错** · regen + verify = **114 文件逐字节零漂移**。
+`accelerometer_rotation = 1`（本轮全程没动设备旋转，矮视口走 CDP `setDeviceMetricsOverride`）。
+
+---
+
+## 🔬 第五轮：#6 真根因 —— A3 的范围判定用错了坐标系（真机内核级触控取证）
+
+### 先更正一条**错误的推断**
+用户指出："双指长按后出现震动是**我的要求**、不是现象，实测**没有震动**"。
+核实：**`VIBRATE` 权限根本没在 AndroidManifest 声明** ⇒ `navigator.vibrate()` 在真机 WebView 里
+是**空操作**。⇒ 我上一轮据此推断"震动来自 Android 原生长按"**不成立**（该推断已作废）；
+**"没震动"不能作为"代码没跑到"的证据**。
+
+### 取证手段（新增，可复用）：`sendevent` 内核级真多点触控
+设备**已 root**（`su -c id` → uid=0）；触摸屏 `/dev/input/event6`（`touchpanel`，
+protocol B / SLOT，raw X 0..20224 / Y 0..44480，`dumpsys input` 的 RawToDisplay = ROT_0+SCALE）。
+⇒ 用 `sendevent` 注入**内核输入事件**，WebView 视作**真手指** ⇒ **能触发原生长按 /
+touch-action 接管 / 真实 `pointercancel` 时序**，这是 CDP `Input.dispatchTouchEvent` 永远做不到的。
+
+| 项 | 结论 |
+| :--- | :--- |
+| 可用协议形态 | `3 47 0 / 3 57 -1 / SYN` → `1 325 1`(BTN_TOOL_FINGER) → 逐指 `3 47 <slot>/3 57 <id>/3 55 0/3 53 X/3 54 Y/3 48 20` → `1 330 1`(BTN_TOUCH) → `SYN`。**必须发 `BTN_TOUCH`**：只发 MT 只产生 1 条事件；只发 `ABS_X/ABS_Y` 而不发 `ABS_MT_*` 产生 0 条 |
+| 🕳️ 坐标标定 | **WebView 视口顶 ≠ 屏幕原点**（原生 `applySafeAreaInsets()` 给 contentView 垫了状态栏）⇒ 实测 **CSS y 比 `屏幕y/dpr` 小 40**（请求 189 → 落到 149）；x 无偏移 |
+| 脚本 | `_dbg-touchsel.mjs`（注入器）· `_dbg-touchsel-probe.mjs`（协议变体扫描）· `_probe-e41-twofinger-real.mjs`（双指判据）· `_dbg-twofinger-live.mjs`（页内事件录制器 + 按 A3 规则回放，`--watch` 可常驻） |
+
+### 根因（真机轨迹铁证）
+块在容器左缘、有控制点时，内核双指注入（长按 600ms + 左拖 60px）得到：
+
+```
+轨迹 27；pointerdown 4（**被 A3 忽略 4**）；alt 点亮 = false；slip 通道事件 = 0；scrollLeft 84 → 144（= 平移）
+⚠️ 被 A3 忽略的 pointerdown：target=DIV on=ctrl-points+ctrl-point pane=false
+```
+
+- A3 的范围判定是 **DOM 祖先**：`target.closest('[data-hs-pane="timeline"]')`；
+- **E40 之后「常用功能浮条 / 控制点」都挂在 App 根层**（与 `SettingsOverlays` / `MobileBottomBar` 同级）
+  ⇒ `pane=false` ⇒ **A3 直接 return**；
+- 面板内的那两条 pointerdown 是 `#2` 转发的**合成**事件（`isTrusted=false`）⇒ 又被 `isTrusted` 过滤掉；
+- ⇒ **A3 拿到 0 个有效指针** ⇒ `tapIds` 到不了 2 ⇒ 长按永不成立 ⇒ **alt 永不点亮** ⇒ **始终平移**。
+
+这与用户口径逐字吻合：**"轨道界面的双指操作一直没进入『分析并按下 Alt』那一层"**。
+
+### 修法
+范围判定 **DOM 祖先 → 几何**（落在 `[data-hs-pane="timeline"]` 的 rect 内即可），
+只排除 `[data-hs-modal] / [role="dialog"] / [data-radix-popper-content-wrapper]`；
+`onTwoTouchStart` 的武装判定同步改几何（`TimelinePanel.tsx` 两处）。
+
+> 🔑 **可复用结论**：**浮层搬到 App 根层（E40）之后，"用 DOM 祖先判我在哪个表面"的守卫一律失效**
+> —— 这类守卫必须改**几何**（rect 成员判定）。同类已踩两次：E41-1 的浮层可见性、本轮 A3 的范围。
+
+#### 第二层（同一轮修掉）：slip 期间**同时抑制双指平移/缩放**
+内核级真触摸实测（修复后）：`alt=true`、**13 条 slipPreview**、源窗口 Δ={+0.4138, −1.5862} ⇒ **SLIP ✅**，
+但 `scrollLeft 0 → 60` ⇒ **视口同时也在平移**（`TwoFingerGestureController` 不知道 Alt 已点亮）。
+按用户口径"**其他情况**双指才解析为平移/缩放" ⇒ 进入 slip 时必须抑制。
+修法：`touchGesture.ts` 加模块级 `setTwoFingerGestureSuppressed()`，`onPointerMove` 在抑制期
+跳过 `this.update()`；A3 在点亮 Alt 时置真，`onTwoUp` / `onTwoCancel` / effect 清理置假。
+
+另把范围判定的边界收严：`if (paneRect === null) return;`（面板不存在 = 桌面布局 ⇒ 不接管，
+与原来 DOM 判定的保护面等价）。
+
+#### ✅ 最终真机复验（arm64 / 221deeb / 装机 20:04:33，包 19:53；内核级真触控注入）
+
+| 判据 | 修复前（包 18:18） | 修复后（包 19:37） | 最终（包 19:53） |
+| :--- | :--- | :--- | :--- |
+| pointerdown / **被 A3 忽略** | 4 / **4** | 2 / **0** | 2 / **0** |
+| `alt` 点亮 | ❌ | ✅ | ✅ |
+| slip 通道事件 | 0 | 13 | **13** |
+| 源窗口 Δ | {0, 0} | {+0.4138, −1.5862} | **{+0.4138, −1.5862} ⇒ SLIP ✅** |
+| `scrollLeft` | 84 → 144（=平移） | 0 → 60（**slip 时仍平移**） | **0 → 0（已抑制）✅** |
+
+- 场景 A（块在容器左缘、有控制点）与**场景 B（显式先选中块 ⇒ 控制点=2 在场）**均 **SLIP ✅**。
+- 回归：`_probe-e18-gesture-law` **22 / 22 ✅**（平移/缩放/惯性未受影响）·
+  `_probe-e41-twofinger-slip --only D` **✅**（两指**不同块** ⇒ 不点亮 alt、不 slip，**视口仍平移** `scrollLeft 0 → 59.7`）。
+
+---
+
+## 🔬 E41 第六轮（2026-10-04 21:0x–21:4x）：#6 的**真根因** —— 长按候选被"真手指微抖"必然作废
+
+### 用户口径（本轮澄清，逐字）
+
+> 「我描述不准确：**震动是需求、不是现象**，实际现象是**双指操作永远等于缩放/平移**，
+>  双指数据可能根本没传入『分析是否按 Alt』那一步。」
+
+⇒ 现象**不是**"震一下、然后失效"，而是 **虚拟 Alt 从来没被点亮过** —— 双指从没进入 A3 的
+slip 分支。这把第五轮的结论**收窄**了：几何范围判定（DOM 祖先 → rect 成员）确实错过、
+也确实是**必要条件**（已修，探针至今全绿），但它**不是**"永远等于平移/缩放"的根因 ——
+因为它在第五轮之后仍是这个现象。
+
+### 真根因：候选作废判据 `任一指针相对按下点位移 > 8px`
+
+A3 的长按候选期（第二指落下 → 500ms 到点）原本逐帧执行：
+
+```js
+if (Math.abs(e.clientX - st.x) > 8 || Math.abs(e.clientY - st.y) > 8) {
+    twoMoved = true; clearTwoTimer(); clearTouchModifiers();   // ⇒ 长按永不成立
+}
+```
+
+**真手指按住 0.5s 时，触屏仍以 ~120Hz 持续上报 `MOVE`**，指尖质心漂移几 px 是常态
+⇒ 该判据**几乎必然**命中 ⇒ `clearTwoTimer()` 把长按掐死 ⇒ `setTouchModifiers({alt:true})`
+永远不执行 ⇒ 双指照旧走 `TwoFingerGestureController` = **平移/缩放**。
+
+这也解释了"**CDP 探针永远绿、真机永远红**"：`Input.dispatchTouchEvent` 是**离散**的，
+`hold` 期间一帧 MOVE 都不发 —— 探针里那个 8px 判据自然永不触发。
+
+### 取证工具（新增，可复用）：`scripts/_dbg-slip-points.mjs`
+
+内核级真触控（`sendevent`，WebView 视作真手指）+ **抖动幅度扫描**：
+
+```bash
+node scripts/_dbg-slip-points.mjs --serial 221deeb --points "0.4:0.6" --jitter 9
+#   --jitter N ：长按期间两指每 60ms 正负交替抖 N 个 CSS px（真手指的常态）
+#   --intent hold|scale|pan|twoClips ：按住不动 / 缩放意图 / 平移意图 / 两指不同块
+#   --reset ：先重启应用（复位视口；未 reset 时上一轮手势会把块滚出落点 ⇒ 假绿）
+```
+
+**修复前（包 21:11 之前）**：
+
+| 长按期间抖动 | `alt` | slip | 视口 |
+| :--- | :--- | :--- | :--- |
+| 0px（既有探针口径） | ✅ | SLIP ✅ | 不动 |
+| **4px** | ❌ | 未 slip ❌ | **平移 `scrollLeft 0 → 60`** |
+| 9px / 15px | ❌ | 未 slip ❌ | 平移 |
+
+⇒ **4px 就足以复现用户的"永远等于平移/缩放"**（`--jitter 4` 是最小复现）。
+
+### 修法（4 处，鼠标/笔路径逐字不变）
+
+1. **判据换成双指的两个自由度**（真根因修复）：从"任一指针相对按下点位移 > 8px"改成
+   `中点位移 > MID_SLOP_PX(16)` **∨** `两指间距变化 > SPREAD_SLOP_PX(24)`
+   —— 正是 E18 解算的两个自由度（中点 = 平移、间距 = 缩放）。微抖不再作废候选，
+   真正的缩放（张合）与平移（中点同向移动）照样取消 ⇒ `#41`「双指拖动 vs 双指长按互斥」
+   的原意保留，只是判据换成语义正确的量。
+   抽成纯函数 **`components/layout/timeline/hooks/twoFingerHold.ts`** + **15 条单测**
+   （含"4px / 9px 微抖不得作废""同向 30px 平移 ⇒ 作废""中点不变张合 32px ⇒ 作废"）。
+   阈值取值依据写在模块注释里：真手指按住时合成位移实测上界 ≈ 12.7px（两轴各 9px），
+   而真实缩放手势 0.5s 内至少张合 60px 以上 —— 16 / 24 把两者干净分开还留余量。
+2. **长按到点复核**：`pointermove` 可能被**合并 / 稀疏化**（注入实测：步长越密、
+   500ms 内送达的位移反而越少）⇒ 到点那一刻再用**最新位置**判一次同一函数。
+   没有这一条时，同一注入序列会**时红时绿**。
+3. **门控改回用户口径的「严格同块」**：上一轮曾放宽成"至少一指命中块"（理由：块窄时
+   "两指严格同块"太苛刻）。本轮按用户重申的口径改回 **两指都必须 hitTest 命中同一个
+   clip**；并对"块可能只有几十 px"这条顾虑给出反证：**块宽 38px 时两指相距 8px 即可**
+   （`_dbg-slip-points.mjs`：块 `[143,+38]`、指1=158、指2=166 ⇒ SLIP ✅）。
+4. **`android.permission.VIBRATE`**（"震动是需求"却从来没人震过的真因）：
+   前端多处"长按到点"都调 `navigator.vibrate(12)`（增益旋钮 / 文件浏览器拖拽 /
+   轨道菜单 / 本条的 slip），但 Manifest 里**从没声明过**这个权限 ⇒ WebView 里
+   `navigator.vibrate()` 是**空操作**（返回 false、不报错、无异常）⇒ 体感就是"按了没反应"。
+   取证：`adb shell dumpsys package com.arounder.hifishifter | grep permission` 当时只有
+   INTERNET / RECORD_AUDIO / MANAGE_EXTERNAL_STORAGE。
+   VIBRATE 属 **normal 权限：声明即生效**，无需运行时申请。
+   落点：`scripts/setup-gen-android.sh` §10（幂等注入）+ `gen/android/.../AndroidManifest.xml`
+   （gen/ 会被 `tauri android init` 抹掉，所以两处都要有）。
+   APK 侧复核：`aapt2 dump permissions` 与装机后 `dumpsys package` 均有
+   `android.permission.VIBRATE: granted=true`。
+
+### ✅ 真机实测（arm64 / 221deeb / 装机 21:19:02，包 21:18；**内核级真触控**）
+
+| 用例 | 期望 | 结果 |
+| :--- | :--- | :--- |
+| 两指**同块** + 按住不动（`--jitter 0`） | slip | ✅ `alt=Y`、slip 事件 13、`SLIP ✅` |
+| 两指**同块** + **微抖 4px**（修复前 ⇒ 平移） | slip | ✅ `alt=Y`、slip 事件 27、`SLIP ✅` |
+| 两指**同块** + **微抖 9px**（修复前 ⇒ 平移） | slip | ✅ `alt=Y`、slip 事件 25、`SLIP ✅` |
+| 明显移动（`--jitter 15`） | 平移 | ✅ `alt=n`、0 条 slip 事件、**视口动 `scrollLeft 38→83`** |
+| 快速**平移**手势（`--intent pan`，travel 200） | 平移 | ✅ `alt=n`、0 条 slip 事件 |
+| 快速**缩放**手势（`--intent scale`） | 缩放 | ✅ `alt=n`、0 条 slip 事件 |
+| 两指落在**不同块**（`--intent twoClips`） | 平移/缩放 | ✅ `alt=n`、0 条 slip 事件、视口动 |
+| 两指**都不在块上**（`--dy 3` 落空白） | 平移 | ✅ `alt=n`、0 条 slip 事件、**`scrollLeft 0 → 60`** |
+
+- 每一条都记录了 **`down=2`（两个 trusted `pointerdown` 都到了）** ⇒ "不 slip"是**判据判出来的**，
+  不是"压根没收到双指"。
+- **双指手势无回归**（两条独立通道）：
+  · 内核级真触控：块外落点两指同向移动 ⇒ `scrollLeft 0 → 60`；
+  · CDP：`touch-drive.mjs pinch 246 321 40 140 600` ⇒ **`pxPerSec 18.972 → 68.424`**。
+- **既有判据回归** `_probe-e41-twofinger-slip.mjs` **6 / 6 ✅**
+  （C 单指拖块 / A 内核通道 / B 同块+预选 / Bp 同块不预选 / Bc 合成 contextmenu / D 两指不同块）。
+- **护栏**：`tsc -b` **0 错** · `vitest` **1085 passed / 1 failed**（失败那 1 条是
+  `buildTimelineTicks.windowing.test.ts` 的 5s 超时，并行负载下才超；单独跑 **3/3 通过**。
+  另有 **10 个 `sessionSlice.*` 测试文件**在收集阶段就报 `localStorage is not defined`
+  —— 环境缺失，单独跑同样失败，与本轮改动无关） ·
+  `regen-frontend-patch.sh` + `verify-patches.sh` = **116 文件逐字节零漂移**（5 个补丁全部干净重放）。
+
+> 🕳️ **本轮踩到的两个构建环境坑（已修，见 `docs/17`）**：
+> ① `build-apk.ps1` 在 DSH 会话里报 `ProgramData environment variable isn't set`
+>   （tauri-cli 探测 Android 环境要读它，会话把它剥掉了）⇒ 脚本内补标准值；
+> ② **`edit` 工具写 `.ps1` 会丢掉 UTF-8 BOM** ⇒ Windows PowerShell 按 ANSI 读取
+>   脚本里的中文 ⇒ 满屏 `Unexpected token`。改完 `.ps1` 必须复核首三字节是 `EF BB BF`。
+
+> 🔑 **可复用结论**：**"手指按住不动"在真机上不是一个"零位移事件源"。**
+> 任何用"按下点位移"判"用户在按还是在动"的门控，都必须按**手势自由度**
+> （双指 = 中点 + 间距；单指 = 净位移）而不是"任一指针位移"来写，否则
+> **CDP 探针永远绿、真机永远红**（合成触摸不发 hold 期间的 MOVE）。
+> 本轮之前 A3 有 3 次"已修 + 探针通过"却没有一次修到这条上 —— 三次都栽在
+> "探针复现不了真手指的**事件密度**"。

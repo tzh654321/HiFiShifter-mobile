@@ -33913,10 +33913,10 @@ index 00000000..8abd4e35
 +    );
 +}
 diff --git a/frontend/src/components/layout/TimelinePanel.tsx b/frontend/src/components/layout/TimelinePanel.tsx
-index 242997f5..bc8a3a69 100644
+index 242997f5..a0f458ab 100644
 --- a/frontend/src/components/layout/TimelinePanel.tsx
 +++ b/frontend/src/components/layout/TimelinePanel.tsx
-@@ -1,6438 +1,7236 @@
+@@ -1,6438 +1,7446 @@
 -/**
 - * TimelinePanel — Timeline 面板 UI 组件（精简后）
 - *
@@ -40475,6 +40475,10 @@ index 242997f5..bc8a3a69 100644
 +    showMobilePanel,
 +} from "../../features/session/sessionSlice";
 +import { beginSnapGesture, endSnapGesture } from "../../utils/timelineSnapping";
++/* E41-4（用户 2026-10-04）：手机门控统一走 `isMobileShell()`（**横屏也算**）。
++   原来这里自己写 `< 600` 并注释说"与 layoutMode 口径一致" —— 其实 layoutMode 是 **1280**，
++   所以横屏（宽 ≈800）下"双击轨道展开编辑"直接失效。 */
++import { isMobileShell } from "../../utils/layoutMode";
 +import { batch } from "react-redux";
 +import { moveClipRemote, moveClipsRemote } from "../../features/session/thunks/timelineThunks";
 +import { computeTimelineRectSelection } from "./timeline/useTimelineSelectionRect";
@@ -40586,8 +40590,14 @@ index 242997f5..bc8a3a69 100644
 +    type StretchRangeMapping,
 +} from "./timeline/hooks/stretchParams";
 +import { computeSlipWindow, readSlipClip, toBoundarySnapClip } from "./timeline/hooks/slipWindow";
++import { isHoldCancelledByMotion, twoFingerStat } from "./timeline/hooks/twoFingerHold";
 +import { IS_ANDROID } from "../../utils/platform";
-+import { TwoFingerGestureController, suppressTwoFingerScroll, type GestureViewport } from "./touchGesture";
++import {
++    TwoFingerGestureController,
++    suppressTwoFingerScroll,
++    setTwoFingerGestureSuppressed,
++    type GestureViewport,
++} from "./touchGesture";
 +import {
 +    computeCrossfadeGrip,
 +    type CrossfadeGripClipBase,
@@ -40872,6 +40882,17 @@ index 242997f5..bc8a3a69 100644
 +     * 落地「参数编辑器视图同步」（内核模式没有原生 scroller 可写）。
 +     */
 +    const kernelHostRef = React.useRef<TimelineKernelHost | null>(null);
++
++    /**
++     * #6 / A3：**双指手势进行中**（≥2 指落在时间线容器上）。
++     *
++     * 为什么要它：Android 的 WebView 在按住 ~500ms 时会派发**原生 `contextmenu`**
++     * （并伴随一次长按震动），而内核的 `handleKernelContextMenu` 会立刻弹出音频块菜单
++     * ⇒ 与「双指长按并划动 = slip」（`docs/15` 音频块列）撞车：用户看到的是
++     * 「震了一下、菜单冒出来、拖动没反应」。双指在手时不可能是在"要菜单"
++     * （单指长按才是），因此此时直接吞掉原生菜单。
++     */
++    const twoFingerActiveRef = React.useRef(false);
 +
 +    /**
 +     * 内核运行期失败的原因（`null` = 未失败）。
@@ -41184,7 +41205,8 @@ index 242997f5..bc8a3a69 100644
 +                   （规格表这两列都写「展开全屏编辑」）。 */
 +                const timelineContainer = host.getContainer();
 +                const onTrackDblClickPhone = () => {
-+                    if (window.innerWidth >= 600) return; // 只手机
++                    // E41-4：`isMobileShell()`（横屏也算手机）—— 原来写 `< 600`，横屏失效。
++                    if (!isMobileShell()) return; // 只手机
 +                    dispatch(showMobilePanel("params"));
 +                };
 +                if (timelineContainer) {
@@ -41256,20 +41278,68 @@ index 242997f5..bc8a3a69 100644
 +                        if (xs.length === 0) return 0;
 +                        return xs.reduce((sum, x) => sum + x, 0) / xs.length;
 +                    };
-+                    /** 长按到点：记住"哪一块要被 slip"（命中用内核自己的 hitTest，不另写一套）。 */
-+                    const beginSlip = () => {
-+                        const p0 = tapStart.get(tapIds[0]);
++                    /**
++                     * 两指的「中点 + 间距」—— 双指手势的**两个自由度**（E18：中点 = 平移、
++                     * 间距 = 缩放）。纯函数在 `twoFingerHold.ts`（含真机根因说明与单测）。
++                     */
++                    const twoStat = (
++                        src: Map<number, { x: number; y: number }>,
++                    ): ReturnType<typeof twoFingerStat> =>
++                        twoFingerStat(tapIds.map((id) => src.get(id)));
++                    /** 两指齐备那一刻的中点/间距（长按候选的基准）。 */
++                    let twoBase: ReturnType<typeof twoFingerStat> = null;
++                    /**
++                     * 长按到点：记住"哪一块要被 slip"（命中用内核自己的 hitTest，不另写一套）。
++                     *
++                     * 🔴 #6 门控（**用户口径**，2026-10-04 重申）：
++                     *   「双指要落在**同一个音频块**上才会触发调偏移，**其他情况**双指仍会被
++                     *     解析为平移/缩放」⇒ **两指都必须命中同一个 clip**，否则不接管。
++                     *
++                     * 为什么改回严格同块（上一轮曾放宽成"至少一指命中块"）：
++                     *   · 用户两次逐字给出同一口径 ⇒ 以用户口径为准，不做"更宽松"的发挥；
++                     *   · 放宽的副作用是"一指在块上、一指在空白/拍数栏"也进 slip —— 那正是
++                     *     用户说的"其他情况"；
++                     *   · 上一版放宽的理由是「块可能只有几十 px 宽 ⇒ 严格同块太苛刻」，
++                     *     但内核级真触控实测推翻了它：**块宽 38px 时两指相距 8px 即可**
++                     *     （`_dbg-slip-points.mjs`：块 `[143,+38]`、指1=158、指2=166 ⇒ SLIP ✅）。
++                     *
++                     * ⚠️ 注意本条**不是**"双指长按不生效"的根因 —— 根因是上面那个
++                     * 「任一指针位移 > 8px 就作废长按候选」的判据（真手指微抖必然命中）。
++                     * 两条一起修才与用户口径逐字吻合。
++                     *
++                     * ⇒ 返回是否成功进入 slip。
++                     */
++                    const beginSlip = (): boolean => {
 +                        const host = kernelHostRef.current;
-+                        if (p0 === undefined || host === null) return;
-+                        const hit = host.debugHitAt(p0.x, p0.y);
-+                        if (hit.kind !== "clip" || !hit.clipId) return;
-+                        slipClipId = hit.clipId;
++                        if (host === null || tapIds.length < 2) return false;
++                        let hitClipId: string | null = null;
++                        for (const id of tapIds) {
++                            const p = tapStart.get(id);
++                            if (p === undefined) return false;
++                            const hit = host.debugHitAt(p.x, p.y);
++                            /* 任一指没落在音频块上 ⇒ 不接管（维持平移 / 缩放）。 */
++                            if (hit.kind !== "clip" || !hit.clipId) return false;
++                            if (hitClipId === null) hitClipId = hit.clipId;
++                            /* 两指分别落在**两个不同**的块上 ⇒ 目标不明确，也不接管。 */
++                            else if (hit.clipId !== hitClipId) return false;
++                        }
++                        if (hitClipId === null) return false;
++                        slipClipId = hitClipId;
 +                        slipTrackId =
-+                            sessionRef.current.clips.find((entry) => entry.id === hit.clipId)
++                            sessionRef.current.clips.find((entry) => entry.id === hitClipId)
 +                                ?.trackId ?? "";
 +                        slipMidX0 = twoMidX();
 +                        slipSec = 0;
 +                        slipPreviewed = false;
++                        /* 进入 slip 震一下（与其它「长按并划动」手势一致；用户口径里的"震动"）。 */
++                        try {
++                            (
++                                navigator as unknown as { vibrate?: (p: number) => boolean }
++                            ).vibrate?.(12);
++                        } catch {
++                            /* 忽略：部分 WebView 无振动权限 */
++                        }
++                        return true;
 +                    };
 +                    const stepSlip = () => {
 +                        if (slipClipId === null) return;
@@ -41312,25 +41382,87 @@ index 242997f5..bc8a3a69 100644
 +                    };
 +                    const onTwoDown = (e: PointerEvent) => {
 +                        if (e.pointerType === "mouse") return;
++                        /* 🔴 #6：忽略**合成** `pointerdown`。
++                           两个来源：① `TwoFingerGestureController.abortPointer`（1→2 指过渡）；
++                           ② **`ClipControlPoints` 的"转发"**（块外控制点按不到时，
++                             它把起手那一下合成 `pointerdown` 转发给内核容器 —— 见该文件 #2 注释）。
++                           若不过滤，②会让本处理器把**同一个 pointerId 记两次** ⇒ 伪造出"双指"
++                           ⇒ 单指拖控制点会被误判成双指长按 ⇒ 调偏移劫持裁剪。 */
++                        if (!e.isTrusted) return;
++                        /* 🔴 #6 真机根因（2026-10-04 内核级 `sendevent` 注入实测）：
++                           原来用 **DOM 祖先**判范围（`target.closest('[data-hs-pane="timeline"]')`），
++                           但 E40 之后「常用功能浮条 / 控制点」都挂在 **App 根层**，不在时间线面板内；
++                           控制点的命中区又正好盖在块上 ⇒ 双指按块时 `target` 是控制点/浮条
++                           ⇒ **A3 直接 return、alt 永不点亮** ⇒ 用户看到"双指长按块 = 始终平移"。
++                           实测轨迹（真手指）：两个 trusted pointerdown 的 target 都是
++                           `DIV on=ctrl-points+ctrl-point pane=false` ⇒ 全被忽略，而面板内的
++                           那两个是 `#2` 转发的**合成**事件（`isTrusted=false`）⇒ 又被过滤掉
++                           ⇒ A3 收到 0 个有效指针。
++                           ⇒ 改成**几何**判范围（落在时间线面板的矩形内即可）：
++                             浮层压在块上照收；只排除弹窗 / 菜单这类真正属于别的表面的目标。 */
++                        const target = e.target as Element | null;
++                        if (
++                            target !== null &&
++                            target.closest(
++                                '[data-hs-modal],[role="dialog"],[data-radix-popper-content-wrapper]',
++                            ) !== null
++                        ) {
++                            return;
++                        }
++                        const paneEl = document.querySelector('[data-hs-pane="timeline"]');
++                        const paneRect = paneEl ? paneEl.getBoundingClientRect() : null;
++                        /* 面板不存在（桌面布局，`[data-hs-pane]` 不渲染）⇒ 不接管，
++                           与原来 DOM 判定的保护面等价。 */
++                        if (paneRect === null) return;
++                        if (
++                            e.clientX < paneRect.left - 2 ||
++                            e.clientX > paneRect.right + 2 ||
++                            e.clientY < paneRect.top - 2 ||
++                            e.clientY > paneRect.bottom + 2
++                        ) {
++                            return;
++                        }
 +                        if (tapIds.length === 0) {
 +                            tapAt = performance.now();
 +                            twoMoved = false;
 +                            altLit = false;
 +                            slipClipId = null;
++                            twoBase = null;
 +                        }
 +                        tapIds.push(e.pointerId);
 +                        tapStart.set(e.pointerId, { x: e.clientX, y: e.clientY });
 +                        tapLast.set(e.pointerId, { x: e.clientX, y: e.clientY });
 +                        tapFired = false;
++                        /* #6：双指在手 ⇒ 从此刻起抑制原生长按的音频块菜单
++                           （Android 会在 ~500ms 后来一发 contextmenu）。 */
++                        if (tapIds.length >= 2) twoFingerActiveRef.current = true;
 +                        // 两指都按下后才启动长按计时（单指不算）。
 +                        if (tapIds.length === 2 && twoTimer === null) {
++                            /* 长按候选的基准 = **两指齐备**那一刻的中点/间距（不是各指按下点）。
++                               判据只在"相对基准的位移"上做（见 `twoStat` 上方的说明）。 */
++                            twoBase = twoStat(tapStart);
 +                            twoTimer = window.setTimeout(() => {
 +                                // ⚠️ 到点时再确认"这两指一直没动"才点亮。
-+                                if (!twoMoved && tapIds.length >= 2) {
-+                                    altLit = true;
-+                                    setTouchModifiers({ alt: true });
-+                                    beginSlip();
++                                if (tapIds.length < 2) return;
++                                /* 🔴 到点**复核**（2026-10-04，与 `onTwoMove` 的判据同一函数）：
++                                   `pointermove` 可能被**合并 / 稀疏化**（内核级真触控实测：
++                                   注入 10 步张合时，偶尔到点那一刻才收到足够位移）⇒
++                                   只靠 move 期间逐帧判会漏 ⇒ 到点时按**最新位置**再判一次。
++                                   这是"双指缩放/平移不被劫持成调偏移"的第二道门，也让
++                                   判据不受事件送达节奏影响（同一注入序列不再时红时绿）。 */
++                                if (twoMoved || isHoldCancelledByMotion(twoBase, twoStat(tapLast))) {
++                                    twoMoved = true;
++                                    clearTouchModifiers();
++                                    return;
 +                                }
++                                /* 🔴 #6（用户口径）：**两指必须落在同一个音频块上**才进 slip；
++                                   否则本回调什么都不做 ⇒ 维持平移 / 缩放。 */
++                                if (!beginSlip()) return;
++                                altLit = true;
++                                setTouchModifiers({ alt: true });
++                                /* #6：进入 slip ⇒ **同时**关掉双指的缩放/平移
++                                   （否则视口会跟着漂 —— 内核级真触摸实测 `scrollLeft` 走了 60px）。 */
++                                setTwoFingerGestureSuppressed(true);
 +                            }, 500);
 +                        }
 +                    };
@@ -41339,9 +41471,14 @@ index 242997f5..bc8a3a69 100644
 +                     *
 +                     * 🔴 A3 修正（2026-09-28）：**已点亮的 Alt 不能在这里被撤销**。
 +                     * 「双指长按**并划动**」的"划动"本来就是长按之后的动作，而这里原先
-+                     * 一见 8px 位移就 `clearTouchModifiers()` ⇒ 一动手就把虚拟 Alt 清掉，
++                     * 一见位移就 `clearTouchModifiers()` ⇒ 一动手就把虚拟 Alt 清掉，
 +                     * slip 永远起不来。撤销只对"**还没点亮**的候选"有意义。
 +                     * 点亮之后改走 slip 通道：只累计位移，不再管"是否算长按"。
++                     *
++                     * 🔴 2026-10-04 真机根因修复：作废判据从「任一指针相对按下点 > 8px」
++                     * 换成 `isHoldCancelledByMotion`（**中点位移** ∨ **间距变化**）。
++                     * 旧判据被真手指的常态微抖（≥4px）必然命中 ⇒ 长按候选恒被作废
++                     * ⇒ 双指永远等于平移/缩放（实测数据与论证见 `twoFingerHold.ts`）。
 +                     */
 +                    const onTwoMove = (e: PointerEvent) => {
 +                        if (e.pointerType === "mouse") return;
@@ -41352,29 +41489,29 @@ index 242997f5..bc8a3a69 100644
 +                            return;
 +                        }
 +                        if (twoMoved) return;
-+                        for (const id of tapIds) {
-+                            const st = tapStart.get(id);
-+                            if (!st) continue;
-+                            // 用 event 的坐标只对当前指针准，简化：任一指针动够就算。
-+                            if (
-+                                Math.abs(e.clientX - st.x) > 8 ||
-+                                Math.abs(e.clientY - st.y) > 8
-+                            ) {
-+                                twoMoved = true;
-+                                tapFired = true; // 也别被当双指 tap
-+                                clearTwoTimer();
-+                                clearTouchModifiers();
-+                                break;
-+                            }
-+                        }
++                        const cancelled = isHoldCancelledByMotion(twoBase, twoStat(tapLast));
++                        if (!cancelled) return;
++                        twoMoved = true;
++                        tapFired = true; // 也别被当双指 tap
++                        clearTwoTimer();
++                        clearTouchModifiers();
 +                    };
 +                    const onTwoUp = (e: PointerEvent) => {
++                        /* 🔴 #6：忽略**合成**事件。
++                           `TwoFingerGestureController.abortPointer`（1→2 指过渡，docs/08 §4.1）
++                           会在 **window** 上派发**合成的 `pointercancel` + `pointerup`**。
++                           监听原先只挂容器 ⇒ 收不到；改挂 window（为了收得到第二指）后就会收到
++                           ⇒ 第一指被剔出 `tapIds` ⇒ 长按计时永远不成立 ⇒ 用户看到"始终平移"
++                           （实测：扫描里 x=140..316 全不放行、只有 x=332 过）。
++                           真实事件 `isTrusted === true`，合成的为 false ⇒ 以此区分。 */
++                        if (!e.isTrusted) return;
 +                        if (!tapIds.includes(e.pointerId)) return;
 +                        clearTwoTimer();
 +                        // 长按已点亮 ⇒ 这一轮是 slip：先收尾再清修饰键（提交要读 origin 的
 +                        // `slipMode`，它是按下时快照的，与此刻的修饰键无关，但顺序上更清楚）。
 +                        if (altLit && tapIds.length <= 2) endSlip(false);
 +                        clearTouchModifiers();
++                        setTwoFingerGestureSuppressed(false); // #6：手势结束 ⇒ 恢复双指缩放/平移
 +                        const st = tapStart.get(e.pointerId);
 +                        const moved =
 +                            st && (Math.abs(e.clientX - st.x) > TAP_SLOP ||
@@ -41382,7 +41519,11 @@ index 242997f5..bc8a3a69 100644
 +                        tapIds = tapIds.filter((id) => id !== e.pointerId);
 +                        tapStart.delete(e.pointerId);
 +                        tapLast.delete(e.pointerId);
-+                        if (tapIds.length === 0) altLit = false;
++                        if (tapIds.length === 0) {
++                            altLit = false;
++                            twoBase = null;
++                        }
++                        if (tapIds.length < 2) twoFingerActiveRef.current = false;
 +                        if (moved) tapFired = true; // 有人动过 ⇒ 不算 tap
 +                        if (tapIds.length > 0 || tapFired) return;
 +                        // 双指都抬起且没人动过、总时长够短 ⇒ 双指 tap
@@ -41391,23 +41532,88 @@ index 242997f5..bc8a3a69 100644
 +                        if (trackId) handleSelectTrack(trackId);
 +                    };
 +                    const onTwoCancel = (e: PointerEvent) => {
++                        /* 🔴 #6：同 `onTwoUp` —— 合成的 `pointercancel` 必须忽略，
++                           否则 1→2 指过渡那一下就把本轮手势判死。 */
++                        if (!e.isTrusted) return;
 +                        if (altLit) endSlip(true);
 +                        tapIds = tapIds.filter((id) => id !== e.pointerId);
 +                        tapStart.delete(e.pointerId);
 +                        tapLast.delete(e.pointerId);
-+                        if (tapIds.length === 0) altLit = false;
++                        if (tapIds.length === 0) {
++                            altLit = false;
++                            twoBase = null;
++                        }
++                        if (tapIds.length < 2) twoFingerActiveRef.current = false;
 +                        clearTwoTimer();
 +                        clearTouchModifiers();
++                        setTwoFingerGestureSuppressed(false); // #6：取消也要恢复双指缩放/平移
 +                    };
-+                    timelineContainer.addEventListener("pointerdown", onTwoDown);
-+                    timelineContainer.addEventListener("pointermove", onTwoMove);
-+                    timelineContainer.addEventListener("pointerup", onTwoUp);
-+                    timelineContainer.addEventListener("pointercancel", onTwoCancel);
++                    /* 🔴 #6（2026-10-04 真机扫描）：监听从"只挂**时间线容器**"改成
++                       "挂 **window**、且用**捕获阶段**"。原因：
++                         · 第二指常落在容器**右侧的兄弟元素**上（扫描实测：左指 x ∈ [140,316]
++                           放行、≥332 不放行）—— 挂容器就**根本看不到第二指**，
++                           于是 `tapIds` 永远到不了 2 ⇒ 长按不成立 ⇒ 用户看到"始终平移"。
++                         · 必须用**捕获**：`TwoFingerGestureController` 在第二指落下时会
++                           `stopPropagation()`，挂 window 的**冒泡**监听收不到它。
++                         · 这正是本项目自己写过的教训（`touchGesture.attachSurface` 的注释：
++                           "两套独立监听各只看到一个指针，都判不出「双指」⇒ 什么都不发生"）。
++                       范围由 `onTwoDown` 里的**几何**判定收窄（落在时间线面板矩形内；
++                       不能用 DOM 祖先判——浮层挂在 App 根层，见那里的说明）。 */
++                    window.addEventListener("pointerdown", onTwoDown, true);
++                    window.addEventListener("pointermove", onTwoMove, true);
++                    window.addEventListener("pointerup", onTwoUp, true);
++                    window.addEventListener("pointercancel", onTwoCancel, true);
++
++                    /* 🔴 #6（2026-10-04 用户手测「**依旧失败**」）：**双指在时间线上时必须吃掉原生长按**。
++                       为什么 CDP 探针永远绿、真机永远红：Android 的 WebView 对"没被 preventDefault
++                       的 touchstart"会走**它自己的长按手势**，表现为
++                         ① 一次**震动** —— 用户报的"出现震动"就是它（A3 自己**没有**任何震动代码）；
++                         ② 把这一条 touch 序列**cancel 掉** ⇒ 之后收不到 touchmove ⇒
++                            `TwoFingerGestureController` 与内核手势当场死掉，用户看到"震一下、然后平移"。
++                       CDP 的合成触摸**不触发** Android 的原生长按 ⇒ 任何探针都复现不了这条。
++                       ⇒ 与轨道头"长按并划动"同一套办法（那里也是"原生 touch + passive:false +
++                          preventDefault"，见本文件 E 组的注释）：
++                          **第一指落在时间线面板内**就武装，序列到 ≥2 指时 preventDefault。
++                       只对 ≥2 指生效 ⇒ 单指的一切（含长按菜单 / 拖动）完全不受影响。 */
++                    let twoTouchArmed = false;
++                    const onTwoTouchStart = (e: TouchEvent) => {
++                        if (e.touches.length === 1) {
++                            /* 与 `onTwoDown` 同一口径：**几何**判范围（浮层挂在 App 根层，
++                               用 DOM 祖先判会漏掉压在块上的控制点/浮条）。 */
++                            const t0 = e.touches[0];
++                            const paneEl = document.querySelector('[data-hs-pane="timeline"]');
++                            const r = paneEl ? paneEl.getBoundingClientRect() : null;
++                            twoTouchArmed =
++                                r !== null &&
++                                t0 !== undefined &&
++                                t0.clientX >= r.left - 2 &&
++                                t0.clientX <= r.right + 2 &&
++                                t0.clientY >= r.top - 2 &&
++                                t0.clientY <= r.bottom + 2;
++                        }
++                        if (!twoTouchArmed) return;
++                        if (e.touches.length >= 2) e.preventDefault();
++                    };
++                    const onTwoTouchEnd = (e: TouchEvent) => {
++                        if (e.touches.length === 0) twoTouchArmed = false;
++                    };
++                    window.addEventListener("touchstart", onTwoTouchStart, {
++                        passive: false,
++                        capture: true,
++                    });
++                    window.addEventListener("touchend", onTwoTouchEnd, { capture: true });
++                    window.addEventListener("touchcancel", onTwoTouchEnd, { capture: true });
++
 +                    offs.push(() => {
-+                        timelineContainer.removeEventListener("pointerdown", onTwoDown);
-+                        timelineContainer.removeEventListener("pointermove", onTwoMove);
-+                        timelineContainer.removeEventListener("pointerup", onTwoUp);
-+                        timelineContainer.removeEventListener("pointercancel", onTwoCancel);
++                        window.removeEventListener("pointerdown", onTwoDown, true);
++                        window.removeEventListener("pointermove", onTwoMove, true);
++                        window.removeEventListener("pointerup", onTwoUp, true);
++                        window.removeEventListener("pointercancel", onTwoCancel, true);
++                        window.removeEventListener("touchstart", onTwoTouchStart, true);
++                        window.removeEventListener("touchend", onTwoTouchEnd, true);
++                        window.removeEventListener("touchcancel", onTwoTouchEnd, true);
++                        twoFingerActiveRef.current = false;
++                        setTwoFingerGestureSuppressed(false);
 +                    });
 +                }
 +
@@ -44927,6 +45133,9 @@ index 242997f5..bc8a3a69 100644
 +        }) => {
 +            setContextMenu(null);
 +            setTrackAreaMenu(null);
++            /* #6：双指在手 ⇒ 这是 Android 原生长按的副产物，不是用户在要菜单
++               （双指长按 = slip，见 A3）。吞掉即可，别抢手势。 */
++            if (twoFingerActiveRef.current) return;
 +            if (args.trackId === null) return;
 +            if (args.clipIds.length > 0) {
 +                // 最上面那个（startSec 最大）作为主目标，其余作为"重叠选择"入口——
@@ -45094,11 +45303,12 @@ index 242997f5..bc8a3a69 100644
 +     * 这条契约与渲染模式无关（内核 / 旧实现共用同一入口）。
 +     */
 +    /**
-+     * 手机形态判定（与 `utils/layoutMode` 的口径一致：宽度 < 600）。
-+     * 这里不 import 那个模块是为了避免给 TimelinePanel 增加依赖 ——
-+     * 只看一眼视口宽度即可。
++     * 手机形态判定 —— **统一走 `utils/layoutMode.isMobileShell()`**（= `w < 1280`，横屏也算手机）。
++     *
++     * 🔴 E41-4（用户 2026-10-04）：这里原来写 `< 600` 并注释"与 layoutMode 口径一致"，
++     * 但 layoutMode 的 phone 断点是 **1280** ⇒ **横屏（宽 ≈800）下双击块/轨道都进不了编辑**。
 +     */
-+    const isPhoneLike = () => window.innerWidth < 600;
++    const isPhoneLike = () => isMobileShell();
 +
 +    const handleKernelDoubleClickClip = React.useCallback(
 +        (clipId: string, mode: "replace" | "toggle" = "replace") => {
@@ -57761,7 +57971,7 @@ index d2d25db8..8ae953df 100644
  
              dispose() {
 diff --git a/frontend/src/components/layout/timeline/ClipContextMenu.tsx b/frontend/src/components/layout/timeline/ClipContextMenu.tsx
-index e9858a5c..78c267de 100644
+index e9858a5c..c551c906 100644
 --- a/frontend/src/components/layout/timeline/ClipContextMenu.tsx
 +++ b/frontend/src/components/layout/timeline/ClipContextMenu.tsx
 @@ -1,4 +1,5 @@
@@ -57830,7 +58040,36 @@ index e9858a5c..78c267de 100644
      x,
      y,
      clip,
-@@ -429,6 +446,9 @@ export const ClipContextMenu: React.FC<{
+@@ -404,11 +421,25 @@ export const ClipContextMenu: React.FC<{
+     useLayoutEffect(() => {
+         const el = menuRef.current;
+         if (!el) return;
+-        const rect = el.getBoundingClientRect();
+         const vw = window.innerWidth;
+         const vh = window.innerHeight;
+-        if (rect.right > vw) el.style.left = `${Math.max(0, vw - rect.width)}px`;
+-        if (rect.bottom > vh) el.style.top = `${Math.max(0, vh - rect.height)}px`;
++        /* 🔴 E41-7（用户 2026-10-04：「**长按音频块的右键菜单在横屏下显示不完整**」，竖屏正常）：
++           原来只把位置夹到 `max(0, vh − rect.height)` —— 横屏 `vh ≈ 360`，而这份菜单自然高约 400px
++           ⇒ 算出 `top = 0`，菜单**仍旧高出屏幕一截**，而且**没有 `max-height` / 滚动兜底**
++           ⇒ 底部那几项永远看不见也点不到。竖屏 `vh ≈ 708` 够高，所以只在横屏暴露。
++           ⇒ 先给高度上限（`vh − 8`）再夹位置：这样 `rect.height` 已经是**被夹后**的高度，
++             超出的部分由内部滚动承接（与顶栏菜单同款"最后一项也点得到"的约定）。 */
++        el.style.maxHeight = `${Math.max(80, Math.round(vh - 8))}px`;
++        el.style.overflowY = "auto";
++        /* ⚠️ 量**布局盒**（`offsetWidth` / `offsetHeight`），**不要**用 `getBoundingClientRect()`：
++           入场动画 `hs-fade-in` 带 `scale(0.98)`，而 `getBoundingClientRect()` **包含 transform**
++           ⇒ 量到的是**缩放态**高度。实测（矮视口 `752×360`、夹后应 352）：`352 × 0.98 = 345`
++           ⇒ 夹出 `top = 15` 而不是 8 ⇒ **底边仍溢出 7px**；竖屏同理（`577 × 0.98 = 565`
++           ⇒ `top = 143` 而不是 131）。`offsetHeight` 与 transform 无关，量出来就是夹后的真实高度。 */
++        const w = el.offsetWidth;
++        const h = el.offsetHeight;
++        if (x + w > vw) el.style.left = `${Math.max(0, vw - w)}px`;
++        if (y + h > vh) el.style.top = `${Math.max(0, vh - h)}px`;
+     }, [x, y]);
+ 
+     // Escape 关闭菜单（键盘可达性）；输入框内的 Escape 由其自身的
+@@ -429,6 +460,9 @@ export const ClipContextMenu: React.FC<{
              role="menu"
              data-hs-context-menu="1"
              data-hs-floating-menu="1"
@@ -66988,6 +67227,254 @@ index dba23d0a..a8478198 100644
 +        </svg>
 +    );
 +};
+diff --git a/frontend/src/components/layout/timeline/hooks/twoFingerHold.test.ts b/frontend/src/components/layout/timeline/hooks/twoFingerHold.test.ts
+new file mode 100644
+index 00000000..910f3d46
+--- /dev/null
++++ b/frontend/src/components/layout/timeline/hooks/twoFingerHold.test.ts
+@@ -0,0 +1,135 @@
++/**
++ * twoFingerHold.ts 的单测。
++ *
++ * 【为什么值得测】
++ * 这条判据是「音频块 · 双指长按并划动 = slip」在真机上**能不能被点亮**的唯一门。
++ * 旧实现（"任一指针位移 > 8px 就作废"）被真手指的常态微抖必然命中 ⇒ 用户看到的
++ * 是"双指永远等于平移/缩放"。这个缺陷的**全部证据在真机**（CDP 合成触摸不发 MOVE
++ * 抖动，探针永远绿）⇒ 纯函数单测是唯一能在 CI 里锁住它的护栏。
++ *
++ * 实测数据（内核级真触控，`scripts/_dbg-slip-points.mjs --jitter N`）：
++ * `jitter=0 → alt=Y / SLIP`；`jitter=4px → alt=n / 退化成平移`。
++ * ⇒ 4px 量级的微抖**必须**判为"没动"。
++ */
++import { describe, expect, it } from "vitest";
++import {
++    isHoldCancelledByMotion,
++    MID_SLOP_PX,
++    SPREAD_SLOP_PX,
++    twoFingerStat,
++} from "./twoFingerHold";
++
++/** 造一对相距 `spread`、中点落在 (mx, my) 的两指。 */
++function pair(mx: number, my: number, spread: number) {
++    return [
++        { x: mx - spread / 2, y: my },
++        { x: mx + spread / 2, y: my },
++    ];
++}
++
++describe("twoFingerStat", () => {
++    it("两指 ⇒ 中点与间距", () => {
++        const s = twoFingerStat([
++            { x: 100, y: 200 },
++            { x: 140, y: 200 },
++        ]);
++        expect(s).not.toBeNull();
++        expect(s?.mx).toBeCloseTo(120, 9);
++        expect(s?.my).toBeCloseTo(200, 9);
++        expect(s?.spread).toBeCloseTo(40, 9);
++    });
++
++    it("竖直相距也计入间距（欧氏距离，不是单轴差）", () => {
++        const s = twoFingerStat([
++            { x: 10, y: 10 },
++            { x: 10, y: 40 },
++        ]);
++        expect(s?.spread).toBeCloseTo(30, 9);
++    });
++
++    it("不足两指（或含空位）⇒ null", () => {
++        expect(twoFingerStat([])).toBeNull();
++        expect(twoFingerStat([{ x: 1, y: 2 }])).toBeNull();
++        expect(twoFingerStat([undefined, { x: 1, y: 2 }])).toBeNull();
++    });
++
++    it("多于两指时只看前两指（与手势层「双指」口径一致）", () => {
++        const s = twoFingerStat([
++            { x: 0, y: 0 },
++            { x: 100, y: 0 },
++            { x: 900, y: 900 },
++        ]);
++        expect(s?.mx).toBeCloseTo(50, 9);
++    });
++});
++
++describe("isHoldCancelledByMotion（长按候选是否被作废）", () => {
++    const base = twoFingerStat(pair(160, 125, 8));
++
++    it("完全不动 ⇒ 不作废", () => {
++        expect(isHoldCancelledByMotion(base, base)).toBe(false);
++    });
++
++    it("🔴 真机根因回归：4px 微抖（实测会点亮 alt 的量级）⇒ **不作废**", () => {
++        /* 旧判据在这里返回 true（任一指针位移 4px 虽未过 8px，但下面几条会）——
++           这里锁的是"抖动不该取消长按"这条口径本身。 */
++        const now = twoFingerStat(pair(160 + 4, 125 + 2, 8));
++        expect(isHoldCancelledByMotion(base, now)).toBe(false);
++    });
++
++    it("🔴 真机实测上界：两指**同向**各抖 9px（中点 +9）⇒ 不作废", () => {
++        /* 内核级真触控扫描 `--jitter 9`：修复前 alt=n、退化成平移；
++           死区必须覆盖这个量级，否则用户"按住不动"仍会被判成在动。 */
++        const now = twoFingerStat(pair(160 + 9, 125 + 9, 8));
++        expect(isHoldCancelledByMotion(base, now)).toBe(false);
++    });
++
++    it("🔴 真机实测上界：两指**反向**各抖 9px（间距 +18）⇒ 不作废", () => {
++        /* 两指抖动方向不必一致 —— 间距会变 `2 × 单指抖动量`。
++           这条正是把 SPREAD_SLOP_PX 从 14 提到 20 的依据。 */
++        const now = twoFingerStat(pair(160, 125, 8 + 18));
++        expect(isHoldCancelledByMotion(base, now)).toBe(false);
++    });
++
++    it("微抖同时让中点与间距都动 ⇒ 仍不作废（只要都在死区内）", () => {
++        /* 两指反向抖 6px：中点不动、间距 +12px（< SPREAD_SLOP_PX）。 */
++        const now = twoFingerStat(pair(160, 125, 8 + 12));
++        expect(isHoldCancelledByMotion(base, now)).toBe(false);
++    });
++
++    it("中点位移超过死区 ⇒ 作废（平移意图）", () => {
++        const now = twoFingerStat(pair(160 + MID_SLOP_PX + 0.5, 125, 8));
++        expect(isHoldCancelledByMotion(base, now)).toBe(true);
++    });
++
++    it("间距变化超过死区 ⇒ 作废（缩放意图）", () => {
++        const now = twoFingerStat(pair(160, 125, 8 + SPREAD_SLOP_PX + 0.5));
++        expect(isHoldCancelledByMotion(base, now)).toBe(true);
++    });
++
++    it("两指同向移动（平移）⇒ 中点变、间距不变 ⇒ 作废", () => {
++        /* 两指整体右移 30px：中点 +30、间距不变。 */
++        const now = twoFingerStat([
++            { x: 100 + 30, y: 200 },
++            { x: 140 + 30, y: 200 },
++        ]);
++        expect(isHoldCancelledByMotion(base, now)).toBe(true);
++    });
++
++    it("两指相向捏合（缩放）⇒ 间距变、中点不变 ⇒ 作废", () => {
++        /* 中点都是 160：间距 40 → 8（收拢 32px）。 */
++        const wide = twoFingerStat(pair(160, 125, 40));
++        const narrow = twoFingerStat(pair(160, 125, 8));
++        expect(isHoldCancelledByMotion(wide, narrow)).toBe(true);
++    });
++
++    it("基准或当前不足两指 ⇒ 不作废（没有足够信息，保守放行）", () => {
++        expect(isHoldCancelledByMotion(null, base)).toBe(false);
++        expect(isHoldCancelledByMotion(base, null)).toBe(false);
++    });
++
++    it("竖直抖动同样走欧氏距离（不只看 x）", () => {
++        const now = twoFingerStat(pair(160, 125 + MID_SLOP_PX + 1, 8));
++        expect(isHoldCancelledByMotion(base, now)).toBe(true);
++    });
++});
+diff --git a/frontend/src/components/layout/timeline/hooks/twoFingerHold.ts b/frontend/src/components/layout/timeline/hooks/twoFingerHold.ts
+new file mode 100644
+index 00000000..5940499d
+--- /dev/null
++++ b/frontend/src/components/layout/timeline/hooks/twoFingerHold.ts
+@@ -0,0 +1,101 @@
++/**
++ * twoFingerHold.ts — 「双指长按」候选期的**运动判据**（纯函数，可单测）。
++ *
++ * 【它解决的问题（真机根因，2026-10-04）】
++ * 音频块的「双指长按并划动 = 调整音频相对块位置（slip）」在真机上**从来没生效过**：
++ * 双指永远被解析成平移/缩放。根因不在 slip 链路，而在"长按候选"的作废判据 ——
++ * 旧判据是「**任一指针**相对按下点位移 > 8px 就不算长按」。
++ *
++ * 真手指按住 0.5s 时，触屏**仍以 ~120Hz 上报 MOVE**，指尖质心漂移几 px 是常态
++ * ⇒ 旧判据几乎必然命中 ⇒ 长按定时器被清掉 ⇒ 虚拟 Alt（"分析是否按 Alt 那一步"）
++ * 永远点不亮。内核级真触控实测（`scripts/_dbg-slip-points.mjs --jitter N`）：
++ *
++ * ```
++ *   jitter=0px → alt=Y、SLIP ✅、scrollLeft 0→0
++ *   jitter=4px → alt=n、未 slip ❌、scrollLeft 0→60（退化成平移）
++ * ```
++ *
++ * 【为什么用"中点 + 间距"】
++ * 双指手势只有两个自由度（见 `docs/08` 与 E18 的解算律）：
++ *   · **中点**位移 = 平移意图；
++ *   · **间距**变化 = 缩放意图。
++ * 微抖同时只会让这两个量动几 px，而真正的缩放（张合）与平移（同向移动）必然
++ * 显著改变其中之一 ⇒ 既不会把抖动当位移，也不会放过真的缩放/平移
++ * （= `#41`「双指拖动 vs 双指长按互斥」的原意，只是把判据换成语义正确的量）。
++ */
++
++/** 两指的位置（视口 CSS px）。 */
++export interface TwoFingerPoint {
++    readonly x: number;
++    readonly y: number;
++}
++
++/** 双指的两个自由度：中点与间距。 */
++export interface TwoFingerStat {
++    /** 两指中点 x。 */
++    readonly mx: number;
++    /** 两指中点 y。 */
++    readonly my: number;
++    /** 两指尖的欧氏距离。 */
++    readonly spread: number;
++}
++
++/**
++ * 长按候选期内，**中点**允许漂移的上限（CSS px，欧氏距离）。
++ *
++ * 取值理由：真手指"按住不动"时触屏仍以 ~120Hz 上报 MOVE，指尖质心在两轴上
++ * 同时漂 9px（合成位移 ≈ 12.7px）是内核级真触控扫到的上界；而"想平移"的手势
++ * 在 0.5s 内中点至少移动 50px（实测注入 80px 的平移手势必然超阈值）⇒ 16px 既
++ * 盖得住手抖、又远小于真实平移，还留了 3px 余量。
++ */
++export const MID_SLOP_PX = 16;
++
++/**
++ * 长按候选期内，**两指间距**允许变化的上限（CSS px）。
++ *
++ * 取值理由：两指的抖动**方向不必一致**（一根拇指抖 9px、另一根反向抖 9px，
++ * 间距就变了 18px）⇒ 死区必须覆盖 `2 × 单指抖动量` 这个量级；而真正的捏合缩放
++ * 在 0.5s 内至少张合 60px 以上（实测注入 80px 的张合必然超阈值）。
++ * 取 24px：容忍到"两指各自反向漂 12px"，仍远小于真实缩放手势。
++ */
++export const SPREAD_SLOP_PX = 24;
++
++/**
++ * 从两指位置算「中点 + 间距」。
++ *
++ * @param points 两指（或更多）的位置；**少于两个**时返回 null（还没形成双指手势）。
++ * @returns 只取前两个点（与手势层"双指"口径一致），或 null。
++ */
++export function twoFingerStat(
++    points: ReadonlyArray<TwoFingerPoint | undefined | null>,
++): TwoFingerStat | null {
++    const pts: TwoFingerPoint[] = [];
++    for (const p of points) {
++        if (p) pts.push(p);
++        if (pts.length === 2) break;
++    }
++    if (pts.length < 2) return null;
++    return {
++        mx: (pts[0].x + pts[1].x) / 2,
++        my: (pts[0].y + pts[1].y) / 2,
++        spread: Math.hypot(pts[0].x - pts[1].x, pts[0].y - pts[1].y),
++    };
++}
++
++/**
++ * 长按候选是否应被"手指在动"作废。
++ *
++ * 基准 `base` 与当前 `now` 都是「两指中点 + 间距」；基准取自**两指齐备那一刻**
++ * （不是各指各自的按下点 —— 两指先后落下的时间差会污染那个基准）。
++ *
++ * @returns `true` = 这是平移/缩放（取消长按候选）；`false` = 两指基本按住不动。
++ */
++export function isHoldCancelledByMotion(
++    base: TwoFingerStat | null,
++    now: TwoFingerStat | null,
++): boolean {
++    if (base === null || now === null) return false;
++    const dMid = Math.hypot(now.mx - base.mx, now.my - base.my);
++    if (dMid > MID_SLOP_PX) return true;
++    return Math.abs(now.spread - base.spread) > SPREAD_SLOP_PX;
++}
 diff --git a/frontend/src/components/layout/timeline/kernel/TimelineKernelView.tsx b/frontend/src/components/layout/timeline/kernel/TimelineKernelView.tsx
 index 226da0e7..ec0be5bc 100644
 --- a/frontend/src/components/layout/timeline/kernel/TimelineKernelView.tsx
@@ -67041,10 +67528,10 @@ index 226da0e7..ec0be5bc 100644
 +};
 \ No newline at end of file
 diff --git a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-index a2ae3b60..41d7dc8c 100644
+index a2ae3b60..abdb3164 100644
 --- a/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
 +++ b/frontend/src/components/layout/timeline/kernel/host/timelineKernelHost.ts
-@@ -1,5487 +1,6236 @@
+@@ -1,5487 +1,6262 @@
 -/**
 - * 时间轴渲染内核 · 命令式宿主
 - *
@@ -75227,12 +75714,23 @@ index a2ae3b60..41d7dc8c 100644
 +    /**
 +     * 触屏「控制点·长按」的按住时长（规格 E 列：长按后才按纵向定型）。
 +     *
-+     * 🔴 2026-10-03（用户口径：「**大幅调低**圆点的长按阈值」）：500 → **200**。
-+     * 500ms 对"按一下再划"的两段式手势太长（用户要等半秒才有反馈，手感发滞）；
-+     * 200ms 仍远高于点击抖动，且下方 `EDGE_KIND_LOCK_PX = 8` 的**纵向定型**门槛
-+     * 才是防误判的主力（单纯横拖不会定型成 fade / rate，见 `onGesturePointerMove`）。
++     * 🔴 2026-10-04（用户手测：「**按控制点迅速下划，图标会变、但模式仍是裁剪而非拉伸**」）
++     * ⇒ **200 → 0（不再等待）**。
++     *
++     * 为什么 0 才对：本常量守的是"还没长按成立时，位移超阈值就**作废长按候选**、
++     * 降级成普通**裁剪**"这条（见 `onGesturePointerMove` 的 `!edge.fired` 分支）。
++     * 于是"按下 → 立刻下划"会在 200ms 内跑完 ⇒ 判成裁剪；**而浮层那个图标只看 `dy`、
++     * 没有时间门控** ⇒ 用户看到"图标变成了变速，实际却在裁剪"——正是这条 bug。
++     * 真正区分"用户想干嘛"的是 `EDGE_KIND_LOCK_PX = 8` 的**纵向定型**：
++     *   · 纯横拖（|dy| < 8）⇒ 仍走裁剪（横拖才是"拖边界"的方向）；
++     *   · 先竖后横（|dy| ≥ 8）⇒ 上划淡变 / 下划拉伸。
++     * 所以那一小段"等待"本来就是与纵向定型**重复**的守卫，去掉它不会把横拖误判成拉伸
++     * —— 这与此前 500 → 200 是同一条理由（见下），只是用户实测 200 仍然等不起。
++     *
++     * 历史：2026-10-03 用户口径「**大幅调低**圆点的长按阈值」500 → 200（当时理由是
++     * "半秒才有反馈、手感发滞"）。防误判的主力始终是下面的纵向定型门槛。
 +     */
-+    const TOUCH_EDGE_HOLD_MS = 200;
++    const TOUCH_EDGE_HOLD_MS = 0;
 +    /** 长按成立后判定「上划 / 下划」的纵向位移（CSS px）：够了才定型，避免手抖误判。 */
 +    const EDGE_KIND_LOCK_PX = 8;
 +
@@ -76600,23 +77098,38 @@ index a2ae3b60..41d7dc8c 100644
 +            ) {
 +                const side: "left" | "right" = hit.region === "left-edge" ? "left" : "right";
 +                const clipId = hit.clip.id;
-+                const timer = window.setTimeout(() => {
-+                    if (gesture.kind === "pending-select" && gesture.edgeLongPress) {
-+                        gesture.edgeLongPress.fired = true;
-+                        gesture.edgeLongPress.timer = null;
-+                        // 长按成立 = 规格里的"其上方出现淡入/淡出图标，下方出现变速缩放
-+                        // 图标"，提示面板在控制点上下各画一个图标（纯视觉告知）。
-+                        interactions?.onClipEdgeLongPressHint?.({
-+                            clipId,
-+                            side,
-+                            clientX: gesture.startClientX,
-+                            clientY: gesture.startClientY,
-+                        });
-+                    }
-+                }, TOUCH_EDGE_HOLD_MS);
++                /* 起手坐标：直接用本事件的坐标（与 `gesture.startClientX/Y` 同值 ——
++                   后者就是 pointerdown 那一刻从事件上取的），这样 `fireHint` 不必读
++                   收窄前的 `gesture`（TS 在闭包里会丢掉 kind 的收窄）。 */
++                const startClientX = event.clientX;
++                const startClientY = event.clientY;
++                const fireHint = () => {
++                    // 长按成立 = 规格里的"其上方出现淡入/淡出图标，下方出现变速缩放
++                    // 图标"，提示面板在控制点上下各画一个图标（纯视觉告知）。
++                    interactions?.onClipEdgeLongPressHint?.({
++                        clipId,
++                        side,
++                        clientX: startClientX,
++                        clientY: startClientY,
++                    });
++                };
++                /* 🔴 阈值 0（2026-10-04）时**同步**成立，不走定时器：
++                   否则"按下 → 立刻下划"的第一个 move 可能抢在 `setTimeout(…,0)` 之前到，
++                   又落回 `!edge.fired` 那条"降级成裁剪"的分支（正是用户报的现象）。 */
++                const firedNow = TOUCH_EDGE_HOLD_MS <= 0;
++                const timer = firedNow
++                    ? null
++                    : window.setTimeout(() => {
++                          if (gesture.kind === "pending-select" && gesture.edgeLongPress) {
++                              gesture.edgeLongPress.fired = true;
++                              gesture.edgeLongPress.timer = null;
++                              fireHint();
++                          }
++                      }, TOUCH_EDGE_HOLD_MS);
 +                if (gesture.kind === "pending-select") {
-+                    gesture.edgeLongPress = { side, timer, fired: false };
++                    gesture.edgeLongPress = { side, timer, fired: firedNow };
 +                }
++                if (firedNow) fireHint();
 +            }
 +            /* 触屏「音频块·未选中·划动 = 平移视野」（规格 `docs/15` C 列）：同一个
 +               "块体上划动"按**按下那一刻**的选中状态分流——未选中 = 平移视野、
@@ -79043,10 +79556,10 @@ index 00000000..029c3455
 +}
 diff --git a/frontend/src/components/layout/touchGesture.ts b/frontend/src/components/layout/touchGesture.ts
 new file mode 100644
-index 00000000..d1123533
+index 00000000..d65bbc35
 --- /dev/null
 +++ b/frontend/src/components/layout/touchGesture.ts
-@@ -0,0 +1,828 @@
+@@ -0,0 +1,843 @@
 +/**
 + * touchGesture.ts — 双指触控手势层（Android）。
 + *
@@ -79252,6 +79765,19 @@ index 00000000..d1123533
 +        el.removeEventListener("touchstart", onTouch);
 +        el.removeEventListener("touchmove", onTouch);
 +    };
++}
++
++/**
++ * 🔴 #6（2026-10-04，内核级真触摸实测）：**slip 期间关掉双指的缩放 / 平移**。
++ *
++ * 双指长按块 = 调"音频与块的相对位置"（slip），按规格此时**不该**同时平移视口
++ * （用户口径：**其他情况**双指才解析为平移/缩放）。但本控制器并不知道 Alt 已被点亮
++ * ⇒ 实测：slip 生效的同时 `scrollLeft` 也走了 60px（视口跟着漂）。
++ * 由手势层（`TimelinePanel` 的 A3）在点亮 Alt 时置真、手势结束置假。
++ */
++let twoFingerPanSuppressed = false;
++export function setTwoFingerGestureSuppressed(value: boolean): void {
++    twoFingerPanSuppressed = value;
 +}
 +
 +/**
@@ -79498,6 +80024,8 @@ index 00000000..d1123533
 +        if (this.pointers.size < 2) return; // 仍在冷却的单指：忽略
 +        e.preventDefault();
 +        if (this.now() < this.cooldownUntil) return; // 2→1 冷却期
++        /* #6：slip（双指长按块）期间只让手势层走 slip 通道，视口**不**缩放/平移。 */
++        if (twoFingerPanSuppressed) return;
 +        this.update();
 +    };
 +
@@ -79947,10 +80475,10 @@ index 00000000..956a8bb5
 +}
 diff --git a/frontend/src/components/mobile/ClipControlPoints.tsx b/frontend/src/components/mobile/ClipControlPoints.tsx
 new file mode 100644
-index 00000000..7776c34e
+index 00000000..7fa6a5cc
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipControlPoints.tsx
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,427 @@
 +/**
 + * 音频块左右「控制点」—— E5 重做（用户口径）：
 + *
@@ -80073,22 +80601,39 @@ index 00000000..7776c34e
 +    React.useEffect(() => {
 +        const onDown = (e: PointerEvent) => {
 +            const geo = geomRef.current;
-+            if (!geo || !geo.isPhone || geo.multiSelectedCount > 1 || !geo.horizontallyVisible) return;
++            if (!geo || !geo.isPhone || !geo.horizontallyVisible) return;
 +            // 只认主指针（多指手势交给内核的缩放/平移）。
 +            if (!e.isPrimary) return;
-+            const yTop = geo.edgeBandTop;
-+            const yBottom = yTop + Math.max(8, geo.edgeBandHeight);
-+            if (e.clientY < yTop - VERTICAL_SLACK_PX || e.clientY > yBottom + VERTICAL_SLACK_PX) {
-+                return;
-+            }
++            /** 该侧端点：多选取**选区端**（最左块左缘 / 最右块右缘），单选就是块本身。 */
++            const endpoint = (side: "left" | "right") => {
++                const m = geo.multiSelectedCount > 1 ? geo.multiEndpoints?.[side] : undefined;
++                if (m) return { edgeX: m.edgeX, bandTop: m.bandTop, bandHeight: m.bandHeight };
++                return {
++                    edgeX: side === "left" ? geo.left : geo.left + geo.width,
++                    bandTop: geo.edgeBandTop,
++                    bandHeight: geo.edgeBandHeight,
++                };
++            };
++            /** 竖直判据**按侧分别判**（多选时两端可能不在同一行）。 */
++            const withinBand = (side: "left" | "right") => {
++                const b = endpoint(side);
++                const yTop = b.bandTop;
++                const yBottom = yTop + Math.max(8, b.bandHeight);
++                return (
++                    e.clientY >= yTop - VERTICAL_SLACK_PX &&
++                    e.clientY <= yBottom + VERTICAL_SLACK_PX
++                );
++            };
 +            /* 与内核命中带**逐像素对齐**（见上面两个常量的说明）：
-+               左控制点 = [边−18, 边+10]，右控制点对称。 */
-+            const leftHit =
-+                e.clientX >= geo.left - OUTSIDE_EDGE_SLACK_PX &&
-+                e.clientX <= geo.left + INNER_EDGE_PX;
-+            const rightHit =
-+                e.clientX >= geo.left + geo.width - INNER_EDGE_PX &&
-+                e.clientX <= geo.left + geo.width + OUTSIDE_EDGE_SLACK_PX;
++               左端点 = [边−18, 边+10]，右端点对称。 */
++            const hitOf = (side: "left" | "right") => {
++                const x = endpoint(side).edgeX;
++                return side === "left"
++                    ? e.clientX >= x - OUTSIDE_EDGE_SLACK_PX && e.clientX <= x + INNER_EDGE_PX
++                    : e.clientX >= x - INNER_EDGE_PX && e.clientX <= x + OUTSIDE_EDGE_SLACK_PX;
++            };
++            const leftHit = hitOf("left") && withinBand("left");
++            const rightHit = hitOf("right") && withinBand("right");
 +            if (!leftHit && !rightHit) return;
 +            const side: "left" | "right" = leftHit ? "left" : "right";
 +            /* 🔴 2026-10-03 用户口径（第二次报）：「触摸到控制点后**常用功能临时菜单**
@@ -80102,9 +80647,17 @@ index 00000000..7776c34e
 +               另外补一个"手势结束"通知，让浮条在**整段手势期间**都不许自己回来
 +               （只靠时间窗在长按拖动时会漏，见 `ClipQuickActions` 的 `grabActiveRef`）。 */
 +            window.dispatchEvent(new CustomEvent("hs-hide-clip-actions"));
-+            /* 与渲染同一条判据：按不到的圆点不参与反馈（否则又变成"有反馈、没效果"）。 */
-+            const baseX = side === "left" ? geo.left - DOT_R - 3 : geo.left + geo.width + DOT_R + 3;
-+            if (baseX < geo.container.left + DOT_R || baseX > geo.container.left + geo.container.width - DOT_R) {
++            /* 与渲染同一条判据（`dotPressable`，E41-1 已放宽到**视口**）：
++               按不到的圆点不参与反馈（否则又变成"有反馈、没效果"）。
++               ⚠️ #2：多选时最左块常常正好贴容器左缘 ⇒ 若仍按**容器**判，恰恰是我们最需要
++                  的那个端点拿不到抓取反馈（圆点画得出来、抓着却没反应）。
++               🔴 这里**必须现场读 `window.innerWidth`**，不能复用渲染作用域里的 `dotPressable`
++                  —— 那个闭包捕获的是**首帧**的宽度，而本副作用只注册一次
++                  （实测：首帧布局未就绪时宽度极小 ⇒ `x <= viewW - DOT_R` 恒假 ⇒ `setGrab`
++                  永不执行、圆点"按了没反应"，且上/下划的图标态（fade/rate）也永远不出现）。 */
++            const viewWNow = typeof window !== "undefined" ? window.innerWidth : 360;
++            const baseX = endpoint(side).edgeX + (side === "left" ? -DOT_R - 3 : DOT_R + 3);
++            if (baseX < DOT_R || baseX > viewWNow - DOT_R) {
 +                return;
 +            }
 +            setGrab({
@@ -80168,32 +80721,92 @@ index 00000000..7776c34e
 +
 +    if (g === null || !g.isPhone) return null;
 +    /**
-+     * 圆点中心是否落在**时间线容器内**（能按到的范围）。
++     * 圆点中心是否落在**能按到的范围**内。
 +     *
-+     * 块外圆点会被推到容器之外：块左缘正好贴容器左缘时（scrollLeft = 0 且 startSec = 0），
-+     * 左圆点中心 = `容器左 − 10` ⇒ **落进左侧的轨道头列**。那里按下去归轨道头管，
-+     * 圆点成了"看得见按不到"的死区（实测真机：`dotLeft.x = 122`，而时间线从 132 才开始）。
-+     * ⇒ 按不到就**不画**。内核"块内 10px"的命中带仍在，需要裁切时按边缘内侧即可。
++     * 🔴 E41-1（用户 2026-10-04）：「浮层仍然没看到能盖过**轨道头/拍数栏**」——
++     * 用户要的就是**圆点也能压在轨道头列上**。原来这里按**时间线容器**判（块贴左缘时
++     * 左圆点中心 = 容器左 − 10 ⇒ 判成"按不到" ⇒ 不画），但那是 E40 之前的旧前提：
++     * 三个浮层**已经搬到 App 根层**，压在轨道头列/拍数栏上照样能收到 pointerdown
++     * （根层在面板块之上）⇒ 「按不到就不画」的理由不再成立。
++     * ⇒ 判定范围放宽到**视口**（只保证不出屏）。
 +     */
-+    const dotPressable = (x: number): boolean =>
-+        x >= g.container.left + DOT_R && x <= g.container.left + g.container.width - DOT_R;
-+    const baseXOf = (side: "left" | "right"): number =>
-+        side === "left" ? g.left - DOT_R - 3 : g.left + g.width + DOT_R + 3;
-+    if (g.multiSelectedCount > 1) return null;
++    const viewW = typeof window !== "undefined" ? window.innerWidth : 360;
++    const dotPressable = (x: number): boolean => x >= DOT_R && x <= viewW - DOT_R;
++    /**
++     * #2（用户 2026-10-04）：该侧控制点贴在**哪条边、哪一行**。
++     *
++     * 单选 = 该块自己的边与本行；**多选 = 最左块的左缘 / 最右块的右缘**
++     * （两端可能不在同一行 ⇒ 各自的竖直带也要分开取）。
++     */
++    const endpointOf = (
++        side: "left" | "right",
++    ): { edgeX: number; bandTop: number; bandHeight: number } => {
++        const ep = g.multiSelectedCount > 1 ? g.multiEndpoints?.[side] : undefined;
++        if (ep) return { edgeX: ep.edgeX, bandTop: ep.bandTop, bandHeight: ep.bandHeight };
++        return {
++            edgeX: side === "left" ? g.left : g.left + g.width,
++            bandTop: g.edgeBandTop,
++            bandHeight: g.edgeBandHeight,
++        };
++    };
++    const baseXOf = (side: "left" | "right"): number => {
++        const edgeX = endpointOf(side).edgeX;
++        return side === "left" ? edgeX - DOT_R - 3 : edgeX + DOT_R + 3;
++    };
 +    if (!g.horizontallyVisible) return null;
-+
-+    const height = Math.max(8, g.edgeBandHeight);
-+    const centerY = g.edgeBandTop + height / 2;
 +
 +    /** 圆点：默认贴在**块外侧**（左点再往左偏一个半径，右点往右）。 */
 +    const dot = (side: "left" | "right"): React.ReactNode => {
 +        const grabbed = grab?.side === side;
 +        const baseX = baseXOf(side);
++        /* #2：多选时两端可能不在同一行 ⇒ 每侧各取自己那条边缘带的中点。 */
++        const band = endpointOf(side);
++        const centerY = band.bandTop + Math.max(8, band.bandHeight) / 2;
++        /**
++         * 🔴 #2（用户 2026-10-04 手测：「**多选批量处理的控制点用不了**」）
++         *
++         * 圆点画在**容器之外**时（块贴容器左缘 ⇒ 左圆点落在**轨道头列**上；E41-1 之后
++         * 这是刻意允许的），那一带的触摸被**轨道头**接收、**根本到不了内核 canvas**
++         * —— 内核只把 `pointerdown` 绑在自己的容器上。实测（`--at 0`，最左块贴容器左缘）：
++         * 左圆点 `cx=122`（容器左 132 之外），拖它 ⇒ **两块都没变**（变化块数 0）。
++         * 即"看得见、按不到"，违反项目自己的约定「浮层看得见就按得中 / 按不到就干脆不画」。
++         *
++         * 修法（最小侵入）：只给这种圆点加一层**自己的命中区**，起手时把这一下
++         * `pointerdown` **转发**给内核容器。之所以只需转发**起手**：
++         *   · 内核的 `pointermove/pointerup/pointercancel` 本来就绑在 **window** 上；
++         *   · 内核在自己的 `onPointerDown` 里会 `container.setPointerCapture(pointerId)`，
++         *     抓的是**真实指针 id** ⇒ 之后真实移动自动回到内核手里。
++         * 于是不必自己实现任何拖拽语义（裁剪 / 淡变 / 变速仍走内核原有链路）。
++         */
++        const outsideContainer =
++            baseX < g.container.left || baseX > g.container.left + g.container.width;
++        const forwardDownToKernel = (e: React.PointerEvent<HTMLDivElement>) => {
++            const target =
++                document.querySelector<HTMLElement>("[data-hs-fade-tooltip-anchor]") ??
++                document.querySelector<HTMLElement>('[data-hs-timeline-kernel="1"]');
++            if (target === null) return;
++            target.dispatchEvent(
++                new PointerEvent("pointerdown", {
++                    bubbles: true,
++                    cancelable: true,
++                    composed: true,
++                    pointerId: e.pointerId,
++                    pointerType: "touch",
++                    isPrimary: true,
++                    button: 0,
++                    buttons: 1,
++                    clientX: e.clientX,
++                    clientY: e.clientY,
++                }),
++            );
++        };
 +        /* 跟手 + **不许跑离块附近**（E24-④）：先按"块矩形 ± 余量"钳，再与容器求交
 +           （取交集的下/上界，保证既不出屏也不脱离块）。 */
-+        const minX = Math.max(g.container.left + DOT_R, g.left - DOT_FOLLOW_MARGIN_PX);
++        /* E41-1：跟手范围的上下界也放宽到**视口**（只保留"不许跑离块附近"那条），
++           块贴左缘时圆点就能跟到轨道头列上方；原来按容器夹 ⇒ 一旦越过就滑不动。 */
++        const minX = Math.max(DOT_R, g.left - DOT_FOLLOW_MARGIN_PX);
 +        const maxX = Math.min(
-+            g.container.left + g.container.width - DOT_R,
++            (typeof window !== "undefined" ? window.innerWidth : 360) - DOT_R,
 +            g.left + g.width + DOT_FOLLOW_MARGIN_PX,
 +        );
 +        /* 🔴 2026-10-03 **王字型轨道**（取代 E24-⑤ 的"纵向一律夹在本行内"）：
@@ -80256,6 +80869,27 @@ index 00000000..7776c34e
 +            >
 +                {/* 上下移动后带对应功能的图标（fade = 淡入淡出 / rate = 变速）。 */}
 +                {mode === "fade" ? <FadeGlyph /> : mode === "rate" ? <RateGlyph /> : null}
++                {/* #2：**画在容器之外**（压轨道头列）的圆点，自带一层命中区 ——
++                    否则那一带的触摸归轨道头，内核永远收不到（"看得见、按不到"）。
++                    44×44 = 触屏最小命中目标；`touch-action: none` 防止轨道头的
++                    **原生纵向滚动**把这一下吃掉（与轨道头"长按并划动"同一套理由）。 */}
++                {outsideContainer ? (
++                    <div
++                        data-hs-control-point-forward={side}
++                        onPointerDown={forwardDownToKernel}
++                        style={{
++                            position: "absolute",
++                            left: "50%",
++                            top: "50%",
++                            width: 44,
++                            height: 44,
++                            transform: "translate(-50%, -50%)",
++                            pointerEvents: "auto",
++                            touchAction: "none",
++                            background: "transparent",
++                        }}
++                    />
++                ) : null}
 +            </div>
 +        );
 +    };
@@ -80274,10 +80908,10 @@ index 00000000..7776c34e
 +}
 diff --git a/frontend/src/components/mobile/ClipEdgeLongPressHint.tsx b/frontend/src/components/mobile/ClipEdgeLongPressHint.tsx
 new file mode 100644
-index 00000000..b44f8bc2
+index 00000000..b5ad48ab
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipEdgeLongPressHint.tsx
-@@ -0,0 +1,146 @@
+@@ -0,0 +1,149 @@
 +/**
 + * 音频块头尾「控制点」长按提示 —— 规格 `docs/15` 触屏交互规格表，
 + * 「音频块头尾的控制点」列 · **长按**行：
@@ -80302,6 +80936,8 @@ index 00000000..b44f8bc2
 + * 直接 `position: fixed` 落在指针处，不需要再算一遍 sec→px 投影。
 + */
 +import React from "react";
++/* E41-4（用户 2026-10-04）：手机门控统一走 `isMobileShell()`（**横屏也算**），别再写死 `< 600`。 */
++import { isMobileShell } from "../../utils/layoutMode";
 +
 +/** 事件名即契约：内核宿主 → 提示浮层。 */
 +export const CLIP_EDGE_LONG_PRESS_HINT_EVENT = "hifi:clipEdgeLongPressHint";
@@ -80373,7 +81009,8 @@ index 00000000..b44f8bc2
 +
 +    if (hint === null) return null;
 +    // 只让**手机**看到（规格表整表是"触屏交互"，桌面鼠标路径走物理 Alt，不需要提示）。
-+    if (typeof window !== "undefined" && window.innerWidth >= 600) return null;
++    // E41-4：口径改为 `isMobileShell()` —— 横屏（宽 ≈800）也算手机，别再写 `< 600`。
++    if (!isMobileShell()) return null;
 +
 +    // 控制点可能贴在屏幕边缘（块本身在视口边上）⇒ 夹住横向位置，否则提示会被裁掉。
 +    const x = Math.min(Math.max(hint.clientX, 62), Math.max(62, window.innerWidth - 62));
@@ -80426,10 +81063,10 @@ index 00000000..b44f8bc2
 +}
 diff --git a/frontend/src/components/mobile/ClipQuickActions.tsx b/frontend/src/components/mobile/ClipQuickActions.tsx
 new file mode 100644
-index 00000000..ffd07881
+index 00000000..644ba0da
 --- /dev/null
 +++ b/frontend/src/components/mobile/ClipQuickActions.tsx
-@@ -0,0 +1,395 @@
+@@ -0,0 +1,442 @@
 +/**
 + * 音频块「常用操作」浮动条 —— 规格 `docs/15` 音频块·单击：
 + * 「选中并显示常用操作与左右控制点（参考 flm1.png）」。
@@ -80454,6 +81091,8 @@ index 00000000..ffd07881
 +import { shallowEqual } from "react-redux";
 +import { useAppDispatch, useAppSelector } from "../../app/hooks";
 +import { showMobilePanel } from "../../features/session/sessionSlice";
++/* E41-4（用户 2026-10-04）：手机门控统一走 `isMobileShell()`（**横屏也算**），别再写死 `< 600`。 */
++import { isMobileShell } from "../../utils/layoutMode";
 +
 +type ViewportTruth = {
 +    scrollLeft: number;
@@ -80543,9 +81182,7 @@ index 00000000..ffd07881
 +    );
 +    const [vp, setVp] = React.useState<ViewportTruth | null>(null);
 +    const [moreOpen, setMoreOpen] = React.useState(false);
-+    const [narrow, setNarrow] = React.useState(
-+        () => typeof window !== "undefined" && window.innerWidth < 600,
-+    );
++    const [narrow, setNarrow] = React.useState(isMobileShell);
 +    /**
 +     * 被"点别处"收起的块（TASKS.md B2：浮窗出现后点参数界面 / 播放等要隐藏）。
 +     *
@@ -80643,7 +81280,7 @@ index 00000000..ffd07881
 +            const w = window as unknown as { __hsViewport?: () => ViewportTruth };
 +            const next = w.__hsViewport ? w.__hsViewport() : null;
 +            setVp((prev) => (prev && next && prev.scrollLeft === next.scrollLeft && prev.pxPerSec === next.pxPerSec && prev.rowHeight === next.rowHeight && prev.scrollTop === next.scrollTop ? prev : next));
-+            setNarrow(window.innerWidth < 600);
++            setNarrow(isMobileShell());
 +            raf = requestAnimationFrame(tick);
 +        };
 +        raf = requestAnimationFrame(tick);
@@ -80655,8 +81292,11 @@ index 00000000..ffd07881
 +        setMoreOpen(false);
 +    }, [s.selectedClipId]);
 +
-+    const clip = s.selectedClipId ? s.clips.find((c) => c.id === s.selectedClipId) : null;
-+    if (!narrow || !clip || !vp || !vp.containerRect || s.multiSelectedClipIds.length > 1) {
++    /* #2：多选时 `selectedClipId` 可能为空/陈旧（框选不设它）⇒ 锚点回退到多选集合首个。 */
++    const anchorId =
++        s.selectedClipId ?? (s.multiSelectedClipIds.length > 0 ? s.multiSelectedClipIds[0] : null);
++    const clip = anchorId ? s.clips.find((c) => c.id === anchorId) : null;
++    if (!narrow || !clip || !vp || !vp.containerRect) {
 +        return null;
 +    }
 +    // B2：这一块已被"点别处"收起 ⇒ 不渲染。
@@ -80665,11 +81305,48 @@ index 00000000..ffd07881
 +    if (rowIndex < 0) return null;
 +
 +    const c = vp.containerRect;
-+    const left = c.left + (clip.startSec ?? 0) * vp.pxPerSec - vp.scrollLeft;
-+    const width = Math.max(24, (clip.durationSec ?? 0) * vp.pxPerSec);
-+    const top = c.top + rowIndex * vp.rowHeight - vp.scrollTop;
++    const viewW = typeof window !== "undefined" ? window.innerWidth : 360;
++    /** 单块矩形（行的纵坐标取 `[data-hs-track-row]` **渲染真值**，与几何 hook 同源）。 */
++    const rectOf = (clipId: string) => {
++        const item = s.clips.find((x) => x.id === clipId);
++        if (!item) return null;
++        const idx = s.tracks.findIndex((t) => t.id === item.trackId);
++        if (idx < 0) return null;
++        const rowEl = document.querySelector(`[data-hs-track-row="${item.trackId}"]`);
++        const rowRect = rowEl ? rowEl.getBoundingClientRect() : null;
++        const rowH = rowRect ? rowRect.height : vp.rowHeight;
++        const t = rowRect ? rowRect.top : c.top + idx * vp.rowHeight - vp.scrollTop;
++        return {
++            left: c.left + (item.startSec ?? 0) * vp.pxPerSec - vp.scrollLeft,
++            width: Math.max(24, (item.lengthSec ?? 0) * vp.pxPerSec),
++            top: t,
++            height: Math.max(1, rowH - 2),
++        };
++    };
++    /* #2（用户 2026-10-04）：**多选**时浮条按**选区包围盒**定位（框住全部选中块），
++       单块仍走原来的公式。 */
++    const multi = s.multiSelectedClipIds.length > 1 ? s.multiSelectedClipIds : null;
++    let left: number;
++    let width: number;
++    let top: number;
++    if (multi !== null) {
++        const rects = multi
++            .map((id) => rectOf(id))
++            .filter((r): r is NonNullable<ReturnType<typeof rectOf>> => r !== null);
++        if (rects.length === 0) return null;
++        left = Math.min(...rects.map((r) => r.left));
++        top = Math.min(...rects.map((r) => r.top));
++        const rightMost = Math.max(...rects.map((r) => r.left + r.width));
++        width = Math.max(24, rightMost - left);
++    } else {
++        left = c.left + (clip.startSec ?? 0) * vp.pxPerSec - vp.scrollLeft;
++        width = Math.max(24, (clip.durationSec ?? 0) * vp.pxPerSec);
++        top = c.top + rowIndex * vp.rowHeight - vp.scrollTop;
++    }
 +    // 块完全不可见时不显示浮条（免得浮条孤零零挂在屏幕边上）
-+    if (left + width < c.left + 8 || left > c.left + c.width - 8) return null;
++    /* E41-1（用户 2026-10-04）：可见性按**视口**判 —— 块贴左缘时浮条要能压到轨道头列上，
++       不再因为"出了时间线容器"就被丢掉。 */
++    if (left + width < 8 || left > viewW - 8) return null;
 +
 +    /* ── 按钮尺寸：必须让整条**落在时间线容器内** ──────────────────────────
 +       【为什么不能固定 38】轨道头占掉 132px，时间线只有 228px 宽；7 个 38px 按钮
@@ -80714,17 +81391,24 @@ index 00000000..ffd07881
 +            ? 38
 +            : Math.max(26, Math.floor((c.width - (actions.length - 1) * gap) / actions.length));
 +    const barWidth = actions.length * btnSize + (actions.length - 1) * gap;
++    /* 🔴 E41-1（用户 2026-10-04）：「浮层仍然没看到能盖过**轨道头/拍数栏**，
++       我认为原因是浮层到达轨道窗口外自动不渲染/自动避让」——**用户猜对了**：
++       原来这里把浮条位置**夹在时间线容器 `c` 内**（横向夹中心、纵向夹 `c.top + 4`），
++       所以它永远出不了轨道区 ⇒ 盖不到左侧轨道头列、也盖不到上方拍数栏。
++       三个浮层既然已经挂在 **App 根层**（E40 ①，在面板块之上），就没有理由再回避容器
++       ⇒ 改成只夹**视口**（保证不出屏）。 */
 +    const centerX = Math.min(
-+        Math.max(left + width / 2, c.left + barWidth / 2),
-+        c.left + c.width - barWidth / 2,
++        Math.max(left + width / 2, barWidth / 2 + 4),
++        Math.max(barWidth / 2 + 4, viewW - barWidth / 2 - 4),
 +    );
-+    /* 块正上方（flm1 形制），放不下就**贴容器上沿兜底**。
++    /* 块正上方（flm1 形制），放不下就**贴视口上沿兜底**。
 +       ⚠️ 用户明确否决过「兜底停到容器底部」的版本（TASKS.md B3：界面**顶部**的块的
 +       常用操作**不应该显示在界面底部**）——浮条必须待在所选块附近，否则"选中它、
 +       到别处去找操作"完全失去就近操作的意义。代价是首行的块会被压住顶部一小条
-+       （淡变区上沿），这一条随 B1"单击显示左右控制点"一起解决，不再靠挪浮条回避。 */
++       （淡变区上沿），这一条随 B1"单击显示左右控制点"一起解决，不再靠挪浮条回避。
++       E41-1：上界从 `c.top + 4` 放宽到 `4` ⇒ 首行的浮条可以压过**拍数栏**。 */
 +    const aboveTop = top - (btnSize + 10);
-+    const barTop = Math.max(c.top + 4, aboveTop);
++    const barTop = Math.max(4, aboveTop);
 +
 +
 +    const moreActions: Action[] = [
@@ -82928,10 +83612,10 @@ index 00000000..46ec27a5
 +}
 diff --git a/frontend/src/components/mobile/MobileTopBar.tsx b/frontend/src/components/mobile/MobileTopBar.tsx
 new file mode 100644
-index 00000000..271be5e9
+index 00000000..f484cec7
 --- /dev/null
 +++ b/frontend/src/components/mobile/MobileTopBar.tsx
-@@ -0,0 +1,1001 @@
+@@ -0,0 +1,1018 @@
 +/**
 + * MobileTopBar — 触摸形态顶部**横向菜单栏**（按 PS 设计稿 ps1.png）。
 + *
@@ -83113,6 +83797,15 @@ index 00000000..271be5e9
 +    const [anchorRight, setAnchorRight] = React.useState(false);
 +    /** #42：菜单浮层本体，供开面板后**实测宽度**用（paint 前修正，不可见）。 */
 +    const menuPanelRef = React.useRef<HTMLDivElement | null>(null);
++    /**
++     * E41-5（用户 2026-10-04）：「**横屏下菜单栏菜单过短，应可以显示到手机底边**」。
++     *
++     * 原来是硬编码 `maxHeight: calc(100vh - 160px)` —— 竖屏（100vh≈800）看着够用，
++     * 但**横屏 100vh≈360** ⇒ 只剩 ~200px，而顶栏本身才 32px 高 ⇒ 白白浪费一截。
++     * 菜单是挂在顶栏下沿的（`absolute; top:100%`），可用高度就是「视口底 − 面板顶」，
++     * 与 160 这个魔数无关 ⇒ 改成开面板后**实测面板顶**再算（同一个 effect 里顺手做）。
++     */
++    const [menuMaxH, setMenuMaxH] = React.useState<number | null>(null);
 +
 +    /* #42：菜单一旦渲染出来，就在**浏览器 paint 之前**量它的真实宽度。
 +     * 放不下（左边界 + 实际宽 > 视口）才切换到靠右 —— 不再靠常数猜。 */
@@ -83120,10 +83813,13 @@ index 00000000..271be5e9
 +        if (!openMenu) return;
 +        const el = menuPanelRef.current;
 +        if (!el) return;
-+        const w = el.getBoundingClientRect().width;
-+        const overflow = anchorLeft + w > window.innerWidth;
++        const r = el.getBoundingClientRect();
++        const overflow = anchorLeft + r.width > window.innerWidth;
 +        // 只在需要时 setState；值没变 React 会 bail out，不会死循环。
 +        setAnchorRight((prev) => (prev === overflow ? prev : overflow));
++        /* E41-5：高度上限 = 视口底 − 面板顶 − 8。改高度不动 top ⇒ 不会来回抖。 */
++        const maxH = Math.max(120, Math.round(window.innerHeight - r.top - 8));
++        setMenuMaxH((prev) => (prev === maxH ? prev : maxH));
 +    });
 +    /** 当前展开的**二级面板**（语言 / 时间单位 / 主题 / 推理设备）。null = 一级列表。 */
 +    const [submenu, setSubmenu] = React.useState<MenuEntry | null>(null);
@@ -83806,7 +84502,12 @@ index 00000000..271be5e9
 +                            overflow: "hidden",
 +                            // 菜单项补齐后（文件 10 项 / 视图 12 项）在 360×708 上会超出屏幕，
 +                            // 给一个高度上限 + 滚动，保证最后一项也点得到。
-+                            maxHeight: "calc(100vh - 160px)",
++                            // E41-5：上限改为「视口底 − 面板顶 − 8」（实测值，见上面 useLayoutEffect），
++                            // 横屏也就能一直显示到手机底边；实测前的首帧退回 dvh 估算。
++                            maxHeight:
++                                menuMaxH !== null
++                                    ? `${menuMaxH}px`
++                                    : "calc(100dvh - var(--hs-modal-top) - 16px)",
 +                            overflowY: "auto",
 +                        }}
 +                    >
@@ -83935,10 +84636,10 @@ index 00000000..271be5e9
 +}
 diff --git a/frontend/src/components/mobile/useClipOverlayGeometry.ts b/frontend/src/components/mobile/useClipOverlayGeometry.ts
 new file mode 100644
-index 00000000..d1faffae
+index 00000000..d26b655a
 --- /dev/null
 +++ b/frontend/src/components/mobile/useClipOverlayGeometry.ts
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,269 @@
 +/**
 + * 手机上「浮在音频块之上的 DOM 覆盖层」共用的几何真值。
 + *
@@ -83964,6 +84665,9 @@ index 00000000..d1faffae
 +import React from "react";
 +import { shallowEqual } from "react-redux";
 +import { useAppSelector } from "../../app/hooks";
++/* E41-4（用户 2026-10-04）：手机门控统一走 `isMobileShell()`（**横屏也算**）。
++   原来这里写死 `< 600`，而横屏手机宽 ≈800 ⇒ 横屏下整套浮层/控制点都不渲染。 */
++import { isMobileShell } from "../../utils/layoutMode";
 +
 +/** `__hsViewport()` 返回的视口真值（只列覆盖层真正用到的字段）。 */
 +export type ViewportTruth = {
@@ -83991,8 +84695,35 @@ index 00000000..d1faffae
 +    /** 块是否与容器有横向交集（完全在视口外时覆盖层不必渲染）。 */
 +    readonly horizontallyVisible: boolean;
 +    readonly multiSelectedCount: number;
++    /**
++     * #2（用户 2026-10-04）：**多选**时的左右端点（可能不在同一行）。
++     *
++     * 用户口径：「框选多个音频块后应该在**最左侧音频块左侧**和**最右侧音频块右侧**
++     * 添加控制点」。单块时左右端就是该块本身 ⇒ 本字段为 `undefined`（消费方走
++     * `left` / `width` 那条老路径，行为不变）。
++     */
++    readonly multiEndpoints?: {
++        /** 最左块：`edgeX` = 它的**左缘**；`bandTop/bandHeight` = 它所在行的边缘带。 */
++        readonly left: MultiEndpoint;
++        /** 最右块：`edgeX` = 它的**右缘**。 */
++        readonly right: MultiEndpoint;
++    };
 +    /** 手机断点（与常用操作浮条同一口径：< 600px）。 */
 +    readonly isPhone: boolean;
++}
++
++/** 多选端点：一条边 + 它所在行的竖直带（屏幕坐标）。 */
++export interface MultiEndpoint {
++    /** 端点所属的块（用于 hitTest 对齐 / 调试）。 */
++    readonly clipId: string;
++    /** 端点所在的**外侧边**的屏幕 x（左端 = 块左缘，右端 = 块右缘）。 */
++    readonly edgeX: number;
++    /** 该块所在行的边缘控制点带（屏幕坐标）。 */
++    readonly bandTop: number;
++    readonly bandHeight: number;
++    /** 该块所在行的 top / 高度（跟手夹取要用）。 */
++    readonly rowTop: number;
++    readonly rowHeight: number;
 +}
 +
 +/** 与内核 `constants.ts` 对齐的常量（见文件头说明）。 */
@@ -84054,56 +84785,126 @@ index 00000000..d1faffae
 +        shallowEqual,
 +    );
 +    const vp = useTimelineViewportTruth();
-+    const [isPhone, setIsPhone] = React.useState(
-+        () => typeof window !== "undefined" && window.innerWidth < 600,
-+    );
++    const [isPhone, setIsPhone] = React.useState(isMobileShell);
 +    React.useEffect(() => {
-+        const onResize = () => setIsPhone(window.innerWidth < 600);
++        const onResize = () => setIsPhone(isMobileShell());
 +        window.addEventListener("resize", onResize);
++        window.addEventListener("orientationchange", onResize);
 +        onResize();
-+        return () => window.removeEventListener("resize", onResize);
++        return () => {
++            window.removeEventListener("resize", onResize);
++            window.removeEventListener("orientationchange", onResize);
++        };
 +    }, []);
 +
 +    return React.useMemo(() => {
 +        if (!vp || !vp.containerRect) return null;
-+        const clip = s.selectedClipId
-+            ? s.clips.find((item) => item.id === s.selectedClipId)
-+            : undefined;
-+        if (!clip) return null;
-+        const rowIndex = s.tracks.findIndex((track) => track.id === clip.trackId);
-+        if (rowIndex < 0) return null;
 +        const c = vp.containerRect;
-+        const left = c.left + (clip.startSec ?? 0) * vp.pxPerSec - vp.scrollLeft;
-+        /* ⚠️ 用 `lengthSec`（**时间轴长度**）而不是 `durationSec`（素材时长）：
-+           块画多宽由 lengthSec 决定，左右控制点必须落在画出来的两条边上；变速过的块
-+           两者会差一个 playbackRate 倍率（第一版浮条用 durationSec 居中，位置是偏的）。*/
-+        const width = Math.max(24, (clip.lengthSec ?? 0) * vp.pxPerSec);
-+        /* ⚠️ 行的纵坐标必须取**渲染真值**（轨道头 DOM 行 `[data-hs-track-row=<id>]`），
-+           不能按「扁平下标 × rowHeight」推算：`state.tracks` 是扁平列表，而时间轴按
-+           "父 → 其子 → 下一个父"渲染，子母轨存在时**扁平下标 ≠ 可视行号** ⇒ 控制点会
-+           整行错位（实测：3 条轨道时算出的抓手比真块低 48px，正好落在下一条轨道上）。
-+           取不到 DOM 行（例如平板走的是另一套布局）时才退回算术。 */
-+        const rowEl = document.querySelector(`[data-hs-track-row="${clip.trackId}"]`);
-+        const rowRect = rowEl ? rowEl.getBoundingClientRect() : null;
-+        const rowHeightPx = rowRect ? rowRect.height : vp.rowHeight;
-+        const top = rowRect ? rowRect.top : c.top + rowIndex * vp.rowHeight - vp.scrollTop;
-+        const clipHeight = Math.max(1, rowHeightPx - 2);
-+        const body = Math.max(1, clipHeight - CLIP_HEADER_HEIGHT);
-+        const edgeTop = CLIP_HEADER_HEIGHT + cornerReservePx(body);
-+        const edgeBottom = Math.max(edgeTop + 1, clipHeight - SNAP_OFFSET_HIT_HEIGHT);
++        const anchor =
++            (s.selectedClipId
++                ? s.clips.find((item) => item.id === s.selectedClipId)
++                : undefined) ??
++            /* #2：框选**不会**设 `selectedClipId`（只有框内恰好 1 个时才同步）⇒ 多选时
++               焦点可能是空/陈旧，这里回退到多选集合的首个，保证浮层拿得到锚点。 */
++            (s.multiSelectedClipIds.length > 0
++                ? s.clips.find((item) => item.id === s.multiSelectedClipIds[0])
++                : undefined);
++        if (!anchor) return null;
++
++        /**
++         * 单块的屏幕矩形 + 它自己的边缘带（相对量）。
++         *
++         * ⚠️ 用 `lengthSec`（**时间轴长度**）而不是 `durationSec`（素材时长）：
++         * 块画多宽由 lengthSec 决定，左右控制点必须落在画出来的两条边上；变速过的块
++         * 两者会差一个 playbackRate 倍率（第一版浮条用 durationSec 居中，位置是偏的）。
++         * ⚠️ 行的纵坐标必须取**渲染真值**（`[data-hs-track-row=<id>]`），不能按
++         * 「扁平下标 × rowHeight」推算 —— 子母轨存在时扁平下标 ≠ 可视行号
++         * （实测：3 条轨道时算出的抓手比真块低 48px，正好落在下一条轨道上）。
++         */
++        const rectOf = (clipId: string) => {
++            const clip = s.clips.find((item) => item.id === clipId);
++            if (!clip) return null;
++            const rowIndex = s.tracks.findIndex((track) => track.id === clip.trackId);
++            if (rowIndex < 0) return null;
++            const rowEl = document.querySelector(`[data-hs-track-row="${clip.trackId}"]`);
++            const rowRect = rowEl ? rowEl.getBoundingClientRect() : null;
++            const rowHeightPx = rowRect ? rowRect.height : vp.rowHeight;
++            const top = rowRect ? rowRect.top : c.top + rowIndex * vp.rowHeight - vp.scrollTop;
++            const clipHeight = Math.max(1, rowHeightPx - 2);
++            const body = Math.max(1, clipHeight - CLIP_HEADER_HEIGHT);
++            const edgeTop = CLIP_HEADER_HEIGHT + cornerReservePx(body);
++            const edgeBottom = Math.max(edgeTop + 1, clipHeight - SNAP_OFFSET_HIT_HEIGHT);
++            return {
++                clipId: clip.id,
++                left: c.left + (clip.startSec ?? 0) * vp.pxPerSec - vp.scrollLeft,
++                width: Math.max(24, (clip.lengthSec ?? 0) * vp.pxPerSec),
++                top,
++                clipHeight,
++                edgeTop,
++                edgeBottom,
++            };
++        };
++
++        const rect = rectOf(anchor.id);
++        if (rect === null) return null;
++        const viewW = typeof window !== "undefined" ? window.innerWidth : 360;
++
++        /* #2：多选（> 1）⇒ 覆盖层覆盖**整个选区包围盒**，左右控制点落在
++           **最左块的左缘 / 最右块的右缘**（两端可能不在同一行）。 */
++        const multiIds = s.multiSelectedClipIds.length > 1 ? s.multiSelectedClipIds : null;
++        let left = rect.left;
++        let top = rect.top;
++        let right = rect.left + rect.width;
++        let bottom = rect.top + rect.clipHeight;
++        let multiEndpoints: ClipOverlayGeometry["multiEndpoints"];
++        if (multiIds !== null) {
++            const rects = multiIds
++                .map((id) => rectOf(id))
++                .filter((item): item is NonNullable<ReturnType<typeof rectOf>> => item !== null);
++            if (rects.length === 0) return null;
++            let leftMost = rects[0];
++            let rightMost = rects[0];
++            for (const item of rects) {
++                if (item.left < leftMost.left) leftMost = item;
++                if (item.left + item.width > rightMost.left + rightMost.width) rightMost = item;
++                left = Math.min(left, item.left);
++                top = Math.min(top, item.top);
++                right = Math.max(right, item.left + item.width);
++                bottom = Math.max(bottom, item.top + item.clipHeight);
++            }
++            const bandOf = (item: NonNullable<ReturnType<typeof rectOf>>) => ({
++                clipId: item.clipId,
++                edgeX: 0,
++                bandTop: item.top + item.edgeTop,
++                bandHeight: item.edgeBottom - item.edgeTop,
++                rowTop: item.top,
++                rowHeight: item.clipHeight,
++            });
++            multiEndpoints = {
++                left: { ...bandOf(leftMost), edgeX: leftMost.left },
++                right: { ...bandOf(rightMost), edgeX: rightMost.left + rightMost.width },
++            };
++        }
++
++        const width = Math.max(24, right - left);
 +        return {
-+            clipId: clip.id,
++            clipId: anchor.id,
 +            left,
 +            top,
 +            width,
-+            clipHeight,
-+            edgeBandTop: top + edgeTop,
-+            edgeBandHeight: edgeBottom - edgeTop,
++            clipHeight: Math.max(1, bottom - top),
++            /* 单块语义：anchor 自己的边缘带（多选时消费方走 `multiEndpoints`）。 */
++            edgeBandTop: rect.top + rect.edgeTop,
++            edgeBandHeight: rect.edgeBottom - rect.edgeTop,
 +            container: c,
 +            pxPerSec: vp.pxPerSec,
 +            rowHeight: vp.rowHeight,
-+            horizontallyVisible: left + width >= c.left + 8 && left <= c.left + c.width - 8,
++            /* E41-1（用户 2026-10-04）：横向可见性按**视口**判，不再按时间线容器。
++               三个浮层已全部挂在 App 根层（E40 ①）⇒ 压在**轨道头列**（x < 容器左）上也画得出、
++               也按得到。原来按容器判 ⇒ 块贴左缘时整个覆盖层直接被 `return null` 丢掉。 */
++            horizontallyVisible: left + width >= 8 && left <= viewW - 8,
 +            multiSelectedCount: s.multiSelectedClipIds.length,
++            multiEndpoints,
 +            isPhone,
 +        };
 +    }, [s, vp, isPhone]);
@@ -99038,7 +99839,7 @@ index 176638e2..19486b79 100644
 +    menu_view_panel_notes: "記事本",
  } as const;
 diff --git a/frontend/src/index.css b/frontend/src/index.css
-index d42792c8..46fa0ec7 100644
+index d42792c8..7b70d9cb 100644
 --- a/frontend/src/index.css
 +++ b/frontend/src/index.css
 @@ -128,6 +128,22 @@ body,
@@ -99140,7 +99941,7 @@ index d42792c8..46fa0ec7 100644
  }
  
  .rt-DialogContent,
-@@ -469,3 +519,1064 @@ textarea {
+@@ -469,3 +519,1083 @@ textarea {
      max-width: 400px;
      tab-size: 4;
  }
@@ -99795,14 +100596,22 @@ index d42792c8..46fa0ec7 100644
 +}
 +
 +/*
-+ * #15：参数界面的关闭键（左上角 X）—— **只在手机显示**。
++ * #15：参数界面的关闭键（左上角 X）—— **只在手机外壳显示**。
 + * 平板上参数行常显，没有"关闭"语义。
 + * 用 CSS 控制而不是 JS 判断：横竖屏切换时会自动跟上。
++ *
++ * 🔴 E41-4b（用户 2026-10-04 手测）：「**横屏下参数界面左上角没有叉**」。
++ * 原来这里是 `max-width: 599px` —— 而**横屏手机宽 ≈752** ⇒ 条件不成立 ⇒ 叉被整条隐藏。
++ * 但形态判定的口径是 `resolveLayoutMode(w) = (w < 1280 ⇒ phone)`（横屏**仍然是 phone**，
++ * 见 `utils/layoutMode.ts` / `docs/TASKS §E28`）⇒ 断点必须与它一致：
++ *   手机外壳 = `< 1280px`　桌面 = `≥ 1280px`。
++ * ⚠️ 这是 JS `isMobileShell()` 的 **CSS 版**：两者是同一个口径，改一处就要两处一起核
++ *    （别再出现"JS 侧统一到 1280 了、CSS 媒体查询还停在 600"这种分裂）。
 + */
 +.hs-param-close {
 +    display: none;
 +}
-+@media (max-width: 599px) {
++@media (max-width: 1279px) {
 +    .hs-param-close {
 +        display: inline-flex;
 +    }
@@ -99866,8 +100675,10 @@ index d42792c8..46fa0ec7 100644
 +    pointer-events: none;
 +    opacity: 0.15;
 +}
-+/* 平板 / 桌面不需要（分屏是手机形态的机制）。 */
-+@media (min-width: 600px) {
++/* 桌面不需要（分屏是**手机外壳**的机制）。
++   🔴 E41-4b：原来写 `min-width: 600px` ⇒ **横屏手机（≈752）**也被判成"桌面"、
++   四个分屏面板的关闭键一起消失。断点与 `resolveLayoutMode`（`≥ 1280 ⇒ desktop`）对齐。 */
++@media (min-width: 1280px) {
 +    .hs-panel-close {
 +        display: none;
 +    }
@@ -100039,6 +100850,15 @@ index d42792c8..46fa0ec7 100644
 + * 于是每次出现都是**新节点**，`animation` 才会重新跑。 */
 +[data-hs-pane] {
 +    animation: hs-fade-in var(--hs-anim-dur-pane) var(--hs-anim-ease) both;
++    /* 🔴 E41-3（用户 2026-10-04 手测）：「**文件浏览器窗口拖到很窄时，窗口内容会盖在状态栏上**」。
++       面板块本身是 `flex-1 min-h-0 relative`（无 `overflow`），而各面板根是 `flex-col h-full`
++       且内部有多条 `shrink-0` 固定行（文件浏览器的表头 `h-8` / 状态行 / 页脚；
++       实测 `FileBrowserPanel.tsx` 有 4 条）。被拖矮到**低于这些固定行之和**时，
++       `min-h-0` 只能让中间那个 `ScrollArea` 缩到 0，固定行仍撑住内容盒
++       ⇒ 内容**向下溢出**面板、画到下面的底栏 / 状态栏上。
++       ⇒ 面板是"一块视口"，内容超出就该被裁（浮层不受影响：Radix 弹层与
++         三个块覆盖层都 portal / 挂在 **App 根层**，不在面板块的裁剪盒里）。 */
++    overflow: hidden;
 +}
 +
 +/* ③ 音频块浮动操作条（根节点是 absolute、内含 fixed 实条 ⇒ 同样只淡入） */
@@ -101127,10 +101947,10 @@ index f3bb43ca..99a4483d 100644
      available: boolean;
 diff --git a/frontend/src/utils/layoutMode.ts b/frontend/src/utils/layoutMode.ts
 new file mode 100644
-index 00000000..c593e527
+index 00000000..e17d0cd1
 --- /dev/null
 +++ b/frontend/src/utils/layoutMode.ts
-@@ -0,0 +1,57 @@
+@@ -0,0 +1,76 @@
 +/**
 + * layoutMode.ts — 形态判定（ADR-006 / ADR-007；`docs/04` §2、§17）。
 + *
@@ -101165,6 +101985,25 @@ index 00000000..c593e527
 +    } catch {
 +        return null;
 +    }
++}
++
++/**
++ * 「当前视口是不是**手机/平板外壳**」——即 `resolveLayoutMode(...) === "phone"`，**横竖屏都算**。
++ *
++ * 🔴 E41-4（用户 2026-10-04）：「**横屏下双击轨道进编辑、多种浮层都无法渲染**」。
++ *
++ * 根因：几处手机专属逻辑**各自写死了 `< 600px`**（`ClipQuickActions` / `ClipEdgeLongPressHint`
++ * / `useClipOverlayGeometry` / `TimelinePanel`），而**横屏手机的宽度 ≈800** ⇒ 这些门控全部不成立。
++ * 可形态判定本身是 `w < 1280 ⇒ phone` —— 横屏**仍然是 phone**（横屏口径见 `docs/TASKS §E28`）。
++ *
++ * ⇒ 统一走这里，**别再各写 600**。（`App.tsx` 的 `isPhone` 也是同一口径。）
++ * ⚠️ 视口变化（旋转/分屏）由调用方的 `resize` / `orientationchange` 监听驱动重算。
++ */
++export function isMobileShell(): boolean {
++    if (typeof window === "undefined") return false;
++    return (
++        resolveLayoutMode(window.innerWidth, window.innerHeight, readForcedLayoutMode()) === "phone"
++    );
 +}
 +
 +function currentMode(): LayoutMode {

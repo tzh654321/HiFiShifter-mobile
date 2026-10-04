@@ -811,6 +811,24 @@ else
       echo "❌ 追加失败，请手工检查 $MANIFEST" >&2
     fi
   fi
+  # HS-VIBRATE（2026-10-04）：**长按反馈的震动一直没生效**的真因。
+  # 前端多处"长按到点"都调 `navigator.vibrate(12)`（增益旋钮 / 文件浏览器拖拽 /
+  # 轨道菜单 / 音频块「双指长按 = 调内部偏移」……），但 Manifest 里**从来没声明过**
+  # `android.permission.VIBRATE` ⇒ WebView 里 `navigator.vibrate()` 是**空操作**
+  # （返回 false、不报错）⇒ 用户的体感就是"按了没反应"。
+  # 真机取证：`adb shell dumpsys package com.arounder.hifishifter | grep permission`
+  # 只有 INTERNET / RECORD_AUDIO / MANAGE_EXTERNAL_STORAGE。
+  # VIBRATE 属 normal 权限：**声明即生效**，无需运行时申请。
+  if grep -q 'android.permission.VIBRATE' "$MANIFEST"; then
+    echo "· 已有 VIBRATE，跳过"
+  else
+    sed -i 's|\(<application\)|    <uses-permission android:name="android.permission.VIBRATE" />\n    \1|' "$MANIFEST"
+    if grep -q 'android.permission.VIBRATE' "$MANIFEST"; then
+      echo "✓ 已追加 VIBRATE（长按震动才会真的震）"
+    else
+      echo "❌ 追加失败，请手工检查 $MANIFEST" >&2
+    fi
+  fi
 fi
 
 # ── 11. gradle 并发与内存（HS-WORKERS-PATCH，2026-09-22）───────────────────

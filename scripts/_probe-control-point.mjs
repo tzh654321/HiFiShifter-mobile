@@ -223,13 +223,19 @@ async function main() {
         let modeDuring = null;
         if (stage) {
             await sleep(o.hold);
+            /* 🔴 2026-10-04 修正：**横滑方向必须指向"块内"**。
+               淡变/变速的时长都是从 0 起算的：**向外拖（离开块）只会把它钳在 0**
+               ⇒ 恒无变化 ⇒ 判据假红（CP2 一直红就是这个原因，不是产品问题）。
+               左控制点 = 块左缘 ⇒ 向**右**是块内；右控制点相反。
+               （实测：同一条"上划 + 向右拖"立刻绿：`fadeIn 0 → 0.492`。） */
+            const inwardDx = useSide === "left" ? Math.abs(dx) : -Math.abs(dx);
             const steps = 4;
             for (let i = 1; i <= steps; i++) {
                 await touch('touchMove', [{ x: dot.x, y: dot.y + (dy * i) / steps }]);
                 await sleep(45);
             }
             for (let i = 1; i <= steps; i++) {
-                await touch('touchMove', [{ x: dot.x + (dx * i) / steps, y: dot.y + dy }]);
+                await touch('touchMove', [{ x: dot.x + (inwardDx * i) / steps, y: dot.y + dy }]);
                 await sleep(45);
             }
             modeDuring = await cdp.call((sd) => {
