@@ -34,7 +34,7 @@ if [ ! -d "$SRC_TAURI/gen/android" ]; then
 fi
 
 # cargo target 目录（可能是 Windows 形式，转成 MSYS 形式给 ls 用）
-TGT="${CARGO_TARGET_DIR:-D:/hfshifter-target-upstream}"
+TGT="${CARGO_TARGET_DIR:-D:/code/HiFiShifter/hfshifter-target-upstream}"
 TGT="$(printf '%s' "$TGT" | sed 's|^\([A-Za-z]\):|/\L\1|; s|\\|/|g')"
 
 n=0

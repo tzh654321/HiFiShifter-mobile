@@ -130,7 +130,7 @@ export ANDROID_ABI="$ABI"
 export ANDROID_STL="c++_shared"
 
 # ── cargo ──────────────────────────────────────────────────────────────────
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-D:/hfshifter-target-upstream}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-D:/code/HiFiShifter/hfshifter-target-upstream}"
 export CARGO_BUILD_TARGET="$TRIPLE"
 
 cd "$SRC"

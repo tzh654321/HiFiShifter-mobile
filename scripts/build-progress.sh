@@ -58,7 +58,7 @@ tail -3 "$LOG" | sed 's/^/           /'
 
 # 产物
 echo "产物 APK :"
-for f in /d/hifishifter-out/hifishifter-arm64-v8a-debug.apk /d/hifishifter-out/hifishifter-x86_64-debug.apk; do
+for f in /d/code/HiFiShifter/hifishifter-out/hifishifter-arm64-v8a-debug.apk /d/code/HiFiShifter/hifishifter-out/hifishifter-x86_64-debug.apk; do
     if [ -f "$f" ]; then
         echo "           $(basename "$f")  $(ls -la --time-style=+%m-%d_%H:%M "$f" | awk '{print $6}')  $(du -h "$f" | cut -f1)"
     fi

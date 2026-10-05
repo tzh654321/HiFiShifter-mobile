@@ -41,7 +41,7 @@ GEN="$ROOT/upstream-src/backend/src-tauri/gen/android"
 JNI="$GEN/app/src/main/jniLibs/$ABI"
 NDK="${NDK_HOME:-D:/Android/Sdk/ndk/27.2.12479018}"
 NDK_CPP="$NDK/toolchains/llvm/prebuilt/windows-x86_64/sysroot/usr/lib/$TRIPLE/libc++_shared.so"
-TGT="${CARGO_TARGET_DIR:-D:/hfshifter-target-upstream}/$TRIPLE/debug"
+TGT="${CARGO_TARGET_DIR:-D:/code/HiFiShifter/hfshifter-target-upstream}/$TRIPLE/debug"
 
 echo "▸ ABI=$ABI  TRIPLE=$TRIPLE"
 echo "▸ JAVA_HOME=${JAVA_HOME:-（未设！）}"

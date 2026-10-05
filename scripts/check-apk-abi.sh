@@ -14,7 +14,7 @@
 #
 # 用法：
 #   bash scripts/check-apk-abi.sh <apk 路径> [设备序列号]
-#   bash scripts/check-apk-abi.sh D:/hifishifter-out/hifishifter-arm64-v8a-debug.apk 221deeb
+#   bash scripts/check-apk-abi.sh D:/code/HiFiShifter/hifishifter-out/hifishifter-arm64-v8a-debug.apk 221deeb
 #   bash scripts/check-apk-abi.sh --device 221deeb          # 只报设备 ABI 与推荐包
 #
 # 退出码：0 = 匹配（或未给设备）；1 = **不匹配**（装上去必崩）；2 = 用法/环境错误
@@ -40,8 +40,8 @@ if [ "${1:-}" = "--device" ]; then
     echo "  主 ABI   : $ABI"
     echo "  支持 ABI : $ABI2"
     case "$ABI" in
-        arm64-v8a) echo "  ⇒ 用 D:/hifishifter-out/hifishifter-arm64-v8a-debug.apk" ;;
-        x86_64)    echo "  ⇒ 用 D:/hifishifter-out/hifishifter-x86_64-debug.apk"  ;;
+        arm64-v8a) echo "  ⇒ 用 D:/code/HiFiShifter/hifishifter-out/hifishifter-arm64-v8a-debug.apk" ;;
+        x86_64)    echo "  ⇒ 用 D:/code/HiFiShifter/hifishifter-out/hifishifter-x86_64-debug.apk"  ;;
         *)         ylw "  ⚠️ 未预置该 ABI 的归档名，请自行确认" ;;
     esac
     exit 0

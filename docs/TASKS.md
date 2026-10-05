@@ -102,10 +102,10 @@
   于是 `:app:rustBuildX86_64Debug` 必须真跑 ⇒ **撞上 `node.exe.bat` 那个坑**（详见 build-apk.sh ③.9）。  
   之前一直没暴露是因为该 task 常年命中 UP-TO-DATE。已固化：构建脚本自动摘掉 WorkBuddy 的 node。  
   ⚠️ 还要 `gradlew --stop` —— **daemon 的环境块启动时定型**，不重启 daemon 改了 PATH 也白改。
-- 🔴 **`clean` 不是免费的**：清空 `D:/hs-build` 后，一批原本命中 UP-TO-DATE 的 task 会真跑，  
+- 🔴 **`clean` 不是免费的**：清空 `D:/code/HiFiShifter/hs-build` 后，一批原本命中 UP-TO-DATE 的 task 会真跑，  
   每一处「先删旧产物」都会撞上**守护进程的句柄**，报 `Couldn't delete …`（每次文件都不同）。  
   正确顺序：`gradlew --stop` → **`Get-Process java | Stop-Process -Force`**（`--stop` 管不到 Kotlin daemon）  
-  → `/usr/bin/rm -rf /d/hs-build/*` → **删掉 `jniLibs` 这个 symlink 本身**（否则 tauri 报 `os error 183`）→ 重建。  
+  → `/usr/bin/rm -rf /d/code/HiFiShifter/hs-build/*` → **删掉 `jniLibs` 这个 symlink 本身**（否则 tauri 报 `os error 183`）→ 重建。  
   ⚠️ `wmic` 已被安全策略禁用，列进程用 PowerShell 工具的 `Get-Process`。
 - 用户偏好：**真机/模拟器实测** > 代码推断；交付要「改了什么 / 根因 / 验证状态」三段式。
 
@@ -3992,7 +3992,7 @@ pointer 链路就此断掉、`onPointerMove` 收不到后续移动 ⇒ 拖拽从
 2. 🔴 **判据失败，先对"设备上装的包"做时间对账**（本轮白查一轮）：  
    首跑 F2 恒 `null`、`animatedIds: []`，看着像"effect 没触发"；实际是**包里根本没有这段代码** ——  
    设备上那包 `lastUpdateTime = 11:29`，而 `TrackList.tsx` 的 FLIP 改动是 **11:33**、带 FLIP 的  
-   `frontend/dist` 直到 **11:42** 才产出。装上 `/d/hifishifter-out/hifishifter-arm64-v8a-debug.apk`（11:37 构建）  
+   `frontend/dist` 直到 **11:42** 才产出。装上 `/d/code/HiFiShifter/hifishifter-out/hifishifter-arm64-v8a-debug.apk`（11:37 构建）  
    之后**一次 4/4**。
    - 对账三件套：`adb shell dumpsys package com.arounder.hifishifter | grep lastUpdateTime` ↔  
      `ls --time-style=full-iso <源码/补丁/dist>`。
@@ -4005,11 +4005,11 @@ pointer 链路就此断掉、`onPointerMove` 收不到后续移动 ⇒ 拖拽从
 
 | 现象                                                                                                          | 真因                                                                                                                                                                                                                                 |
 | :---------------------------------------------------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `failed to open: D:/hfshifter-target-upstream\debug\.cargo-build-lock 拒绝访问 (os error 5)`                    | **两个 cargo 并发**抢同一 target（上一轮"被杀"的构建其实没死透）                                                                                                                                                                                         |
+| `failed to open: D:/code/HiFiShifter/hfshifter-target-upstream\debug\.cargo-build-lock 拒绝访问 (os error 5)`                    | **两个 cargo 并发**抢同一 target（上一轮"被杀"的构建其实没死透）                                                                                                                                                                                         |
 | `unable to rename temporary '…\.o.tmp' to output file '…\.o': Permission denied`（`oboe-sys` 等 build-script） | target 里的**陈旧产物是另一安全主体**创建的：`icacls` 读 ACL 都"拒绝访问"，`rm`/`mv`/`takeown`/`icacls /setowner` **全被拒** ⇒ 覆盖必然失败。🕳️ `build/<crate>-<hash>/out/**` 与 `debug/libbackend_lib.so` 是**不做 hash 去重**的两处必撞点（本次只抢救掉了前者与 `.rlib`/`.d`，`.so` 无法处理） |
 | `brotli-8.0.2` 报 `unresolved imports super::static_dict_lut::kDictHashMul32…` / `no logs_16`                | 旧 `C:\Users\tzh\.cargo` 里那两个源文件是 **0 字节**（磁盘满时解出来的残件：`static_dict_lut.rs` 应为 1.87MB、`log_table_16.rs` 1.24MB）⇒ 该 registry 不可信，换用完整缓存                                                                                               |
 
-⇒ **给下一个接手者**：还要重新构建时**不要**复用 `D:/hfshifter-target-upstream`（里面仍有不可覆盖的  
+⇒ **给下一个接手者**：还要重新构建时**不要**复用 `D:/code/HiFiShifter/hfshifter-target-upstream`（里面仍有不可覆盖的  
 `libbackend_lib.so`），改用**新的 `CARGO_TARGET_DIR`**；若以 `tzh` 身份运行则不受此限。
 
 ---
@@ -4876,7 +4876,7 @@ for (const r of sibRows) { if (staticTopOf(r) + rowH / 2 <= anchorY) overRow = r
 > ⚠️ **探针会动会话状态**：`_probe-control-point` 会 `resetAndImport` 一个测试 wav，
 > `_probe-e37-longpress-menu` / `_probe-e33` 会**增删/重排轨道**。跑完不要把它当干净工程继续测。
 >
-> 本轮交付包：`D:/hifishifter-out/hifishifter-arm64-v8a-debug.apk`（**已装机**，01:29:44）。
+> 本轮交付包：`D:/code/HiFiShifter/hifishifter-out/hifishifter-arm64-v8a-debug.apk`（**已装机**，01:29:44）。
 
 
 ---
@@ -4960,7 +4960,7 @@ transition: dragUi !== null && !dragging ? `transform ${REORDER_SHIFT_MS}ms …`
 > 上一任已把两个探针写好（15:05 / 15:09）但**没跑**就交接了。本节是补跑的实测。
 
 **装机对账**：模拟器跑 GMT，`lastUpdateTime = 07:01:03 GMT` = 本地 **15:01:03**
-⇒ 与 14:59 的 `D:/hifishifter-out/hifishifter-x86_64-debug.apk` 吻合（新包已装机）。
+⇒ 与 14:59 的 `D:/code/HiFiShifter/hifishifter-out/hifishifter-x86_64-debug.apk` 吻合（新包已装机）。
 ⚠️ **跑探针前先 `pm grant … RECORD_AUDIO`**：首次启动会压着系统权限弹窗，
 而 `_probe-e38-lower-fill.mjs` 的 `adb()` 用 `execSync`（**非零退出即抛**）⇒
 `pidof` 空就当场炸在 `attach()`，看起来像"探针坏了"。
@@ -5250,7 +5250,7 @@ Chrome 的**触摸目标调整（touch target adjustment）**会把触点**附�
 
 ### E40b · 四条的端到端复验（arm64 真机 221deeb，装机 10-04 10:50）
 
-包：`main-BKTi3y9p`（`/d/hifishifter-out/hifishifter-arm64-v8a-debug.apk`，构建 10-03 23:52）。
+包：`main-BKTi3y9p`（`/d/code/HiFiShifter/hifishifter-out/hifishifter-arm64-v8a-debug.apk`，构建 10-03 23:52）。
 
 | # | 判据 | 结果 |
 | :--- | :--- | :--- |

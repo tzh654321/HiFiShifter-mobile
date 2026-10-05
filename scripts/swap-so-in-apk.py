@@ -12,8 +12,8 @@ arm64 的 `libbackend_lib.so` 就在 target 目录里。而本项目的前端（
 
 例：
     python scripts/swap-so-in-apk.py \\
-        dist/hifishifter-arm64-ui6.apk D:/hifishifter-out/_tmp.apk \\
-        lib/arm64-v8a/libbackend_lib.so D:/hfshifter-target-upstream/aarch64-linux-android/debug/libbackend_lib.so
+        dist/hifishifter-arm64-ui6.apk D:/code/HiFiShifter/hifishifter-out/_tmp.apk \\
+        lib/arm64-v8a/libbackend_lib.so D:/code/HiFiShifter/hfshifter-target-upstream/aarch64-linux-android/debug/libbackend_lib.so
 
 之后：
     zipalign -p -f 4 _tmp.apk _aligned.apk

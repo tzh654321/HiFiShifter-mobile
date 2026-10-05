@@ -81,7 +81,7 @@ try {
         format: 'png',
         clip: { x: 0, y: 0, width: Math.min(m.innerW, 400), height: Math.min(m.innerH, 120), scale: 3 },
     });
-    const out = 'D:/hifishifter-out/_menubar-top.png';
+    const out = 'D:/code/HiFiShifter/hifishifter-out/_menubar-top.png';
     writeFileSync(out, Buffer.from(shot.data, 'base64'));
     console.log(`  ⇒ 顶部 120px 的截图已存：${out}`);
 } catch (e) {

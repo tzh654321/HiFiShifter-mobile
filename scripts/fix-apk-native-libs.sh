@@ -27,7 +27,7 @@ case "$ABI" in
 esac
 
 NDK="${NDK_HOME:-D:/Android/Sdk/ndk/27.2.12479018}"
-TGT="${CARGO_TARGET_DIR:-D:/hfshifter-target-upstream}/$TRIPLE/debug"
+TGT="${CARGO_TARGET_DIR:-D:/code/HiFiShifter/hfshifter-target-upstream}/$TRIPLE/debug"
 BT="D:/Android/Sdk/build-tools/35.0.0"
 KS="/c/Users/tzh/.android/debug.keystore"
 PY="C:/Users/tzh/.workbuddy/binaries/python/versions/3.13.12/python.exe"

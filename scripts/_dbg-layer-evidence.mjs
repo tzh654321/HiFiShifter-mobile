@@ -9,7 +9,7 @@ import { execSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { Cdp } from "./lib/cdp.mjs";
 
-const OUT = "D:/hifishifter-out";
+const OUT = "D:/code/HiFiShifter/hifishifter-out";
 const serial = process.argv[2] ?? "221deeb";
 const wav = "D:/Temp/hs-tone.wav";
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));

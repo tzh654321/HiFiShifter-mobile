@@ -132,7 +132,7 @@ bash "$ROOT/scripts/sync-native-libs.sh" "$SRC" "$ABI"
 # 这里**不联网**；找不到可复用的就打印两条出路。
 GRADLE_VER="8.14.3"
 DIST_TAG="gradle-${GRADLE_VER}-bin"
-SRC_DISTS="${GRADLE_USER_HOME:-D:/gradle-home}/wrapper/dists"
+SRC_DISTS="${GRADLE_USER_HOME:-D:/code/HiFiShifter/gradle-home}/wrapper/dists"
 # GRADLE_USER_HOME 可能是 Windows 形式
 case "$SRC_DISTS" in
   [A-Za-z]:/*|[A-Za-z]:\\*)
@@ -184,7 +184,7 @@ echo
 echo "── gradlew shim（绕开 *.lck 写保护）──"
 GEN_DIR="$SRC/gen/android"
 GRADLE_BIN_WIN=""
-for base in "D:/gradle-home" "$HOME/.gradle"; do
+for base in "D:/code/HiFiShifter/gradle-home" "$HOME/.gradle"; do
   hit="$(ls -d "$base/wrapper/dists/$DIST_TAG"/*/"gradle-$GRADLE_VER/bin/gradle.bat" 2>/dev/null | head -1 || true)"
   if [ -n "$hit" ]; then GRADLE_BIN_WIN="$hit"; break; fi
 done
@@ -725,7 +725,7 @@ val hsFixNativeLibs = tasks.register("hsFixNativeLibs") {
             "x86_64" to "x86_64-linux-android",
             "arm64-v8a" to "aarch64-linux-android",
         )
-        val tgtRoot = System.getenv("CARGO_TARGET_DIR") ?: "D:/hfshifter-target-upstream"
+        val tgtRoot = System.getenv("CARGO_TARGET_DIR") ?: "D:/code/HiFiShifter/hfshifter-target-upstream"
         val ndkDir = System.getenv("NDK_HOME") ?: android.ndkDirectory.absolutePath
         triples.forEach { (abi, triple) ->
             val dir = file("src/main/jniLibs/$abi")

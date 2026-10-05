@@ -50,7 +50,7 @@ export ANDROID_HOME='D:\Android\Sdk'
 export ANDROID_SDK_ROOT='D:\Android\Sdk'
 export NDK_HOME='D:\Android\Sdk\ndk\27.2.12479018'
 export ANDROID_NDK_HOME="$NDK_HOME"
-export GRADLE_USER_HOME='D:\gradle-home'
+export GRADLE_USER_HOME='D:\code\HiFiShifter\gradle-home'
 export RUSTUP_DIST_SERVER="https://mirrors.tuna.tsinghua.edu.cn/rustup"
 unset HTTP_PROXY HTTPS_PROXY http_proxy https_proxy 2>/dev/null
 export NO_PROXY='*'
@@ -119,7 +119,7 @@ fi
 # App 在我们的代码跑起来之前就崩：
 #   dlopen failed: cannot locate symbol "OrtGetApiBase" ... → UnsatisfiedLinkError
 # 所以构建后必查一次，别让这种包流到设备上。
-SO="/d/hfshifter-target/$TARGET-linux-android/debug/libm0_probe_lib.so"
+SO="/d/code/HiFiShifter/hfshifter-target/$TARGET-linux-android/debug/libm0_probe_lib.so"
 READELF="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/windows-x86_64/bin/llvm-readelf.exe"
 if [ -f "$SO" ] && [ -x "$READELF" ]; then
   BAD=$("$READELF" -sW "$SO" 2>/dev/null | grep -E 'UND' | grep -E '\bOrt[A-Za-z0-9_]*\b' || true)

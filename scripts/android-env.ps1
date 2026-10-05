@@ -11,7 +11,7 @@ $env:NDK_HOME           = "D:\Android\Sdk\ndk\27.2.12479018"
 $env:ANDROID_NDK_HOME   = "D:\Android\Sdk\ndk\27.2.12479018"
 
 # Gradle 缓存放 D:（C: 只剩 33 GB，D: 有 61 GB）
-$env:GRADLE_USER_HOME   = "D:\gradle-home"
+$env:GRADLE_USER_HOME   = "D:\code\HiFiShifter\gradle-home"
 
 $env:PATH = @(
     "$env:USERPROFILE\.cargo\bin",

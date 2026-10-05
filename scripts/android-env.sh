@@ -95,8 +95,8 @@ export RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"
 # ── Gradle（Tauri Android 构建）─────────────────────────────────────────────
 # 别把 Gradle 缓存放到 C:（空间紧张）。D: 空间更宽裕。
 #
-# ⚠️⚠️ 这里必须是 **Windows 形式**（`D:\gradle-home`），**不能**写 MSYS 形式
-# （`/d/gradle-home`）。原因：tauri-cli 会把这个变量透传给原生程序
+# ⚠️⚠️ 这里必须是 **Windows 形式**（`D:\code\HiFiShifter\gradle-home`），**不能**写 MSYS 形式
+# （`/d/code/HiFiShifter/gradle-home`）。原因：tauri-cli 会把这个变量透传给原生程序
 # `gradlew.bat`（JVM），而 JVM 不认识 MSYS 路径 —— 实测它被破坏成
 # `\d\gradle-home`（盘符冒号丢失），于是 gradle wrapper 打开锁文件时直接：
 #
@@ -111,7 +111,7 @@ export RUSTUP_UPDATE_ROOT="https://mirrors.tuna.tsinghua.edu.cn/rustup/rustup"
 # 另一个连带事实：如果 gradle 找不到 dist，wrapper 会去 services.gradle.org
 # 下载，而那个源在本机实测 20 秒 0 MB（必然 timeout）。所以要么这个变量指对，
 # 要么把 dist 复制进默认的 `~/.gradle`（`scripts/setup-gen-android.sh` 会做）。
-export GRADLE_USER_HOME='D:\gradle-home'
+export GRADLE_USER_HOME='D:\code\HiFiShifter\gradle-home'
 
 # ── 临时目录指到 D:（别再写爆 C:）────────────────────────────────────────────
 # 为什么必须在这里显式导出，而不是"系统里设了就完事"：
@@ -133,8 +133,8 @@ export GRADLE_USER_HOME='D:\gradle-home'
 #    这个假象很容易误导：报错只说"任务失败 + 一个 .tmp 路径"，看着像 AGP/空间/junction 的锅，
 #    连换 TEMP 都"没用" —— 因为 **gradle daemon 的环境块是启动时定型的**，
 #    不先 `./gradlew --stop` 再换，新 TEMP 根本传不进去（这一条也踩过）。
-#    换到干净目录（`D:\hs-tmp`）后同一个 task `BUILD SUCCESSFUL`。
-_HFS_TEMP_WIN="${HIFISHIFTER_TEMP:-D:\hs-tmp}"
+#    换到干净目录（`D:\code\HiFiShifter\hs-tmp`）后同一个 task `BUILD SUCCESSFUL`。
+_HFS_TEMP_WIN="${HIFISHIFTER_TEMP:-D:\code\HiFiShifter\hs-tmp}"
 _HFS_TEMP_MSYS="$(_win_to_msys "$_HFS_TEMP_WIN")"
 mkdir -p "$_HFS_TEMP_MSYS" 2>/dev/null
 # 三个都设：TMP/TEMP 给原生程序（gradle/JVM、msbuild、clang），TMPDIR 给 MSYS 系工具

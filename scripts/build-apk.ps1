@@ -97,13 +97,13 @@ $env:ANDROID_STL = 'c++_shared'
 
 # ── ③ 降低编译资源占用（本机 15.7 GB 内存，构建时可用常只有 2–3 GB）──────────
 # CARGO_INCREMENTAL=0 是关键：开增量时 rustc 会被系统终止且**不给任何 rustc 错误**。
-$env:CARGO_TARGET_DIR = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'D:/hfshifter-target-upstream' }
+$env:CARGO_TARGET_DIR = if ($env:CARGO_TARGET_DIR) { $env:CARGO_TARGET_DIR } else { 'D:/code/HiFiShifter/hfshifter-target-upstream' }
 $env:CARGO_INCREMENTAL = '0'
 $env:CARGO_PROFILE_DEV_DEBUG = '0'
 $env:CARGO_BUILD_JOBS = '1'
 
 # ── ④ Gradle 用户目录（Windows 形式！）+ 临时目录 ────────────────────────────
-$env:GRADLE_USER_HOME = 'D:\gradle-home'
+$env:GRADLE_USER_HOME = 'D:\code\HiFiShifter\gradle-home'
 $env:TEMP = 'D:\Temp'
 $env:TMP = 'D:\Temp'
 if (-not (Test-Path 'D:\Temp')) { New-Item -ItemType Directory -Path 'D:\Temp' -Force | Out-Null }

@@ -45,9 +45,9 @@ $allowedRoots = @(
     (Join-Path $root 'upstream-src\backend\src-tauri\gen\android\app\build'),
     (Join-Path $root 'upstream-src\backend\src-tauri\gen\android\build'),
     (Join-Path $root 'upstream-src\frontend\node_modules\.vite'),
-    'D:\gradle-home\caches\8.14.3\transforms',
-    'D:\gradle-home\caches\8.14.3\kotlin-dsl',
-    'D:\hfshifter-target-upstream\debug\incremental'
+    'D:\code\HiFiShifter\gradle-home\caches\8.14.3\transforms',
+    'D:\code\HiFiShifter\gradle-home\caches\8.14.3\kotlin-dsl',
+    'D:\code\HiFiShifter\hfshifter-target-upstream\debug\incremental'
 )
 
 function Test-Allowed([string]$path) {
@@ -95,9 +95,9 @@ $dirs = @(
     (Join-Path $root 'upstream-src\backend\src-tauri\gen\android\app\build'),
     (Join-Path $root 'upstream-src\backend\src-tauri\gen\android\build'),
     (Join-Path $root 'upstream-src\frontend\node_modules\.vite'),
-    'D:\gradle-home\caches\8.14.3\transforms',
-    'D:\gradle-home\caches\8.14.3\kotlin-dsl',
-    'D:\hfshifter-target-upstream\debug\incremental'
+    'D:\code\HiFiShifter\gradle-home\caches\8.14.3\transforms',
+    'D:\code\HiFiShifter\gradle-home\caches\8.14.3\kotlin-dsl',
+    'D:\code\HiFiShifter\hfshifter-target-upstream\debug\incremental'
 )
 foreach ($d in $dirs) {
     if (-not (Test-Path -LiteralPath $d)) { continue }

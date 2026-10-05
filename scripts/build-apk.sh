@@ -132,7 +132,7 @@ if [ -n "$_CLEAN_PATH" ]; then
 fi
 
 command -v tauri >/dev/null 2>&1 || { echo "❌ 找不到 tauri CLI（探针的 node_modules 里应该有）" >&2; exit 1; }
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-D:/hfshifter-target-upstream}"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-D:/code/HiFiShifter/hfshifter-target-upstream}"
 
 # ── ④.4 gradle daemon 卫生：构建前**一律**停掉并禁用复用（2026-10-02）──────
 # 🔴 代价与症状：`tauri android build` 的 Rust 编译是 gradle task `rustBuild<Abi>Debug`
@@ -150,7 +150,7 @@ export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-D:/hfshifter-target-upstream}"
 #         JVM** 里跑，坏令牌无法跨构建传染（代价是每次多 ~20 s 的 JVM 启动）。
 #    回退：`HS_SKIP_DAEMON_STOP=1` 跳过 ①；删掉 `GRADLE_OPTS` 那行跳过 ②。
 if ! printf '%s' "${GRADLE_USER_HOME:-}" | grep -qE '^[A-Za-z]:'; then
-  export GRADLE_USER_HOME='D:\gradle-home'
+  export GRADLE_USER_HOME='D:\code\HiFiShifter\gradle-home'
 fi
 if [ "${HS_SKIP_DAEMON_STOP:-0}" != "1" ]; then
   (cd "$SRC/gen/android" && ./gradlew.bat --stop >/dev/null 2>&1) || true
@@ -201,12 +201,12 @@ export CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}"
 export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 
 # ── Gradle 用户目录 ────────────────────────────────────────────────────────
-# 指回 `D:\gradle-home`（省 C 盘空间），并且能**复用探针那次已下好的依赖缓存**
+# 指回 `D:\code\HiFiShifter\gradle-home`（省 C 盘空间），并且能**复用探针那次已下好的依赖缓存**
 # （caches/modules-2 里约 211 MB，含 Android Gradle Plugin 等；两个工程用的是
 #  同一份 tauri 模板，版本目录一致，命中率很高）。
 #
-# ⚠️ 必须是 **Windows 形式**（`D:\gradle-home`），不能写 MSYS 的 `/d/gradle-home`：
-# JVM 拿到 `/d/gradle-home` 会理解成相对当前盘符的 `\d\gradle-home`，
+# ⚠️ 必须是 **Windows 形式**（`D:\code\HiFiShifter\gradle-home`），不能写 MSYS 的 `/d/code/HiFiShifter/gradle-home`：
+# JVM 拿到 `/d/code/HiFiShifter/gradle-home` 会理解成相对当前盘符的 `\d\gradle-home`，
 # 打开 `<...>.lck` 时报「拒绝访问」，报错里还能看到那个畸形的 `\d\` 前缀。
 #
 # 至于 `*.lck` 的写保护 —— 已经由 `gen/android/gradlew(.bat)` 的 shim 绕过
@@ -215,7 +215,7 @@ export CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-1}"
 # 详见 docs/06 §4.6 与 scripts/setup-gen-android.sh §5。
 if ! printf '%s' "${GRADLE_USER_HOME:-}" | grep -qE '^[A-Za-z]:'; then
   # 已经是 MSYS 形式（/d/...）或未设置 → 统一成 Windows 形式
-  export GRADLE_USER_HOME='D:\gradle-home'
+  export GRADLE_USER_HOME='D:\code\HiFiShifter\gradle-home'
 fi
 
 # ── ⑤ 清前端 dist（绕开 safe-delete shim）─────────────────────────────────
@@ -315,7 +315,7 @@ fi
 #   > Could not create service of type GeneralCompileCaches using
 #     UserHomeScopeServices.createCompileCaches().
 #     > java.io.FileNotFoundException:
-#       D:\gradle-home\caches\8.14.3\javaCompile\javaCompile.lock (拒绝访问。)
+#       D:\code\HiFiShifter\gradle-home\caches\8.14.3\javaCompile\javaCompile.lock (拒绝访问。)
 #
 # 报错指向 `GeneralCompileCaches`，极易被误读成"依赖/缓存坏了"而白重建一遍。
 # 其实只是 Gradle 用来做跨进程互斥的锁文件被上一次**中断的构建**留下了，
@@ -324,7 +324,7 @@ fi
 # ✅ 判定很干净：**陈旧的锁能删（没有进程持有），在用中的删不掉（Windows 直接拒绝）**。
 #    所以无条件尝试删除是安全的 —— 天然只会清掉没用的那些，不会动正在用的。
 #    注意：这里能删，而 gradle-wrapper 那个 `.lck` **连删都删不掉**，两者成因不同。
-GUH="${GRADLE_USER_HOME:-D:/gradle-home}"
+GUH="${GRADLE_USER_HOME:-D:/code/HiFiShifter/gradle-home}"
 case "$GUH" in
   [A-Za-z]:\\*) GUH="$(printf '%s' "$GUH" | sed 's|\\|/|g')" ;;
 esac
@@ -451,7 +451,7 @@ fi
 # 所以**跨 ABI 是同一个路径**。先用 x86_64 出了一包、再为 arm64 构建，构造函数开头的
 # "清上次的 APK 输出"会把 x86_64 那包直接清掉（那次 arm64 还失败了 ⇒ 结果**两个包都没了**）。
 # 这里每次构建成功后按 ABI 存一份，`HS_APK_ARCHIVE_DIR` 可覆盖（默认 D 盘，C 盘放不下 172MB）。
-ARCHIVE_DIR="${HS_APK_ARCHIVE_DIR:-D:/hifishifter-out}"
+ARCHIVE_DIR="${HS_APK_ARCHIVE_DIR:-D:/code/HiFiShifter/hifishifter-out}"
 mkdir -p "$ARCHIVE_DIR"
 if [ "$SCOPE" = "--release" ]; then ARCHIVE_KIND=release; else ARCHIVE_KIND=debug; fi
 ARCHIVE="$ARCHIVE_DIR/hifishifter-$ABI-$ARCHIVE_KIND.apk"
