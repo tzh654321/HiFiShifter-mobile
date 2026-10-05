@@ -8,7 +8,7 @@
 
 | 轨道面板 + 文件浏览器 | 轨道 + 参数面板（分屏） |
 | :---: | :---: |
-| ![轨道面板 + 文件浏览器](<./docs/screenshots/readme示例图 (1).jpg>) | ![轨道 + 参数面板（分屏）](<./docs/screenshots/readme示例图 (2).jpg>) |
+| ![轨道面板 + 文件浏览器](docs/readme/example-1.jpg) | ![轨道 + 参数面板（分屏）](docs/readme/example-2.jpg) |
 
 ## 与桌面版的主要差异
 
@@ -61,9 +61,19 @@
 前置：JDK 17 · Android SDK（平台 + NDK）· Rust（`aarch64-linux-android` target）· Node.js 20+。
 
 ```bash
+scripts/fetch-onnxruntime.sh      # 取 libonnxruntime.so（60 MB 二进制不入仓库，克隆后先跑一次）
 scripts/apply-patches.sh          # 给上游快照打补丁
 scripts/build-apk.sh arm64-v8a    # 真机包；x86_64 出模拟器包
 ```
+
+> `third_party/onnxruntime/**/*.so` 是**从 Maven 上官方 AAR 取出的预编译二进制**，不进仓库
+> （出处与版本对齐理由见 `third_party/onnxruntime/SOURCE.txt`）。`fetch-onnxruntime.sh` 按该
+> 坐标下载并做 sha256 校验，**校验不通过不会覆盖已有文件**。跳过这一步时构建会在
+> `sync-native-libs.sh` 处报"找不到 libonnxruntime.so"。
+
+**仓库不收的东西**（见 `.gitignore`）：截图与位图证据、`third_party` 下的二进制、构建产物
+（`*.apk` / `target/` / `dist/`）、以及 agent 设置（`.claude/` `.cursor/` 等）。
+文档里提到的截图按名字保留在**本地** `docs/screenshots/`，需要时自行留存。
 
 产物：`upstream-src/backend/src-tauri/gen/android/app/build/outputs/apk/universal/debug/`。
 

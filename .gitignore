@@ -36,10 +36,16 @@ probes/*/src-tauri/resources/probe.bin
 # ── Rust 构建产物（若把 target 放在项目内）────────────────────────────
 target/
 
-# ── 打包产物 ──────────────────────────────────────────────────────────
+# ── 打包产物与原生二进制 ──────────────────────────────────────────────
+# `.so` 一律不入库：`third_party/onnxruntime/<abi>/libonnxruntime.so` 是从 Maven
+# 官方 AAR 取出的**预编译二进制**，任何构建出的原生库也是产物。构建前用
+# `scripts/fetch-onnxruntime.sh` 现取（坐标见 third_party/onnxruntime/SOURCE.txt），
+# 别把二进制塞进 git。
+# ⚠️ 原先这里有一条 `!probes/**/jniLibs/**/*.so` 的例外 —— `probes/` 目录已删除
+#    （commit d23ed2c8），该例外无对象，故去掉。
 *.apk
 *.aab
-!probes/**/jniLibs/**/*.so
+*.so
 
 # ── 编辑器 / 系统 ─────────────────────────────────────────────────────
 Thumbs.db
@@ -65,6 +71,72 @@ scripts/_*.log
 scripts/_*.ps1
 scripts/_*.hshp
 
-# 过程性设计稿（PSD 单文件 ~7 MB，公开仓库里没必要）——所有对外展示用的
-# 截图都已导出为同名 PNG/JPG，PSD 只作本地留档。
-docs/screenshots/*.psd
+# ══ 用户口径 2026-10-05 ══════════════════════════════════════════════
+# "截图、下载的开发环境程序、构建产物、agent 设置，一律不进仓库。"
+# 下面四节就是这条口径的落实。**已入库的文件仅加 ignore 不会消失** —— 需要
+# 一次 `git rm -r --cached`（见本文件末尾的"如何真正清出仓库"）。
+
+# ── 截图 / 位图证据（本地留档，不进仓库）───────────────────────────────
+# docs/*.md 与 TASKS.md 里仍会**按文件名**提到这些截图（例如
+# `0084-真机-arm64首次启动.png`）—— 那只是"当时拍了哪张图"的记录，图本身留在
+# 本地。README 需要的两张示例图已挪到 `docs/readme/`（不在忽略范围内）。
+#
+# 另：过程性设计稿 PSD（单文件 ~7 MB）也在这里，对外展示用的截图另有导出件。
+docs/screenshots/
+docs/evidence/**/*.png
+docs/evidence/**/*.jpg
+docs/evidence/**/*.jpeg
+
+# ── 下载的开发环境程序 / 大模型 / 压缩包（兜底）────────────────────────
+# 这些要么是"从某个坐标下载来的二进制"，要么是可再生成的大文件。
+*.onnx
+*.bin
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz
+
+# 日志（构建日志、探针原始输出都算过程产物）。
+# docs/evidence/logs/ 里那 3 份是**被文档引用的书面证据**，单独放行。
+*.log
+!docs/evidence/**/*.log
+
+# ── 构建产物目录 ──────────────────────────────────────────────────────
+dist/
+build/
+out/
+
+# ── agent 设置（本机工具链的私人配置，不进仓库）───────────────────────
+# 里面有本机绝对路径、个人偏好，甚至外部服务凭据 —— 公开仓库里一条都不该有。
+# （`.workbuddy/` 已在上面单独列出。）
+.claude/
+.cursor/
+.cursorrules
+.aider*
+.continue/
+.windsurf/
+.gemini/
+.opencode/
+.codex/
+.codebuddy/
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+COPILOT.md
+.mcp.json
+.vscode/
+.idea/
+*.iml
+
+# ── 如何真正清出仓库（仅加 ignore 对已推送的文件无效）──────────────────
+#   git rm -r --cached docs/screenshots
+#   git rm -r --cached "docs/evidence/realdevice"
+#   git rm -r --cached third_party/onnxruntime/arm64-v8a/libonnxruntime.so
+#   git rm -r --cached third_party/onnxruntime/x86_64/libonnxruntime.so
+#   git commit -m "chore: 把不该入库的文件移出仓库"
+# 注意 `--cached`：**本地文件保留**，只是不再被跟踪（否则下次构建就没 so 可用了）。
+# 上面只清"当前树"；历史里的旧副本仍在（clone 体积不变）。要连历史一起清，
+# 得用 git filter-repo / BFG 改写历史 + force push —— 那会改掉所有提交 SHA，
+# 并使已发布的 tag / Release 失效，得重建。
