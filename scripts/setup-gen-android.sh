@@ -274,11 +274,25 @@ else
   else
     TAURI_JS="$TAURI_JS_MSYS"
   fi
-  NODE_EXE="${NODE_EXE:-C:/Users/tzh/.workbuddy/binaries/node/versions/22.22.2/node.exe}"
+  # node：优先用调用者给的 `NODE_EXE`，否则按顺序探测（系统 node → 托管 node）。
+  # 🔴 原先这里写死 WorkBuddy 的 node 路径（审计文档点过的"工具链写死个人机器路径"）；
+  #    而且构建期 `build-apk.sh` 会把 WorkBuddy 的 node 从 PATH 摘掉（HS-NODE-PATH-FIX）
+  #    ⇒ 这里也应当优先用系统 node，保持一致。
+  if [ -z "${NODE_EXE:-}" ]; then
+    for _cand in \
+      "C:/Program Files/nodejs/node.exe" \
+      "C:/Users/tzh/.workbuddy/binaries/node/versions/22.22.2/node.exe"; do
+      if [ -f "$_cand" ]; then NODE_EXE="$_cand"; break; fi
+    done
+    unset _cand
+  fi
+  if [ -z "${NODE_EXE:-}" ] || [ ! -f "$NODE_EXE" ]; then
+    echo "⚠️ 找不到可用的 node.exe —— 用 NODE_EXE=<路径> 显式指定" >&2
+  fi
 
   sed -i \
     -e "s|^\( *\)val executable = .*|\1val executable = \"$NODE_EXE\";|" \
-    -e "s|^\( *\)val args = listOf(\"tauri\", \"android\", \"android-studio-script\").*|\1val args = listOf(\"$TAURI_JS\", \"android\", \"android-studio-script\");|" \
+    -e "s|^\( *\)val args = listOf(\"[^\"]*\", \"android\", \"android-studio-script\").*|\1val args = listOf(\"$TAURI_JS\", \"android\", \"android-studio-script\");|" \
     "$BT"
 
   echo "✓ BuildTask.kt:"
