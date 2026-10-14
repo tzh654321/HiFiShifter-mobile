@@ -61,6 +61,7 @@
 前置：JDK 17 · Android SDK（平台 + NDK）· Rust（`aarch64-linux-android` target）· Node.js 20+。
 
 ```bash
+scripts/setup-tauri-cli.sh        # 装 tauri CLI 到 .tools/tauri-cli/（预编译二进制，几秒）
 scripts/fetch-onnxruntime.sh      # 取 libonnxruntime.so（60 MB 二进制不入仓库，克隆后先跑一次）
 scripts/apply-patches.sh          # 给上游快照打补丁
 scripts/build-apk.sh arm64-v8a    # 真机包；x86_64 出模拟器包
@@ -70,6 +71,11 @@ scripts/build-apk.sh arm64-v8a    # 真机包；x86_64 出模拟器包
 > （出处与版本对齐理由见 `third_party/onnxruntime/SOURCE.txt`）。`fetch-onnxruntime.sh` 按该
 > 坐标下载并做 sha256 校验，**校验不通过不会覆盖已有文件**。跳过这一步时构建会在
 > `sync-native-libs.sh` 处报"找不到 libonnxruntime.so"。
+>
+> `setup-tauri-cli.sh` 装的是 npm 的 `@tauri-apps/cli`（**预编译原生 addon**，几秒装完），
+> 放在 `.tools/tauri-cli/`（同样不进仓库）。本项目**故意不用** `cargo install tauri-cli`
+> —— 那要源码编译，慢一个量级。解析逻辑统一在 `scripts/tauri-cli-path.sh`：若调用者的
+> `PATH` 里已有 `tauri`，则优先用它、不覆盖。
 
 **仓库不收的东西**（见 `.gitignore`）：截图与位图证据、`third_party` 下的二进制、构建产物
 （`*.apk` / `target/` / `dist/`）、以及 agent 设置（`.claude/` `.cursor/` 等）。

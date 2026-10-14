@@ -201,17 +201,19 @@ else
 fi
 
 # tauri CLI：本项目**故意不用** `cargo install tauri-cli`（要源码编译，慢得多），
-# 而是用 npm 装的预编译二进制，放在探针工程的 node_modules 里，构建脚本会自己加进 PATH。
-_HFS_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-_TAURI_BIN="$_HFS_ROOT/probes/m0-probe/node_modules/@tauri-apps/cli"
-if [ -d "$_TAURI_BIN" ]; then
-    _ver="$(node -e "console.log(require('$_TAURI_BIN/package.json').version)" 2>/dev/null || echo '?')"
-    printf '  ✅ %s\n' "tauri-cli $_ver（npm 装的，构建脚本会自动加进 PATH）"
+# 而是用 npm 装的**预编译**二进制。位置由 `scripts/tauri-cli-path.sh` 统一解析：
+# 调用者 PATH 里已有就用那份，否则用仓库内 `.tools/tauri-cli/`（.gitignore 内）。
+# 🔴 2026-10-14：原先写死 `probes/m0-probe/...`，而 probes/ 已删除 ⇒ 这里必然报错。
+# shellcheck source=scripts/tauri-cli-path.sh
+. "$(dirname "${BASH_SOURCE[0]}")/tauri-cli-path.sh"
+hfs_tauri_prepend_path
+export PATH
+if command -v tauri >/dev/null 2>&1; then
+    printf '  ✅ %s\n' "tauri-cli → $(tauri --version 2>/dev/null || echo '?')"
 elif command -v cargo-tauri >/dev/null 2>&1; then
     _ok "tauri-cli → $(cargo tauri --version 2>/dev/null)"
 else
-    _bad "缺 tauri-cli：cd probes/m0-probe && npm install"
+    _bad "缺 tauri-cli：bash scripts/setup-tauri-cli.sh"
 fi
-unset _HFS_ROOT _TAURI_BIN _ver
 
 echo "──────────────────────────────"

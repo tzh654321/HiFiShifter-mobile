@@ -106,8 +106,15 @@ export ANDROID_ABI="$ABI"
 export ANDROID_STL="c++_shared"
 
 # ── ④ tauri-cli 与 target dir ─────────────────────────────────────────────
-# tauri-cli 用探针工程里那份（npm 装的预编译二进制，比 cargo install 快得多）
-PATH="$ROOT/probes/m0-probe/node_modules/.bin:$PATH"
+# tauri-cli 用 npm 装的**预编译**二进制（比 `cargo install tauri-cli` 快一个量级）。
+# 位置解析统一走 `scripts/tauri-cli-path.sh`：PATH 里已有 `tauri` 就不动（优先用
+# 调用者那份），否则用仓库内的 `.tools/tauri-cli/`。
+# 🔴 2026-10-14：这里原先写死 `probes/m0-probe/node_modules/.bin`，而 `probes/`
+#    已在 10-05 的清理里删除 ⇒ 本行之后 `command -v tauri` 必然失败、构建当场退出。
+#    装 CLI：`bash scripts/setup-tauri-cli.sh`
+# shellcheck source=scripts/tauri-cli-path.sh
+. "$ROOT/scripts/tauri-cli-path.sh"
+hfs_tauri_prepend_path
 export PATH
 
 # ── ③.9 摘掉 WorkBuddy 自带的 node（HS-NODE-PATH-FIX，2026-09-24）─────────────
@@ -131,7 +138,7 @@ if [ -n "$_CLEAN_PATH" ]; then
   echo "▸ HS-NODE-PATH-FIX：已摘掉 WorkBuddy 的 node（规避 node.exe.bat）"
 fi
 
-command -v tauri >/dev/null 2>&1 || { echo "❌ 找不到 tauri CLI（探针的 node_modules 里应该有）" >&2; exit 1; }
+hfs_tauri_require || exit 1
 export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-D:/code/HiFiShifter/hfshifter-target-upstream}"
 
 # ── ④.4 gradle daemon 卫生：构建前**一律**停掉并禁用复用（2026-10-02）──────

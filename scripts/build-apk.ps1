@@ -198,8 +198,16 @@ if (Test-Path "$guh/caches") {
 }
 
 # ── ⑪ 构建 ───────────────────────────────────────────────────────────────────
-$TauriJs = Join-Path $Root 'probes/m0-probe/node_modules/@tauri-apps/cli/tauri.js'
-if (-not (Test-Path $TauriJs)) { throw "找不到 tauri CLI：$TauriJs（cd probes/m0-probe && npm install）" }
+# tauri CLI 位置解析与 build-apk.sh 同源（那支走 scripts/tauri-cli-path.sh）：
+# 仓库内 `.tools/tauri-cli/` 优先，兼容旧的 `probes/m0-probe/` 路径。
+# 🔴 2026-10-14：原先写死 probes/m0-probe，而 probes/ 已删除 ⇒ 这里必然抛错。
+# 装 CLI：bash scripts/setup-tauri-cli.sh
+$TauriJs = $null
+foreach ($cand in @('.tools/tauri-cli/node_modules', 'probes/m0-probe/node_modules')) {
+    $p = Join-Path $Root "$cand/@tauri-apps/cli/tauri.js"
+    if (Test-Path $p) { $TauriJs = $p; break }
+}
+if (-not $TauriJs) { throw "找不到 tauri CLI。先跑：bash scripts/setup-tauri-cli.sh（装到 .tools/tauri-cli/）" }
 $node = 'C:\Program Files\nodejs\node.exe'
 if (-not (Test-Path $node)) { $node = 'node' }
 

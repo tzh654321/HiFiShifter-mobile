@@ -256,14 +256,18 @@ fi
 echo
 echo "── 修正 BuildTask.kt 的 tauri CLI 调用 ──"
 BT="$(find "$GEN_DIR/buildSrc/src" -name 'BuildTask.kt' -print -quit 2>/dev/null || true)"
-TAURI_JS_MSYS="$ROOT/probes/m0-probe/node_modules/@tauri-apps/cli/tauri.js"
+# CLI 位置解析与 build-apk.sh 同源（tauri-cli-path.sh）；原先写死 probes/m0-probe，
+# 而 probes/ 已删除（2026-10-14 修）。
+# shellcheck source=scripts/tauri-cli-path.sh
+. "$ROOT/scripts/tauri-cli-path.sh"
+TAURI_JS_MSYS="$HFS_TAURI_JS"
 
 if [ -z "$BT" ]; then
   echo "⚠️ 没找到 buildSrc 里的 BuildTask.kt，跳过" >&2
   echo "   （不修的话 Gradle 阶段会报 Cannot find module ...\\tauri）" >&2
 elif [ ! -f "$TAURI_JS_MSYS" ]; then
-  echo "⚠️ 缺少 $TAURI_JS_MSYS" >&2
-  echo "   先在 probes/m0-probe 里跑一次 npm install" >&2
+  echo "⚠️ 缺少 tauri CLI 的 tauri.js（解析结果：${TAURI_JS_MSYS:-<未找到>}）" >&2
+  echo "   先跑一次：bash scripts/setup-tauri-cli.sh" >&2
 else
   if command -v cygpath >/dev/null 2>&1; then
     TAURI_JS="$(cygpath -m "$TAURI_JS_MSYS")"

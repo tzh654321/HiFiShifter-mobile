@@ -27,6 +27,10 @@ upstream-src/
 .apk-fix/
 # 本地 cargo 配置/缓存
 .cargo/
+# 仓库内自带的工具链（"下载的开发环境程序"，见 2026-10-05 口径）。
+# 现放 tauri CLI（@tauri-apps/cli，npm 装的预编译二进制）——
+# 装它：`bash scripts/setup-tauri-cli.sh`；解析：`scripts/tauri-cli-path.sh`。
+.tools/
 
 # ── 探针工程的构建产物 ────────────────────────────────────────────────
 probes/*/src-tauri/target/
