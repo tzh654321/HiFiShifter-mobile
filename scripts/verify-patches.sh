@@ -71,12 +71,19 @@ done
 echo
 echo "▸ 重放统计：OK $ok / 跳过 $skip / 失败 $fail"
 
-# ── ② 与真实工作树逐文件比对（补丁涉及的文件 + 工作树里的新增文件）─────────
+# ── ② 与真实工作树逐文件比对（补丁文件 + 全部 tracked 修改 + 非忽略 untracked）─
 echo
 echo "▸ 与 upstream-src 工作树比对"
-mapfile -t FILES < <(grep -h '^diff --git' "$PATCH_DIR"/*.patch | sed 's|.* b/||' | sort -u)
+mapfile -d '' -t FILES < <(
+    {
+        grep -h '^diff --git' "$PATCH_DIR"/*.patch | sed 's|.* b/||' | tr '\n' '\0'
+        # 必须查询真实索引，而不是上面用于重放的独立索引。
+        env -u GIT_INDEX_FILE git -C "$SRC_W" diff --name-only --no-renames -z HEAD --
+        env -u GIT_INDEX_FILE git -C "$SRC_W" ls-files --others --exclude-standard -z
+    } | sort -zu
+)
 drift=0; compared=0; missing=0
-declare -a DRIFTED MISSING
+declare -a DRIFTED=() MISSING=() WORKTREE_MISSING=()
 for f in "${FILES[@]}"; do
     in_index=1
     git -C "$SRC_W" cat-file -e ":$f" 2>/dev/null || in_index=0
@@ -84,7 +91,7 @@ for f in "${FILES[@]}"; do
     [ -f "$SRC/$f" ] && on_disk=1
     if [ "$on_disk" = "1" ] && [ "$in_index" = "0" ]; then MISSING+=("$f"); missing=$((missing + 1)); continue; fi
     if [ "$on_disk" = "0" ] && [ "$in_index" = "1" ]; then
-        echo "  · 索引里有而工作树没有（正常，多为后续补丁删掉的临时组件）: $f"; continue
+        WORKTREE_MISSING+=("$f"); missing=$((missing + 1)); continue
     fi
     [ "$on_disk" = "1" ] || continue
     compared=$((compared + 1))
@@ -92,11 +99,12 @@ for f in "${FILES[@]}"; do
         DRIFTED+=("$f"); drift=$((drift + 1))
     fi
 done
-echo "  比对 $compared 个 / 工作树有而索引缺失 $missing 个"
+echo "  比对 $compared 个 / 索引或工作树缺失 $missing 个"
 if [ "$drift" = "0" ] && [ "$missing" = "0" ]; then
     echo "  ✅ 逐字节一致（无漂移）"
 else
-    [ "$missing" != "0" ] && { echo "  ❌ 重放后缺失："; for f in "${MISSING[@]}"; do echo "     $f"; done; }
+    [ "${#MISSING[@]}" != "0" ] && { echo "  ❌ 重放后缺失："; for f in "${MISSING[@]}"; do echo "     $f"; done; }
+    [ "${#WORKTREE_MISSING[@]}" != "0" ] && { echo "  ❌ 工作树缺失（重放索引仍存在）："; for f in "${WORKTREE_MISSING[@]}"; do echo "     $f"; done; }
     [ "$drift" != "0" ] && { echo "  ❌ 内容不一致："; for f in "${DRIFTED[@]}"; do
         n="$(git -C "$SRC_W" cat-file blob ":$f" | diff - "$SRC/$f" 2>/dev/null | grep -c '^[<>]')"
         echo "     $f  （差异行 $n）"; done; }

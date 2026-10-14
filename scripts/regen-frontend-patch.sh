@@ -36,7 +36,7 @@ win() { cygpath -m "$1"; }
 # ── ① 文件清单：改过的已跟踪文件 + 未跟踪文件（逐文件！）──────────────────────
 mapfile -t FILES < <(
     {
-        git -C "$SRC_W" diff --name-only -- frontend/
+        git -C "$SRC_W" diff --name-only --no-renames HEAD -- frontend/
         git -C "$SRC_W" ls-files --others --exclude-standard -- frontend/
     } | sort -u
 )
@@ -57,6 +57,11 @@ n=0
 for rel in "${FILES[@]}"; do
     abs="$SRC/$rel"
     if [ ! -f "$abs" ]; then
+        if [ ! -e "$abs" ] && [ ! -L "$abs" ] && git -C "$SRC_W" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+            git -C "$SRC_W" update-index --force-remove -- "$rel"
+            n=$((n + 1))
+            continue
+        fi
         echo "  ⚠️ 跳过（不存在或不是文件）: $rel"
         continue
     fi

@@ -69,6 +69,11 @@ skip=0
 for rel in "${FILES[@]}"; do
     abs="$SRC/$rel"
     if [ ! -f "$abs" ]; then
+        if [ ! -e "$abs" ] && [ ! -L "$abs" ] && git -C "$SRC_W" ls-files --error-unmatch -- "$rel" >/dev/null 2>&1; then
+            git -C "$SRC_W" update-index --force-remove -- "$rel"
+            n=$((n + 1))
+            continue
+        fi
         # 补丁里的新文件在 base 上当然不存在；但**工作树**里必须有，否则是漏了。
         echo "  ⚠️ 工作树里没有 $rel（若它是本补丁新建的文件，说明真源丢了）"
         skip=$((skip + 1))

@@ -9216,10 +9216,36 @@ index 94ee6594..a13b8663 100644
              onPointerDown={(e) => e.stopPropagation()}
          >
 diff --git a/frontend/src/components/layout/AboutDialog.tsx b/frontend/src/components/layout/AboutDialog.tsx
-index 945f6908..ebbd6284 100644
+index 945f6908..95775b4b 100644
 --- a/frontend/src/components/layout/AboutDialog.tsx
 +++ b/frontend/src/components/layout/AboutDialog.tsx
-@@ -120,9 +120,11 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
+@@ -17,6 +17,8 @@ import { useI18n } from "../../i18n/I18nProvider";
+ 
+ /** 上游不是 GitHub 或读取失败时的回退仓库链接。 */
+ const FALLBACK_REPO_URL = "https://github.com/ARounder-183/HiFiShifter";
++/** 移植版仓库独立于上游构建信息，不能用于拼接上游 Commit 链接。 */
++const MOBILE_REPO_URL = "https://github.com/tzh654321/HiFiShifter-mobile/";
+ 
+ interface AboutDialogProps {
+     open: boolean;
+@@ -111,7 +113,15 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
+                     </Flex>
+                 </Flex>
+ 
+-                <Flex gap="3" mt="4" justify="end">
++                <Flex gap="3" mt="4" justify="end" wrap="wrap">
++                    <Button
++                        size="2"
++                        variant="soft"
++                        data-tooltip={MOBILE_REPO_URL}
++                        onClick={() => void openExternal(MOBILE_REPO_URL)}
++                    >
++                        {tAny("about_open_mobile_repo")}
++                    </Button>
+                     <Button
+                         size="2"
+                         variant="soft"
+@@ -120,9 +130,11 @@ export function AboutDialog({ open, onOpenChange }: AboutDialogProps) {
                      >
                          {tAny("about_open_repo")}
                      </Button>
@@ -79400,6 +79426,155 @@ index 51360e16..18a695aa 100644
      const nearLeftCorner = args.contentX - clipLeftPx <= FADE_CORNER_CAP_WIDTH_PX;
      const nearRightCorner = clipRightPx - args.contentX <= FADE_CORNER_CAP_WIDTH_PX;
      const nearLeftStrip = args.contentX - clipLeftPx <= FADE_CORNER_EDGE_WIDTH_PX;
+diff --git a/frontend/src/components/layout/timeline/reaperFade.cache.test.ts b/frontend/src/components/layout/timeline/reaperFade.cache.test.ts
+new file mode 100644
+index 00000000..da25a8e9
+--- /dev/null
++++ b/frontend/src/components/layout/timeline/reaperFade.cache.test.ts
+@@ -0,0 +1,90 @@
++import { describe, expect, it, vi } from "vitest";
++
++/** 独立加载模块，使冷缓存/饱和缓存测试不受其它测试的调用顺序影响。 */
++async function freshFade() {
++    vi.resetModules();
++    return (await import("./reaperFade.ts")).fadeGainSigned;
++}
++
++describe("淡变形状有界缓存", () => {
++    it("冷/热缓存结果严格一致，规格不会混入方向、曲率或进度", async () => {
++        const gain = await freshFade();
++        const cases = [0, 1, 2, 3, 4, 5, 6, 1.1, 5.1, 6.7].flatMap((shape) =>
++            ([-1, -0.35, 0, 0.45, 1] as const).flatMap((dir) =>
++                (["in", "out"] as const).flatMap((mode) =>
++                    [0.04, 0.25, 0.5, 0.83, 0.96].map((t) => ({ shape, dir, mode, t })),
++                ),
++            ),
++        );
++        const expected = cases.map(({ shape, dir, mode, t }) => gain(shape, dir, mode, t));
++        for (let pass = 0; pass < 3; pass += 1) {
++            for (let index = cases.length - 1; index >= 0; index -= 1) {
++                const { shape, dir, mode, t } = cases[index];
++                expect(gain(shape, dir, mode, t)).toBe(expected[index]);
++            }
++        }
++        expect(gain(1.1, 0, "in", 0.25)).toBeCloseTo(0.14644660940672624, 12);
++        expect(gain(5.1, 0.45, "out", 0.25)).toBe(gain(6, 0.45, "out", 0.25));
++        expect(gain(6.7, -0.35, "in", 0.25)).toBe(gain(6, -0.35, "in", 0.25));
++    });
++
++    it("非法形状保持线性退化；非法曲率/进度保持原有归一化规则", async () => {
++        const gain = await freshFade();
++        for (const shape of [NaN, Infinity, -Infinity, -10, 7, 0.5, 2.5, 999.3]) {
++            for (const mode of ["in", "out"] as const) {
++                for (const dir of [-1, 0, 0.7]) {
++                    for (const t of [0, 0.04, 0.37, 0.96, 1]) {
++                        expect(gain(shape, dir, mode, t)).toBe(gain(0, dir, mode, t));
++                    }
++                }
++            }
++        }
++        for (const mode of ["in", "out"] as const) {
++            for (const invalid of [NaN, Infinity, -Infinity]) {
++                expect(gain(5, invalid, mode, 0.37)).toBe(gain(5, 0, mode, 0.37));
++                expect(gain(5, 0.7, mode, invalid)).toBe(gain(5, 0.7, mode, 0));
++            }
++            expect(gain(5, 10, mode, 0.37)).toBe(gain(5, 1, mode, 0.37));
++            expect(gain(5, -10, mode, 0.37)).toBe(gain(5, -1, mode, 0.37));
++            expect(gain(5, 0, mode, -1)).toBe(gain(5, 0, mode, 0));
++            expect(gain(5, 0, mode, 2)).toBe(gain(5, 0, mode, 1));
++        }
++    });
++
++    it("超过 64 个不同 id 后不再写缓存，且饱和前后与未缓存计算结果一致", async () => {
++        const gain = await freshFade();
++        const expected = [1, 1.1, 5, 6, 5.1].map((shape) => gain(shape, 0.35, "out", 0.37));
++        // 重新冷加载；通过 Map 边界验证上限，无需导出生产模块私有缓存。
++        const saturatedGain = await freshFade();
++        const setSpy = vi.spyOn(Map.prototype, "set");
++        let writes: Array<{ cache: Map<number, unknown>; shape: number }>;
++        try {
++            for (const invalid of [NaN, Infinity, -Infinity]) saturatedGain(invalid, 0, "in", 0.37);
++            for (let index = 0; index < 200; index += 1) {
++                saturatedGain(100 + index / 1000, 0.35, "out", 0.37);
++            }
++            for (const shape of [1, 1.1, 5, 6, 5.1]) {
++                saturatedGain(shape, 0.35, "out", 0.37);
++            }
++            writes = setSpy.mock.calls.flatMap((call, index) => {
++                const [shape, spec] = call;
++                return typeof shape === "number" &&
++                    spec &&
++                    typeof spec === "object" &&
++                    "kind" in spec
++                    ? [{ cache: setSpy.mock.contexts[index] as Map<number, unknown>, shape }]
++                    : [];
++            });
++        } finally {
++            setSpy.mockRestore();
++        }
++        expect(writes).toHaveLength(64);
++        expect(new Set(writes.map(({ cache }) => cache)).size).toBe(1);
++        expect(writes[0].cache.size).toBe(64);
++        expect(writes.every(({ shape }) => Number.isFinite(shape))).toBe(true);
++        expect([1, 1.1, 5, 6, 5.1].map((shape) => saturatedGain(shape, 0.35, "out", 0.37))).toEqual(
++            expected,
++        );
++        expect(saturatedGain(100.199, 0.35, "out", 0.37)).toBe(saturatedGain(0, 0.35, "out", 0.37));
++    });
++});
+diff --git a/frontend/src/components/layout/timeline/reaperFade.ts b/frontend/src/components/layout/timeline/reaperFade.ts
+index b48189ab..caf29323 100644
+--- a/frontend/src/components/layout/timeline/reaperFade.ts
++++ b/frontend/src/components/layout/timeline/reaperFade.ts
+@@ -68,6 +68,15 @@ type ShapeSpec =
+     | { kind: "equalPower" }
+     | { kind: "linearPower" };
+ 
++/** 非法或未知形状共用线性退化规格，避免热路径反复分配。 */
++const LINEAR_POWER_SPEC: ShapeSpec = { kind: "linearPower" };
++
++/** 形状解析只依赖 id；缓存规格只读，不缓存 dir、进度或方向。 */
++const shapeSpecCache = new Map<number, ShapeSpec>();
++
++/** 合法 id 集合很小；畸形工程的任意小数不得让缓存无限增长。 */
++const SHAPE_SPEC_CACHE_MAX = 64;
++
+ /**
+  * 各预设的世界轴参数（待校准：与本机 REAPER 并排比对后微调 p0/z/k）。
+  * k 已按"线性点 z 处 e=1"约束反解（见模块头注释）。
+@@ -85,20 +94,29 @@ const S_ANCHORS: Record<number, { a0: number; ks: number }> = {
+ };
+ 
+ function resolveShapeSpec(shape: number): ShapeSpec {
+-    if (!Number.isFinite(shape)) return { kind: "linearPower" };
++    if (!Number.isFinite(shape)) return LINEAR_POWER_SPEC;
++    const cached = shapeSpecCache.get(shape);
++    if (cached !== undefined) return cached;
++    const spec = computeShapeSpec(shape);
++    if (shapeSpecCache.size < SHAPE_SPEC_CACHE_MAX) shapeSpecCache.set(shape, spec);
++    return spec;
++}
++
++/** 形状 id → 规格的纯计算；缓存饱和后仍保持相同求值结果。 */
++function computeShapeSpec(shape: number): ShapeSpec {
+     const base = Math.trunc(shape);
+     const hasFraction = Math.abs(shape - base) > Number.EPSILON;
+     if (hasFraction) {
+         // 官方小数变体：1.1 → 内部形状 7（等功率）；5.1/6.x → 锐利 S。
+         if (base === 1) return { kind: "equalPower" };
+         if (base === 5 || base === 6) return { kind: "s", ...S_ANCHORS[FADE_S_SHARP] };
+-        return { kind: "linearPower" };
++        return LINEAR_POWER_SPEC;
+     }
+     const anchor = POWER_ANCHORS[base];
+     if (anchor) return { kind: "power", ...anchor };
+     const sAnchor = S_ANCHORS[base];
+     if (sAnchor) return { kind: "s", ...sAnchor };
+-    return { kind: "linearPower" };
++    return LINEAR_POWER_SPEC;
+ }
+ 
+ /** 上升视角核心：x ∈ (0,1) → 增益，u 为世界轴坐标。 */
 diff --git a/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts b/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts
 index 5dda3c55..68838e4c 100644
 --- a/frontend/src/components/layout/timeline/runtime/timelineClipGlRenderer.ts
@@ -84950,11 +85125,51 @@ index a89df9b9..966c2224 100644
 +        stop: () => audioPreview.stop(),
 +    };
 +}
+diff --git a/frontend/src/features/fileBrowser/fileBrowserSlice.storage.test.ts b/frontend/src/features/fileBrowser/fileBrowserSlice.storage.test.ts
+new file mode 100644
+index 00000000..12ebbcda
+--- /dev/null
++++ b/frontend/src/features/fileBrowser/fileBrowserSlice.storage.test.ts
+@@ -0,0 +1,34 @@
++import { afterEach, describe, expect, it, vi } from "vitest";
++
++afterEach(() => {
++    vi.unstubAllGlobals();
++    vi.resetModules();
++});
++
++describe("文件浏览器偏好初始化", () => {
++    it("无 localStorage 时仍可导入模块", async () => {
++        vi.stubGlobal("localStorage", undefined);
++        const { default: reducer } = await import("./fileBrowserSlice");
++        const state = reducer(undefined, { type: "初始化" });
++        expect(state.audioOnly).toBe(false);
++        expect(typeof state.currentPath).toBe("string");
++    });
++
++    it("存储访问抛错时使用默认偏好", async () => {
++        vi.stubGlobal("localStorage", {
++            getItem: () => { throw new Error("禁止存储访问"); },
++        });
++        const { default: reducer } = await import("./fileBrowserSlice");
++        expect(reducer(undefined, { type: "初始化" }).audioOnly).toBe(false);
++    });
++
++    it("可访问存储时保留用户偏好", async () => {
++        vi.stubGlobal("localStorage", {
++            getItem: (key: string) => key.endsWith("lastPath") ? "/music" : "true",
++        });
++        const { default: reducer } = await import("./fileBrowserSlice");
++        const state = reducer(undefined, { type: "初始化" });
++        expect(state.currentPath).toBe("/music");
++        expect(state.audioOnly).toBe(true);
++    });
++});
 diff --git a/frontend/src/features/fileBrowser/fileBrowserSlice.ts b/frontend/src/features/fileBrowser/fileBrowserSlice.ts
-index 62c63c62..5029e689 100644
+index 62c63c62..c9d05fec 100644
 --- a/frontend/src/features/fileBrowser/fileBrowserSlice.ts
 +++ b/frontend/src/features/fileBrowser/fileBrowserSlice.ts
-@@ -1,160 +1,174 @@
+@@ -1,160 +1,183 @@
 -import { createSlice, createAsyncThunk, type PayloadAction } from "@reduxjs/toolkit";
 -import { fileBrowserApi, type FileEntry } from "../../services/api/fileBrowser";
 -
@@ -85153,8 +85368,17 @@ index 62c63c62..5029e689 100644
 + */
 +export const DEFAULT_ANDROID_MUSIC_DIR = "/storage/emulated/0/HiFiShifter";
 +
++/** 存储不可用或被 WebView 策略禁止时，偏好读取不能阻止应用初始化。 */
++function readStoredPreference(key: string): string | null {
++    try {
++        return typeof localStorage === "undefined" ? null : localStorage.getItem(key);
++    } catch {
++        return null;
++    }
++}
++
 +function getInitialPath(): string {
-+    const saved = localStorage.getItem(STORAGE_KEY);
++    const saved = readStoredPreference(STORAGE_KEY);
 +    if (saved) return saved;
 +    // 只在 Android 上给这个默认值；桌面端保持""（让用户自己挑目录）。
 +    const isAndroid = typeof navigator !== "undefined" && /Android/i.test(navigator.userAgent);
@@ -85174,7 +85398,7 @@ index 62c63c62..5029e689 100644
 +    searchLoading: false,
 +    regexEnabled: false,
 +    sortMode: "name" as SortMode,
-+    audioOnly: localStorage.getItem(AUDIO_ONLY_KEY) === "true",
++    audioOnly: readStoredPreference(AUDIO_ONLY_KEY) === "true",
 +    latestLoadRequestId: null,
 +    latestSearchRequestId: null,
 +};
@@ -98956,7 +99180,7 @@ index 00000000..b21518ca
 +    return flag ? true : lagged;
 +}
 diff --git a/frontend/src/i18n/en-US.ts b/frontend/src/i18n/en-US.ts
-index 858bca55..0dcec9b9 100644
+index 858bca55..d9451a6c 100644
 --- a/frontend/src/i18n/en-US.ts
 +++ b/frontend/src/i18n/en-US.ts
 @@ -1,9 +1,57 @@
@@ -99025,7 +99249,17 @@ index 858bca55..0dcec9b9 100644
      notebook: "Notebook",
      notebook_edit: "Edit",
      notebook_preview: "Preview",
-@@ -1479,4 +1528,91 @@ export const enUS = {
+@@ -536,7 +585,8 @@ export const enUS = {
+     about_version: "Version",
+     about_commit: "Commit",
+     about_dirty: "uncommitted local changes",
+-    about_open_repo: "Open GitHub Repository",
++    about_open_repo: "Upstream Repository",
++    about_open_mobile_repo: "Mobile Repository",
+     clip_badge_rate_tip: "Rate",
+     clip_badge_gain_tip: "Gain",
+     clip_rate_editor_title: "Edit Playback Rate",
+@@ -1479,4 +1529,91 @@ export const enUS = {
      benchmark_ort_info_label: "ONNX Runtime:",
      benchmark_gpu_label: "GPU",
      benchmark_providers_label: "Available providers:",
@@ -99118,7 +99352,7 @@ index 858bca55..0dcec9b9 100644
 +    model_manager_import_done_restart: "Imported ({size}); an app restart may be required",
  } as const;
 diff --git a/frontend/src/i18n/ja-JP.ts b/frontend/src/i18n/ja-JP.ts
-index ef08ef81..dab20e73 100644
+index ef08ef81..ea61ffde 100644
 --- a/frontend/src/i18n/ja-JP.ts
 +++ b/frontend/src/i18n/ja-JP.ts
 @@ -1,9 +1,57 @@
@@ -99187,7 +99421,17 @@ index ef08ef81..dab20e73 100644
      notebook: "ノート",
      notebook_edit: "編集",
      notebook_preview: "プレビュー",
-@@ -1492,4 +1541,91 @@ export const jaJP = {
+@@ -404,7 +453,8 @@ export const jaJP = {
+     about_version: "バージョン",
+     about_commit: "Commit",
+     about_dirty: "未コミットの変更があります",
+-    about_open_repo: "GitHub リポジトリを開く",
++    about_open_repo: "上流リポジトリ",
++    about_open_mobile_repo: "モバイル版リポジトリ",
+     clip_badge_rate_tip: "レート",
+     clip_badge_gain_tip: "ゲイン",
+     clip_rate_editor_title: "再生速度を編集",
+@@ -1492,4 +1542,91 @@ export const jaJP = {
      history_op_import_vocalshifter: "VocalShifter プロジェクトをインポート",
      history_op_recording: "録音",
      history_op_batch: "一括操作",
@@ -99280,7 +99524,7 @@ index ef08ef81..dab20e73 100644
 +    menu_view_panel_notes: "ノート",
  } as const;
 diff --git a/frontend/src/i18n/ko-KR.ts b/frontend/src/i18n/ko-KR.ts
-index 508fcb25..983ccee7 100644
+index 508fcb25..53176b83 100644
 --- a/frontend/src/i18n/ko-KR.ts
 +++ b/frontend/src/i18n/ko-KR.ts
 @@ -1,9 +1,57 @@
@@ -99349,7 +99593,17 @@ index 508fcb25..983ccee7 100644
      notebook: "노트",
      notebook_edit: "편집",
      notebook_preview: "미리보기",
-@@ -1469,4 +1518,91 @@ export const koKR = {
+@@ -475,7 +524,8 @@ export const koKR = {
+     about_version: "버전",
+     about_commit: "Commit",
+     about_dirty: "커밋되지 않은 로컬 변경 있음",
+-    about_open_repo: "GitHub 저장소 열기",
++    about_open_repo: "업스트림 저장소",
++    about_open_mobile_repo: "모바일 저장소",
+     clip_badge_rate_tip: "속도",
+     clip_badge_gain_tip: "게인",
+     clip_rate_editor_title: "재생 속도 편집",
+@@ -1469,4 +1519,91 @@ export const koKR = {
      history_op_import_vocalshifter: "VocalShifter 프로젝트 가져오기",
      history_op_recording: "녹음",
      history_op_batch: "일괄 작업",
@@ -99514,7 +99768,7 @@ index 00000000..08cfda7e
 +    });
 +});
 diff --git a/frontend/src/i18n/zh-CN.ts b/frontend/src/i18n/zh-CN.ts
-index 8bcc3071..7b7d9f74 100644
+index 8bcc3071..0032dfb5 100644
 --- a/frontend/src/i18n/zh-CN.ts
 +++ b/frontend/src/i18n/zh-CN.ts
 @@ -1,9 +1,57 @@
@@ -99583,7 +99837,17 @@ index 8bcc3071..7b7d9f74 100644
      notebook: "记事本",
      notebook_edit: "编辑",
      notebook_preview: "预览",
-@@ -1444,4 +1493,91 @@ export const zhCN = {
+@@ -384,7 +433,8 @@ export const zhCN = {
+     about_version: "版本",
+     about_commit: "Commit",
+     about_dirty: "本地有未提交修改",
+-    about_open_repo: "前往 GitHub 仓库",
++    about_open_repo: "上游仓库",
++    about_open_mobile_repo: "移动端仓库",
+     clip_badge_rate_tip: "速率",
+     clip_badge_gain_tip: "增益",
+     clip_rate_editor_title: "编辑播放速率",
+@@ -1444,4 +1494,91 @@ export const zhCN = {
      history_op_import_vocalshifter: "导入 VocalShifter 工程",
      history_op_recording: "录音",
      history_op_batch: "批量操作",
@@ -99676,7 +99940,7 @@ index 8bcc3071..7b7d9f74 100644
 +    model_manager_import_done_restart: "导入完成（{size}），可能需要重启应用",
  } as const;
 diff --git a/frontend/src/i18n/zh-TW.ts b/frontend/src/i18n/zh-TW.ts
-index 176638e2..19486b79 100644
+index 176638e2..6d7c3c61 100644
 --- a/frontend/src/i18n/zh-TW.ts
 +++ b/frontend/src/i18n/zh-TW.ts
 @@ -1,10 +1,58 @@
@@ -99746,7 +100010,17 @@ index 176638e2..19486b79 100644
      notebook: "記事本",
      notebook_edit: "編輯",
      notebook_preview: "預覽",
-@@ -1446,4 +1495,91 @@ export const zhTW = {
+@@ -385,7 +434,8 @@ export const zhTW = {
+     about_version: "版本",
+     about_commit: "Commit",
+     about_dirty: "本地有未提交修改",
+-    about_open_repo: "前往 GitHub 儲存庫",
++    about_open_repo: "上游儲存庫",
++    about_open_mobile_repo: "行動版儲存庫",
+     clip_badge_rate_tip: "速率",
+     clip_badge_gain_tip: "增益",
+     clip_rate_editor_title: "編輯播放速率",
+@@ -1446,4 +1496,91 @@ export const zhTW = {
      history_op_import_vocalshifter: "匯入 VocalShifter 專案",
      history_op_recording: "錄音",
      history_op_batch: "批次操作",
@@ -102074,25 +102348,204 @@ index eeecef69..6ba4f603 100644
  function clampSec(sec: number): number {
      return Number.isFinite(sec) ? Math.max(0, sec) : 0;
  }
+diff --git a/frontend/src/waveform/surfaceRenderer.buffer.test.ts b/frontend/src/waveform/surfaceRenderer.buffer.test.ts
+new file mode 100644
+index 00000000..89853278
+--- /dev/null
++++ b/frontend/src/waveform/surfaceRenderer.buffer.test.ts
+@@ -0,0 +1,140 @@
++import { describe, expect, it, vi } from "vitest";
++import type { WaveformGeometry } from "./geometry.ts";
++import { WebGl2WaveformRenderer } from "./surfaceRenderer.ts";
++
++/** 使用真实 renderer 实例，通过 GL 边界观察分配与上传，不访问私有字段。 */
++function createRenderer() {
++    const loseContext = vi.fn();
++    const gl = {
++        ARRAY_BUFFER: 0x8892,
++        DYNAMIC_DRAW: 0x88e8,
++        TRIANGLES: 4,
++        FLOAT: 0x1406,
++        BLEND: 0x0be2,
++        SRC_ALPHA: 0x0302,
++        ONE_MINUS_SRC_ALPHA: 0x0303,
++        COLOR_BUFFER_BIT: 0x4000,
++        VERTEX_SHADER: 0x8b31,
++        FRAGMENT_SHADER: 0x8b30,
++        COMPILE_STATUS: 0x8b81,
++        LINK_STATUS: 0x8b82,
++        createShader: vi.fn(() => ({})),
++        shaderSource: vi.fn(),
++        compileShader: vi.fn(),
++        getShaderParameter: vi.fn(() => true),
++        deleteShader: vi.fn(),
++        createProgram: vi.fn(() => ({})),
++        attachShader: vi.fn(),
++        linkProgram: vi.fn(),
++        getProgramParameter: vi.fn(() => true),
++        createBuffer: vi.fn(() => ({})),
++        getUniformLocation: vi.fn((_program, name: string) => ({ name })),
++        getAttribLocation: vi.fn((_program, name: string) => (name === "a_position" ? 0 : 1)),
++        viewport: vi.fn(),
++        clearColor: vi.fn(),
++        clear: vi.fn(),
++        useProgram: vi.fn(),
++        uniform2f: vi.fn(),
++        bindBuffer: vi.fn(),
++        enableVertexAttribArray: vi.fn(),
++        vertexAttribPointer: vi.fn(),
++        enable: vi.fn(),
++        blendFunc: vi.fn(),
++        bufferData: vi.fn(),
++        // scratch 缓冲会被下次 render 覆写；模拟驱动即时复制，保留每次上传快照。
++        bufferSubData: vi.fn((_target: number, _offset: number, data: Float32Array) =>
++            data.slice(),
++        ),
++        drawArrays: vi.fn(),
++        deleteBuffer: vi.fn(),
++        deleteProgram: vi.fn(),
++        getExtension: vi.fn(() => ({ loseContext })),
++    };
++    const canvas = { width: 0, height: 0, style: {}, getContext: vi.fn(() => gl) };
++    const renderer = new WebGl2WaveformRenderer(canvas as unknown as HTMLCanvasElement);
++    const render = (segments: number, dpr = 2) => {
++        const vertices = new Float32Array(segments * 12);
++        for (let i = 0; i < segments; i += 1) {
++            vertices.set([10, 5, 0, 0, 0, 1, 10, 15, 0, 0, 0, 1], i * 12);
++        }
++        const geometry: WaveformGeometry = { vertices, lineCount: segments, complete: true };
++        renderer.render(geometry, 100, 60, dpr, 0, 0);
++    };
++    return { renderer, gl, render, loseContext };
++}
++
++describe("WebGL 波形缓冲复用", () => {
++    it("首次分配、等量/缩小重建复用，并且 repaint 只更新视口后绘制", () => {
++        const { renderer, gl, render } = createRenderer();
++        render(2);
++        expect(gl.bufferData).toHaveBeenCalledExactlyOnceWith(
++            gl.ARRAY_BUFFER,
++            4096 * 4,
++            gl.DYNAMIC_DRAW,
++        );
++        expect(gl.bufferSubData).toHaveBeenCalledTimes(1);
++        expect(gl.bufferSubData.mock.results[0].value).toHaveLength(72);
++        expect(gl.drawArrays).toHaveBeenLastCalledWith(gl.TRIANGLES, 0, 12);
++        render(2);
++        render(1);
++        expect(gl.bufferData).toHaveBeenCalledTimes(1);
++        expect(gl.bufferSubData).toHaveBeenCalledTimes(3);
++        expect(gl.bufferSubData.mock.results[2].value).toHaveLength(36);
++        renderer.repaint(100, 60, 3, 12, 8);
++        expect(gl.bufferData).toHaveBeenCalledTimes(1);
++        expect(gl.bufferSubData).toHaveBeenCalledTimes(3);
++        expect(gl.drawArrays).toHaveBeenLastCalledWith(gl.TRIANGLES, 0, 6);
++        expect(gl.uniform2f).toHaveBeenCalledWith({ name: "u_viewOrigin" }, 12, 8);
++        // DPR 不参与 CSS 空间展开：DPR=2 时依然是 1 CSS px。
++        const uploaded = gl.bufferSubData.mock.results[0].value as Float32Array;
++        const xs = Array.from({ length: 6 }, (_, i) => uploaded[i * 6]);
++        expect(Math.max(...xs) - Math.min(...xs)).toBe(1);
++    });
++
++    it("容量不足按倍增扩张；大幅增长覆盖所需容量，后续重建不缩容", () => {
++        const { gl, render } = createRenderer();
++        render(1);
++        render(114); // 4104 float，略超过初始 4096。
++        render(115);
++        render(500); // 18000 float，超过两倍旧容量。
++        render(1);
++        expect(gl.bufferData.mock.calls).toEqual([
++            [gl.ARRAY_BUFFER, 4096 * 4, gl.DYNAMIC_DRAW],
++            [gl.ARRAY_BUFFER, 8192 * 4, gl.DYNAMIC_DRAW],
++            [gl.ARRAY_BUFFER, 18000 * 4, gl.DYNAMIC_DRAW],
++        ]);
++        expect(gl.bufferSubData.mock.results.map((result) => result.value.length)).toEqual([
++            36, 4104, 4140, 18000, 36,
++        ]);
++        expect(gl.drawArrays.mock.calls.map((call) => call[2])).toEqual([6, 684, 690, 3000, 6]);
++    });
++
++    it("未上传或空几何不绘制，空重建清除旧计数但保留容量", () => {
++        const { renderer, gl, render } = createRenderer();
++        renderer.repaint(100, 60, 2, 0, 0);
++        render(0);
++        expect(gl.bufferData).not.toHaveBeenCalled();
++        expect(gl.bufferSubData).not.toHaveBeenCalled();
++        expect(gl.drawArrays).not.toHaveBeenCalled();
++        render(1);
++        render(0);
++        renderer.repaint(100, 60, 2, 0, 0);
++        expect(gl.drawArrays).toHaveBeenCalledTimes(1);
++        expect(gl.bufferSubData).toHaveBeenCalledTimes(1);
++        render(1);
++        expect(gl.bufferData).toHaveBeenCalledTimes(1);
++        expect(gl.drawArrays).toHaveBeenCalledTimes(2);
++    });
++
++    it("dispose 保留移动端上下文释放及 GPU 资源清理", () => {
++        const { renderer, gl, loseContext } = createRenderer();
++        renderer.dispose();
++        expect(gl.getExtension).toHaveBeenCalledWith("WEBGL_lose_context");
++        expect(loseContext).toHaveBeenCalledTimes(1);
++        expect(gl.deleteBuffer).toHaveBeenCalledTimes(1);
++        expect(gl.deleteProgram).toHaveBeenCalledTimes(1);
++        expect(loseContext.mock.invocationCallOrder[0]).toBeLessThan(
++            gl.deleteBuffer.mock.invocationCallOrder[0],
++        );
++    });
++});
 diff --git a/frontend/src/waveform/surfaceRenderer.ts b/frontend/src/waveform/surfaceRenderer.ts
-index 260aa737..50afae55 100644
+index 260aa737..e7cae72b 100644
 --- a/frontend/src/waveform/surfaceRenderer.ts
 +++ b/frontend/src/waveform/surfaceRenderer.ts
-@@ -304,7 +304,7 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
+@@ -193,6 +193,8 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
+     private readonly colorLocation: number;
+     /** 已上传 GPU 的顶点数（`drawArrays` 的 count），供 `repaint` 复用。 */
+     private uploadedVertexCount = 0;
++    /** 顶点缓冲容量（float 元素个数）；几何重建时就地上传，仅增长时倍增分配。 */
++    private bufferCapacity = 0;
+ 
+     constructor(canvas: HTMLCanvasElement) {
+         this.canvas = canvas;
+@@ -302,9 +304,28 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
+         // LINES 的 lineWidth 恒为 1 物理像素（DPR > 1 时覆盖不足，波形发浅），
+         // 改用展开后的 1 CSS px 等宽四边形，与 Canvas2D 回退路径覆盖一致。
          const quads = expandLineSegmentsToQuads(geometry.vertices);
-         gl.bufferData(gl.ARRAY_BUFFER, quads, gl.DYNAMIC_DRAW);
+-        gl.bufferData(gl.ARRAY_BUFFER, quads, gl.DYNAMIC_DRAW);
++        this.uploadQuads(quads);
++        if (this.uploadedVertexCount > 0) {
++            gl.drawArrays(gl.TRIANGLES, 0, this.uploadedVertexCount);
++        }
++    }
++
++    /** 容量不足时倍增分配，否则只覆盖有效顶点；空几何不上传、不绘制。 */
++    private uploadQuads(quads: Float32Array): void {
++        const gl = this.gl;
          this.uploadedVertexCount = quads.length / 6;
 -        gl.drawArrays(gl.TRIANGLES, 0, this.uploadedVertexCount);
-+        if (this.uploadedVertexCount > 0) if (this.uploadedVertexCount > 0) gl.drawArrays(gl.TRIANGLES, 0, this.uploadedVertexCount); /* I-4 */ /* I-4 */
++        if (quads.length === 0) return;
++        gl.bindBuffer(gl.ARRAY_BUFFER, this.buffer);
++        if (this.bufferCapacity < quads.length) {
++            const capacity = Math.max(quads.length, this.bufferCapacity * 2, 4096);
++            gl.bufferData(
++                gl.ARRAY_BUFFER,
++                capacity * Float32Array.BYTES_PER_ELEMENT,
++                gl.DYNAMIC_DRAW,
++            );
++            this.bufferCapacity = capacity;
++        }
++        gl.bufferSubData(gl.ARRAY_BUFFER, 0, quads);
      }
  
      /**
-@@ -344,15 +344,37 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
+@@ -344,15 +365,39 @@ export class WebGl2WaveformRenderer implements WaveformSurfaceRenderer {
          );
          gl.enable(gl.BLEND);
          gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
 -        gl.drawArrays(gl.TRIANGLES, 0, this.uploadedVertexCount);
-+        if (this.uploadedVertexCount > 0) if (this.uploadedVertexCount > 0) gl.drawArrays(gl.TRIANGLES, 0, this.uploadedVertexCount); /* I-4 */ /* I-4 */
++        if (this.uploadedVertexCount > 0) {
++            gl.drawArrays(gl.TRIANGLES, 0, this.uploadedVertexCount);
++        }
      }
  
      dispose(): void {
@@ -102126,7 +102579,7 @@ index 260aa737..50afae55 100644
  export class Canvas2dWaveformRenderer implements WaveformSurfaceRenderer {
      readonly kind = "canvas2d" as const;
      private readonly backCanvas = document.createElement("canvas");
-@@ -412,7 +434,29 @@ export class Canvas2dWaveformRenderer implements WaveformSurfaceRenderer {
+@@ -412,7 +457,29 @@ export class Canvas2dWaveformRenderer implements WaveformSurfaceRenderer {
          rasterize(this.backCanvas, widthPx, heightPx, dpr);
          const back = this.backCanvas.getContext("2d");
          const visible = this.canvas.getContext("2d");
